@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  spacetimedb:
+    image: clockworklabs/spacetime
+    container_name: spacetimedb
+    command: start
+    ports:
+      - "3003:3000"
+    volumes:
+      - spacetimedb-data:/var/lib/spacetimedb
+    restart: unless-stopped
+
+  obsidian-spacetime-sync:
+    build: .
+    container_name: obsidian-spacetime-sync
+    depends_on:
+      - spacetimedb
+    volumes:
+      - /volume1/homes/mikael/ObsidianNAS:/vault
+    environment:
+      - VAULT_PATH=/vault
+      - SPACETIME_HOST=http://spacetimedb:3000
+      - SPACETIME_DB=obsidian-sync
+    restart: unless-stopped
+
+volumes:
+  spacetimedb-data:

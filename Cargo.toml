@@ -1,0 +1,22 @@
+[package]
+name = "obsidian-spacetime-sync"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+spacetimedb-sdk = "1.0"
+openssl = { version = "0.10", features = ["vendored"] }
+notify-debouncer-mini = "0.4"
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+walkdir = "2.5"
+anyhow = "1.0"
+clap = { version = "4", features = ["derive", "env"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+filetime = "0.2"
+sha2 = "0.10"
+hex = "0.4"
+uuid = { version = "1.11", features = ["v4"] }
