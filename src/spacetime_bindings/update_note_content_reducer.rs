@@ -6,20 +6,18 @@ use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
-pub(super) struct UpdateNoteArgs {
+pub(super) struct UpdateNoteContentArgs {
     pub id: String,
-    pub path: String,
     pub content: String,
     pub frontmatter: String,
     pub size: u64,
     pub modified_time: u64,
 }
 
-impl From<UpdateNoteArgs> for super::Reducer {
-    fn from(args: UpdateNoteArgs) -> Self {
-        Self::UpdateNote {
+impl From<UpdateNoteContentArgs> for super::Reducer {
+    fn from(args: UpdateNoteContentArgs) -> Self {
+        Self::UpdateNoteContent {
             id: args.id,
-            path: args.path,
             content: args.content,
             frontmatter: args.frontmatter,
             size: args.size,
@@ -28,64 +26,61 @@ impl From<UpdateNoteArgs> for super::Reducer {
     }
 }
 
-impl __sdk::InModule for UpdateNoteArgs {
+impl __sdk::InModule for UpdateNoteContentArgs {
     type Module = super::RemoteModule;
 }
 
-pub struct UpdateNoteCallbackId(__sdk::CallbackId);
+pub struct UpdateNoteContentCallbackId(__sdk::CallbackId);
 
 #[allow(non_camel_case_types)]
-/// Extension trait for access to the reducer `update_note`.
+/// Extension trait for access to the reducer `update_note_content`.
 ///
 /// Implemented for [`super::RemoteReducers`].
-pub trait update_note {
-    /// Request that the remote module invoke the reducer `update_note` to run as soon as possible.
+pub trait update_note_content {
+    /// Request that the remote module invoke the reducer `update_note_content` to run as soon as possible.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
-    ///  and its status can be observed by listening for [`Self::on_update_note`] callbacks.
-    fn update_note(
+    ///  and its status can be observed by listening for [`Self::on_update_note_content`] callbacks.
+    fn update_note_content(
         &self,
         id: String,
-        path: String,
         content: String,
         frontmatter: String,
         size: u64,
         modified_time: u64,
     ) -> __sdk::Result<()>;
-    /// Register a callback to run whenever we are notified of an invocation of the reducer `update_note`.
+    /// Register a callback to run whenever we are notified of an invocation of the reducer `update_note_content`.
     ///
     /// Callbacks should inspect the [`__sdk::ReducerEvent`] contained in the [`super::ReducerEventContext`]
     /// to determine the reducer's status.
     ///
-    /// The returned [`UpdateNoteCallbackId`] can be passed to [`Self::remove_on_update_note`]
+    /// The returned [`UpdateNoteContentCallbackId`] can be passed to [`Self::remove_on_update_note_content`]
     /// to cancel the callback.
-    fn on_update_note(
+    fn on_update_note_content(
         &self,
-        callback: impl FnMut(&super::ReducerEventContext, &String, &String, &String, &String, &u64, &u64)
+        callback: impl FnMut(&super::ReducerEventContext, &String, &String, &String, &u64, &u64)
             + Send
             + 'static,
-    ) -> UpdateNoteCallbackId;
-    /// Cancel a callback previously registered by [`Self::on_update_note`],
+    ) -> UpdateNoteContentCallbackId;
+    /// Cancel a callback previously registered by [`Self::on_update_note_content`],
     /// causing it not to run in the future.
-    fn remove_on_update_note(&self, callback: UpdateNoteCallbackId);
+    fn remove_on_update_note_content(&self, callback: UpdateNoteContentCallbackId);
 }
 
-impl update_note for super::RemoteReducers {
-    fn update_note(
+impl update_note_content for super::RemoteReducers {
+    fn update_note_content(
         &self,
         id: String,
-        path: String,
         content: String,
         frontmatter: String,
         size: u64,
         modified_time: u64,
     ) -> __sdk::Result<()> {
         self.imp.call_reducer(
-            "update_note",
-            UpdateNoteArgs {
+            "update_note_content",
+            UpdateNoteContentArgs {
                 id,
-                path,
                 content,
                 frontmatter,
                 size,
@@ -93,22 +88,21 @@ impl update_note for super::RemoteReducers {
             },
         )
     }
-    fn on_update_note(
+    fn on_update_note_content(
         &self,
-        mut callback: impl FnMut(&super::ReducerEventContext, &String, &String, &String, &String, &u64, &u64)
+        mut callback: impl FnMut(&super::ReducerEventContext, &String, &String, &String, &u64, &u64)
             + Send
             + 'static,
-    ) -> UpdateNoteCallbackId {
-        UpdateNoteCallbackId(self.imp.on_reducer(
-            "update_note",
+    ) -> UpdateNoteContentCallbackId {
+        UpdateNoteContentCallbackId(self.imp.on_reducer(
+            "update_note_content",
             Box::new(move |ctx: &super::ReducerEventContext| {
                 let super::ReducerEventContext {
                     event:
                         __sdk::ReducerEvent {
                             reducer:
-                                super::Reducer::UpdateNote {
+                                super::Reducer::UpdateNoteContent {
                                     id,
-                                    path,
                                     content,
                                     frontmatter,
                                     size,
@@ -121,31 +115,33 @@ impl update_note for super::RemoteReducers {
                 else {
                     unreachable!()
                 };
-                callback(ctx, id, path, content, frontmatter, size, modified_time)
+                callback(ctx, id, content, frontmatter, size, modified_time)
             }),
         ))
     }
-    fn remove_on_update_note(&self, callback: UpdateNoteCallbackId) {
-        self.imp.remove_on_reducer("update_note", callback.0)
+    fn remove_on_update_note_content(&self, callback: UpdateNoteContentCallbackId) {
+        self.imp
+            .remove_on_reducer("update_note_content", callback.0)
     }
 }
 
 #[allow(non_camel_case_types)]
 #[doc(hidden)]
-/// Extension trait for setting the call-flags for the reducer `update_note`.
+/// Extension trait for setting the call-flags for the reducer `update_note_content`.
 ///
 /// Implemented for [`super::SetReducerFlags`].
 ///
 /// This type is currently unstable and may be removed without a major version bump.
-pub trait set_flags_for_update_note {
-    /// Set the call-reducer flags for the reducer `update_note` to `flags`.
+pub trait set_flags_for_update_note_content {
+    /// Set the call-reducer flags for the reducer `update_note_content` to `flags`.
     ///
     /// This type is currently unstable and may be removed without a major version bump.
-    fn update_note(&self, flags: __ws::CallReducerFlags);
+    fn update_note_content(&self, flags: __ws::CallReducerFlags);
 }
 
-impl set_flags_for_update_note for super::SetReducerFlags {
-    fn update_note(&self, flags: __ws::CallReducerFlags) {
-        self.imp.set_call_reducer_flags("update_note", flags);
+impl set_flags_for_update_note_content for super::SetReducerFlags {
+    fn update_note_content(&self, flags: __ws::CallReducerFlags) {
+        self.imp
+            .set_call_reducer_flags("update_note_content", flags);
     }
 }

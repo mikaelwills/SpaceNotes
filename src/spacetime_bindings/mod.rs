@@ -19,8 +19,9 @@ pub mod move_folder_reducer;
 pub mod move_note_reducer;
 pub mod note_table;
 pub mod note_type;
+pub mod rename_note_reducer;
+pub mod update_note_content_reducer;
 pub mod update_note_path_reducer;
-pub mod update_note_reducer;
 pub mod upsert_folder_reducer;
 pub mod upsert_note_reducer;
 
@@ -45,10 +46,13 @@ pub use move_folder_reducer::{move_folder, set_flags_for_move_folder, MoveFolder
 pub use move_note_reducer::{move_note, set_flags_for_move_note, MoveNoteCallbackId};
 pub use note_table::*;
 pub use note_type::Note;
+pub use rename_note_reducer::{rename_note, set_flags_for_rename_note, RenameNoteCallbackId};
+pub use update_note_content_reducer::{
+    set_flags_for_update_note_content, update_note_content, UpdateNoteContentCallbackId,
+};
 pub use update_note_path_reducer::{
     set_flags_for_update_note_path, update_note_path, UpdateNotePathCallbackId,
 };
-pub use update_note_reducer::{set_flags_for_update_note, update_note, UpdateNoteCallbackId};
 pub use upsert_folder_reducer::{
     set_flags_for_upsert_folder, upsert_folder, UpsertFolderCallbackId,
 };
@@ -96,9 +100,12 @@ pub enum Reducer {
         old_path: String,
         new_path: String,
     },
-    UpdateNote {
+    RenameNote {
         id: String,
-        path: String,
+        new_path: String,
+    },
+    UpdateNoteContent {
+        id: String,
         content: String,
         frontmatter: String,
         size: u64,
@@ -143,7 +150,8 @@ impl __sdk::Reducer for Reducer {
             Reducer::IdentityDisconnected => "identity_disconnected",
             Reducer::MoveFolder { .. } => "move_folder",
             Reducer::MoveNote { .. } => "move_note",
-            Reducer::UpdateNote { .. } => "update_note",
+            Reducer::RenameNote { .. } => "rename_note",
+            Reducer::UpdateNoteContent { .. } => "update_note_content",
             Reducer::UpdateNotePath { .. } => "update_note_path",
             Reducer::UpsertFolder { .. } => "upsert_folder",
             Reducer::UpsertNote { .. } => "upsert_note",
@@ -206,13 +214,17 @@ impl TryFrom<__ws::ReducerCallInfo<__ws::BsatnFormat>> for Reducer {
                 )?
                 .into(),
             ),
-            "update_note" => Ok(
-                __sdk::parse_reducer_args::<update_note_reducer::UpdateNoteArgs>(
-                    "update_note",
+            "rename_note" => Ok(
+                __sdk::parse_reducer_args::<rename_note_reducer::RenameNoteArgs>(
+                    "rename_note",
                     &value.args,
                 )?
                 .into(),
             ),
+            "update_note_content" => Ok(__sdk::parse_reducer_args::<
+                update_note_content_reducer::UpdateNoteContentArgs,
+            >("update_note_content", &value.args)?
+            .into()),
             "update_note_path" => Ok(__sdk::parse_reducer_args::<
                 update_note_path_reducer::UpdateNotePathArgs,
             >("update_note_path", &value.args)?

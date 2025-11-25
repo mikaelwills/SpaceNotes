@@ -94,8 +94,11 @@ async fn main() -> Result<()> {
     let vault_clone = absolute_vault_path.clone();
     let tracker_clone = tracker.clone();
     client.on_note_updated(move |old_note, new_note| {
-        // Skip if we already have this content (echo from our own update)
-        if !tracker_clone.is_modified(&new_note.id, &new_note.content) {
+        let path_changed = old_note.path != new_note.path;
+        let content_changed = tracker_clone.is_modified(&new_note.id, &new_note.content);
+
+        // Skip if nothing changed (echo from our own update)
+        if !path_changed && !content_changed {
             tracing::debug!("Skipping update echo: {}", new_note.path);
             return;
         }

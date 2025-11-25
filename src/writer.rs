@@ -19,23 +19,28 @@ pub fn write_note_to_disk(vault_root: &Path, note: &Note) -> Result<()> {
     // Reconstruct YAML Frontmatter + Body
     // Always include spacetime_id in frontmatter
     let content = {
-        // Parse existing frontmatter or create empty object
+        // 1. Prepare JSON Object
         let mut json_val: serde_json::Value = if !note.frontmatter.is_empty() && note.frontmatter != "{}" {
             serde_json::from_str(&note.frontmatter).unwrap_or(serde_json::Value::Object(Default::default()))
         } else {
             serde_json::Value::Object(Default::default())
         };
 
-        // Ensure spacetime_id is in the frontmatter
+        // 2. Force Insert UUID
         if let serde_json::Value::Object(ref mut map) = json_val {
             map.insert("spacetime_id".to_string(), serde_json::Value::String(note.id.clone()));
         }
 
+        // 3. Serialize & Sanitize
         let yaml_str = serde_yaml::to_string(&json_val)
-            .context("Failed to convert frontmatter to YAML")?;
+            .context("Failed to serialize frontmatter")?;
 
-        // serde_yaml adds "---" at the start, we just need to close it
-        format!("{}\n---\n{}", yaml_str, note.content)
+        // Strip existing markers to control the sandwich manually
+        let clean_yaml = yaml_str.trim_start_matches("---\n").trim();
+
+        // 4. Strict Formatting (The Fix)
+        // Ensures exactly one newline before and after delimiters
+        format!("---\n{}\n---\n\n{}", clean_yaml, note.content)
     };
 
     // ATOMIC WRITE (Write to tmp -> Rename)

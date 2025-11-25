@@ -41,49 +41,85 @@ pub fn create_note(
     log::info!("Created note: {}", path);
 }
 
+/// Update only the content of a note (path stays the same)
 #[spacetimedb::reducer]
-pub fn update_note(
+pub fn update_note_content(
     ctx: &ReducerContext,
     id: String,
-    path: String,
     content: String,
     frontmatter: String,
     size: u64,
     modified_time: u64,
 ) {
     if let Some(existing) = ctx.db.note().id().find(&id) {
-        // Calculate name, folder_path, and depth from the new path
-        let name = path
-            .trim_end_matches(".md")
-            .rsplit('/')
-            .next()
-            .unwrap_or(&path)
-            .to_string();
-
-        let folder_path = if let Some(idx) = path.rfind('/') {
-            format!("{}/", &path[..idx])
-        } else {
-            String::new()
-        };
-
-        let depth = path.matches('/').count() as u32;
-
+        // Only update content-related fields, path remains unchanged
         ctx.db.note().id().delete(&id);
         ctx.db.note().insert(Note {
             id: id.clone(),
-            path: path.clone(),
-            name,
+            path: existing.path.clone(),
+            name: existing.name.clone(),
             content,
-            folder_path,
-            depth,
+            folder_path: existing.folder_path.clone(),
+            depth: existing.depth,
             frontmatter,
             size,
             created_time: existing.created_time,
             modified_time,
         });
-        log::info!("Updated note: {} (ID: {})", path, id);
+        log::info!("Updated content for note: {} (ID: {})", existing.path, id);
     } else {
-        log::warn!("Note not found for update: {}", id);
+        log::warn!("Note not found for content update: {}", id);
+    }
+}
+
+/// Rename/move a note (path changes, content stays the same)
+#[spacetimedb::reducer]
+pub fn rename_note(
+    ctx: &ReducerContext,
+    id: String,
+    new_path: String,
+) {
+    if let Some(existing) = ctx.db.note().id().find(&id) {
+        // Check if new path already exists
+        if let Some(collision) = ctx.db.note().path().find(&new_path) {
+            if collision.id != id {
+                log::error!("Cannot rename: Path '{}' already exists", new_path);
+                return;
+            }
+        }
+
+        // Calculate new metadata from new path
+        let new_name = new_path
+            .trim_end_matches(".md")
+            .rsplit('/')
+            .next()
+            .unwrap_or(&new_path)
+            .to_string();
+
+        let new_folder_path = if let Some(idx) = new_path.rfind('/') {
+            format!("{}/", &new_path[..idx])
+        } else {
+            String::new()
+        };
+
+        let new_depth = new_path.matches('/').count() as u32;
+
+        ctx.db.note().id().delete(&id);
+        ctx.db.note().insert(Note {
+            id: id.clone(),
+            path: new_path.clone(),
+            name: new_name,
+            content: existing.content,
+            folder_path: new_folder_path,
+            depth: new_depth,
+            frontmatter: existing.frontmatter,
+            size: existing.size,
+            created_time: existing.created_time,
+            modified_time: existing.modified_time,
+        });
+        log::info!("Renamed note: {} -> {} (ID: {})", existing.path, new_path, id);
+    } else {
+        log::warn!("Note not found for rename: {}", id);
     }
 }
 

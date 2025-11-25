@@ -26,25 +26,47 @@ This is a RUST LEARNING EXERCISE. You are teaching the user Rust through buildin
 # 1. Wipe and restart SpacetimeDB on NAS
 ssh mikael@192.168.1.161 "cd /volume1/docker/obsidian-spacetime-sync && docker-compose stop spacetimedb && docker-compose rm -f spacetimedb && docker volume rm obsidian-spacetime-sync_spacetimedb-data && docker-compose up -d spacetimedb"
 
-# 2. Republish the module
+# 2. Accept new server fingerprint
+echo "y" | spacetime server fingerprint http://192.168.1.161:3003
+
+# 3. Login to server (required for SQL access)
+spacetime logout
+spacetime login --server-issued-login http://192.168.1.161:3003
+
+# 4. Republish the module (WITHOUT --anonymous for SQL access)
 spacetime publish obsidian-sync \
   --project-path spacetime-module \
   --server http://192.168.1.161:3003 \
-  -y --anonymous
+  -y
 
-# 3. Deploy and restart the Rust daemon
+# 5. Deploy and restart the Rust daemon
 ./deploy-to-nas.sh
 
-# 4. Check logs to verify sync is working
+# 6. Check logs to verify sync is working
 ssh mikael@192.168.1.161 'docker logs obsidian-spacetime-sync --tail 50'
 ```
 
 **What happens:**
 - All data in SpacetimeDB is deleted
-- Fresh database is created
+- Fresh database is created with your named identity (allows SQL queries)
 - Module is republished with latest schema
 - Rust daemon scans local vault and uploads all notes/folders
 - Everything is back in sync with clean data
+
+### Debugging with SQL Queries
+
+**Important:** You must publish WITHOUT `--anonymous` to use SQL queries.
+
+```bash
+# Count all notes
+spacetime sql obsidian-sync "SELECT COUNT(*) FROM note" --server http://192.168.1.161:3003
+
+# List notes in a specific folder
+spacetime sql obsidian-sync "SELECT id, path FROM note WHERE path LIKE 'FolderName/%' ORDER BY path" --server http://192.168.1.161:3003
+
+# Check for duplicate paths
+spacetime sql obsidian-sync "SELECT path, COUNT(*) as count FROM note GROUP BY path HAVING count > 1" --server http://192.168.1.161:3003
+```
 
 ## Teaching Structure:
 - Phase 1: Project setup and basic structure

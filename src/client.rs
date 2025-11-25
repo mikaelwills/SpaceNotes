@@ -12,7 +12,6 @@ use crate::spacetime_bindings::{
     folder_type::Folder as DbFolder,
     note_table::NoteTableAccess,
     note_type::Note as DbNote,
-    update_note_reducer::update_note,
     upsert_folder_reducer::upsert_folder,
     upsert_note_reducer::upsert_note,
     DbConnection,
@@ -204,17 +203,6 @@ impl SpacetimeClient {
             note.frontmatter.clone(),
             note.size,
             note.created_time,
-            note.modified_time,
-        );
-    }
-
-    pub fn update_note(&self, note: &LocalNote) {
-        let _ = self.conn.reducers().update_note(
-            note.id.clone(),
-            note.path.clone(),
-            note.content.clone(),
-            note.frontmatter.clone(),
-            note.size,
             note.modified_time,
         );
     }

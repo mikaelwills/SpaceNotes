@@ -37,6 +37,13 @@ pub async fn start_watcher(
                         if path.extension().map_or(false, |e| e == "md") {
                             match read_note_at(&vault_path_clone, path) {
                                 Ok(Some(mut note)) => {
+                                    // CHECK TRACKER (Echo Prevention)
+                                    // If we extracted an ID, and the content matches what we just wrote, STOP.
+                                    if !note.id.is_empty() && !tracker.is_modified(&note.id, &note.content) {
+                                        tracing::debug!("Watcher ignoring echo: {}", note.path);
+                                        continue;
+                                    }
+
                                     // Check if note has a UUID
                                     if note.id.is_empty() {
                                         // SAFETY CHECK: Does the DB already know about this file?
@@ -44,19 +51,27 @@ pub async fn start_watcher(
                                         // Do NOT inject a new UUID, or we'll split-brain the file.
                                         if let Some(existing) = client.get_note_by_path(&note.path) {
                                             tracing::warn!(
-                                                "Safety Stop: Note {} has no UUID on disk, but DB knows it as {}. Skipping injection to prevent split-brain.", 
+                                                "Safety Stop: Note {} has no UUID on disk, but DB knows it as {}. Skipping injection to prevent split-brain.",
                                                 note.path, existing.id
                                             );
                                             continue;
                                         }
 
-                                        // New file without UUID - inject one
-                                        let new_id = Uuid::new_v4().to_string();
-                                        tracing::info!("Injecting UUID {} into {}", new_id, note.path);
+                                        // SAFETY BRAKE: double check raw text before injecting
+                                        if let Ok(raw_content) = std::fs::read_to_string(path) {
+                                            if raw_content.contains("spacetime_id:") {
+                                                tracing::error!(
+                                                    "CRITICAL: spacetime_id found in text but parsing failed. Skipping injection for safety: {}",
+                                                    note.path
+                                                );
+                                                continue;
+                                            }
 
-                                        // Read file content and inject ID
-                                        if let Ok(content) = std::fs::read_to_string(path) {
-                                            let new_content = inject_spacetime_id(&content, &new_id);
+                                            // New file without UUID - inject one
+                                            let new_id = Uuid::new_v4().to_string();
+                                            tracing::info!("Injecting UUID {} into {}", new_id, note.path);
+
+                                            let new_content = inject_spacetime_id(&raw_content, &new_id);
                                             if let Err(e) = std::fs::write(path, &new_content) {
                                                 tracing::error!("Failed to inject UUID into {}: {}", note.path, e);
                                                 continue;
@@ -69,8 +84,7 @@ pub async fn start_watcher(
                                         }
                                     }
 
-                                    // Check tracker AFTER potential injection
-                                    // Only sync if content actually changed (prevents loops)
+                                    // UPSERT (Only if tracker says content changed)
                                     if tracker.is_modified(&note.id, &note.content) {
                                         client.upsert_note(&note);
                                         tracker.update(&note.id, &note.content);
