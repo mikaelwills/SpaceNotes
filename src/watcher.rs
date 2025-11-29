@@ -8,7 +8,7 @@ use uuid::Uuid;
 use crate::client::SpacetimeClient;
 use crate::folder::Folder;
 use crate::frontmatter::inject_spacetime_id;
-use crate::scanner::read_note_at;
+use crate::scanner::{read_note_at, scan_for_note_by_id};
 use crate::tracker::ContentTracker;
 
 pub async fn start_watcher(
@@ -38,8 +38,8 @@ pub async fn start_watcher(
                             match read_note_at(&vault_path_clone, path) {
                                 Ok(Some(mut note)) => {
                                     // CHECK TRACKER (Echo Prevention)
-                                    // If we extracted an ID, and the content matches what we just wrote, STOP.
-                                    if !note.id.is_empty() && !tracker.is_modified(&note.id, &note.content) {
+                                    // If we extracted an ID, and the content hasn't changed, STOP.
+                                    if !note.id.is_empty() && !tracker.has_changed(&note.id, &note.content) {
                                         tracing::debug!("Watcher ignoring echo: {}", note.path);
                                         continue;
                                     }
@@ -127,9 +127,44 @@ pub async fn start_watcher(
                         // Handle deleted directories (no extension and doesn't exist)
                         else if path.extension().is_none() && !path.exists() {
                             if let Ok(rel) = path.strip_prefix(&vault_path_clone) {
-                                let rel_path = rel.to_string_lossy().to_string();
-                                client.delete_folder(&rel_path);
-                                tracing::info!("Deleted folder: {}", rel_path);
+                                let old_folder_path = rel.to_string_lossy().to_string();
+
+                                // Get all notes that were in this folder from DB
+                                let notes_in_folder: Vec<_> = client.get_all_notes()
+                                    .into_iter()
+                                    .filter(|n| n.path.starts_with(&format!("{}/", old_folder_path)))
+                                    .collect();
+
+                                // Check if notes still exist on disk (indicates folder rename)
+                                for note in &notes_in_folder {
+                                    let old_path = vault_path_clone.join(&note.path);
+                                    if !old_path.exists() {
+                                        // Note missing at old path - try to find by UUID
+                                        match scan_for_note_by_id(&vault_path_clone, &note.id) {
+                                            Ok(Some(mut new_note)) => {
+                                                // Found it at new location! Update path in DB
+                                                if new_note.id.is_empty() {
+                                                    new_note.id = note.id.clone();
+                                                }
+                                                client.upsert_note(&new_note);
+                                                tracker.update(&new_note.id, &new_note.content);
+                                                tracing::info!("Updated note path: {} -> {}", note.path, new_note.path);
+                                            }
+                                            Ok(None) => {
+                                                // Note truly deleted
+                                                client.delete_note(&note.id);
+                                                tracker.remove(&note.id);
+                                                tracing::info!("Deleted note: {} (ID: {})", note.path, note.id);
+                                            }
+                                            Err(e) => {
+                                                tracing::error!("Error scanning for note {}: {}", note.id, e);
+                                            }
+                                        }
+                                    }
+                                }
+
+                                client.delete_folder(&old_folder_path);
+                                tracing::info!("Deleted folder: {}", old_folder_path);
                             }
                         }
                     }

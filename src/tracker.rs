@@ -29,7 +29,19 @@ impl ContentTracker {
         map.insert(id.to_string(), hash);
     }
 
+    /// Check if content has changed WITHOUT updating the tracker (read-only)
+    pub fn has_changed(&self, id: &str, current_content: &str) -> bool {
+        let new_hash = Self::hash(current_content);
+        let map = self.hashes.lock().unwrap();
+
+        match map.get(id) {
+            Some(old_hash) => *old_hash != new_hash,
+            None => true, // New file or not tracked yet
+        }
+    }
+
     /// Check if the content on disk is different from what we last synced/downloaded
+    /// Updates the tracker with the new hash as a side effect
     pub fn is_modified(&self, id: &str, current_content: &str) -> bool {
         let new_hash = Self::hash(current_content);
         let mut map = self.hashes.lock().unwrap();

@@ -115,4 +115,28 @@ spacetime sql obsidian-sync "SELECT path, COUNT(*) as count FROM note GROUP BY p
 ### Phase 6: Deployment
 - [x] Step 1: Dockerfile creation
 
+## File Watcher Architecture
+
+**Change Detection Flow:**
+1. `notify-debouncer-mini` detects filesystem changes (2s debounce)
+2. Watcher reads file and extracts frontmatter UUID
+3. `tracker.has_changed()` - read-only check if content differs from cached hash
+4. If unchanged, skip (echo prevention from daemon's own writes)
+5. If changed, inject UUID if missing, then `tracker.is_modified()` - updates cache and syncs to SpacetimeDB
+
+**Key Components:**
+- `ContentTracker.has_changed()` - read-only hash comparison (no side effects)
+- `ContentTracker.is_modified()` - hash comparison + cache update (side effect)
+- Separation prevents double-update bug where echo check consumed the change detection
+
+**Sources Synced:**
+- Obsidian desktop writes → SpacetimeDB
+- MCP server writes → SpacetimeDB
+- SpacetimeDB updates → local filesystem
+
+**Safety Features:**
+- Prevents duplicate UUID injection if DB already knows the note
+- Skips hidden files/folders and `@eaDir` (Synology system folders)
+- Raw text verification before UUID injection
+
 

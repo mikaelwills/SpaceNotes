@@ -50,6 +50,33 @@ pub fn read_note_at(vault_path: &Path, abs_path: &Path) -> Result<Option<Note>> 
     Ok(Some(Note::new(id, rel_path, body, frontmatter, size, created, modified)))
 }
 
+/// Scan filesystem to find a note by its UUID
+pub fn scan_for_note_by_id(vault_path: &Path, target_id: &str) -> Result<Option<Note>> {
+    let walker = WalkDir::new(vault_path).into_iter().filter_entry(|e| {
+        let name = e.file_name().to_string_lossy();
+        !name.starts_with('.') && name != "@eaDir"
+    });
+
+    for entry in walker.filter_map(|e| e.ok()) {
+        let path = entry.path();
+
+        if !path.is_file() || path.extension().map_or(true, |e| e != "md") {
+            continue;
+        }
+
+        if let Ok(content) = std::fs::read_to_string(path) {
+            if let Some(id) = extract_spacetime_id(&content) {
+                if id == target_id {
+                    // Found it! Read the full note
+                    return read_note_at(vault_path, path);
+                }
+            }
+        }
+    }
+
+    Ok(None)
+}
+
 pub fn scan_notes(vault_path: &Path) -> Result<Vec<Note>> {
     let mut notes = Vec::new();
 
