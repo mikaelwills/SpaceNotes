@@ -42,20 +42,31 @@ The Rust daemon watches your notes folder and syncs bidirectionally with Spaceti
    cp docker-compose.example.yml docker-compose.yml
    ```
 
-2. **Edit `docker-compose.yml`** - set your notes folder path:
+2. **Edit `docker-compose.yml`:**
    ```yaml
    volumes:
-     - /path/to/your/notes:/vault  # Change this
+     - /absolute/path/to/your/notes:/vault  # Your notes folder (must be absolute path)
+     - spacetimedb-data:/var/lib/spacetimedb
+   ports:
+     - "3000:3000"  # Change 3000 if port is already in use
    ```
 
-3. **Start SpaceNotes:**
+3. **Build and start:**
    ```bash
    docker-compose up -d
    ```
+   First build takes a few minutes (compiling Rust). Subsequent starts are instant.
 
-   That's it. SpacetimeDB starts, the module publishes automatically, and the sync daemon begins watching your notes folder.
+4. **Verify it's running:**
+   ```bash
+   docker logs spacenotes
+   ```
+   You should see "Watcher started on /vault" when ready.
 
-4. **Connect the Flutter app** to `http://your-server:3000`
+5. **Connect the Flutter app** to `http://<your-server-ip>:3000`
+   - Same machine: `http://localhost:3000`
+   - Over Tailscale: `http://<tailscale-ip>:3000`
+   - Find your Tailscale IP: `tailscale ip -4`
 
 ## Components
 
@@ -77,9 +88,10 @@ The Rust daemon watches your notes folder and syncs bidirectionally with Spaceti
 
 SpaceNotes requires your devices to reach your server. Options:
 
-- **Tailscale (recommended)** - Zero-config mesh VPN. Install on server and devices, connect via Tailscale IP.
+- **Tailscale (recommended)** - Zero-config mesh VPN. Install on server and devices, connect via Tailscale IP. No port forwarding needed.
+- **Local network** - If server and devices are on the same WiFi, use the server's local IP (e.g., `192.168.1.x`).
 - **WireGuard/OpenVPN** - Traditional VPN to your home network.
-- **Port forwarding** - Expose port 3000 on your router (less secure).
+- **Port forwarding** - Expose the port on your router (less secure, not recommended).
 - **Cloudflare Tunnel** - Free, secure tunneling without opening ports.
 
 ## Architecture
