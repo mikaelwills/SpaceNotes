@@ -39,7 +39,7 @@ RUN ln -s /opt/spacetime/spacetimedb-cli /usr/local/bin/spacetime && \
 COPY --from=builder /build/target/release/spacenotes /usr/local/bin/spacenotes
 
 # Copy the pre-built WASM module
-COPY --from=builder /build/spacetime-module/target/wasm32-unknown-unknown/release/spacetime_module.wasm /opt/spacetime-module.wasm
+COPY --from=builder /build/spacetime-module/target/wasm32-unknown-unknown/release/spacenotes_module.wasm /opt/spacetime-module.wasm
 
 # Copy entrypoint
 COPY entrypoint.sh /entrypoint.sh
