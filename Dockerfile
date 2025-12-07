@@ -21,8 +21,8 @@ COPY spacetime-module /build/spacetime-module
 WORKDIR /build/spacetime-module
 RUN cargo build --release --target wasm32-unknown-unknown
 
-# Runtime stage
-FROM debian:bookworm
+# Runtime stage - Ubuntu 24.04 has glibc 2.39
+FROM ubuntu:24.04
 
 # Install dependencies
 RUN apt-get update && apt-get install -y \
