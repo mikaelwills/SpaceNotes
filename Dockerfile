@@ -4,7 +4,7 @@
 FROM clockworklabs/spacetime:v1.8.0 AS spacetime
 
 # Build stage for Rust daemon
-FROM rust:1.83-bookworm AS builder
+FROM rust:latest AS builder
 
 WORKDIR /build
 
