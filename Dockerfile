@@ -3,18 +3,26 @@
 
 FROM clockworklabs/spacetime:v1.8.0 AS spacetime
 
-# Build stage for Rust daemon
+# Build stage for Rust daemon AND SpacetimeDB module
 FROM rust:latest AS builder
 
 WORKDIR /build
 
-# Copy and build (native architecture)
+# Install wasm target for SpacetimeDB module
+RUN rustup target add wasm32-unknown-unknown
+
+# Build the sync daemon
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 RUN cargo build --release
 
+# Build the SpacetimeDB module to WASM
+COPY spacetime-module /build/spacetime-module
+WORKDIR /build/spacetime-module
+RUN cargo build --release --target wasm32-unknown-unknown
+
 # Runtime stage
-FROM debian:bookworm-slim
+FROM debian:bookworm
 
 # Install dependencies
 RUN apt-get update && apt-get install -y \
@@ -30,8 +38,8 @@ RUN ln -s /opt/spacetime/spacetimedb-cli /usr/local/bin/spacetime && \
 # Copy our daemon
 COPY --from=builder /build/target/release/spacenotes /usr/local/bin/spacenotes
 
-# Copy the SpacetimeDB module source
-COPY spacetime-module /opt/spacetime-module
+# Copy the pre-built WASM module
+COPY --from=builder /build/spacetime-module/target/wasm32-unknown-unknown/release/spacetime_module.wasm /opt/spacetime-module.wasm
 
 # Copy entrypoint
 COPY entrypoint.sh /entrypoint.sh

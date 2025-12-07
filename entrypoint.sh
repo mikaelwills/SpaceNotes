@@ -22,10 +22,9 @@ for i in {1..30}; do
     sleep 1
 done
 
-# Publish module if not already published
+# Publish the pre-built WASM module
 echo "Publishing SpacetimeDB module..."
-cd /opt/spacetime-module
-spacetime publish "$SPACETIME_DB" --server http://127.0.0.1:3000 -y || {
+spacetime publish "$SPACETIME_DB" --server http://127.0.0.1:3000 -y /opt/spacetime-module.wasm || {
     echo "Module may already be published, continuing..."
 }
 
