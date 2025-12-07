@@ -1,7 +1,10 @@
 target/
-!target/x86_64-unknown-linux-musl/release/spacenotes
-spacetime-module/
+spacetime-module/target/
 .git/
 .gitignore
 *.md
 docker-compose.yml
+Dockerfile.local
+deploy-to-nas.sh
+CLAUDE.md
+PLAN.md
