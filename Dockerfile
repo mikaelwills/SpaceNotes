@@ -22,8 +22,10 @@ RUN apt-get update && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy SpacetimeDB from official image
-COPY --from=spacetime /usr/local/bin/spacetime /usr/local/bin/spacetime
+# Copy SpacetimeDB from official image (both CLI and standalone server)
+COPY --from=spacetime /opt/spacetime /opt/spacetime
+RUN ln -s /opt/spacetime/spacetimedb-cli /usr/local/bin/spacetime && \
+    ln -s /opt/spacetime/spacetimedb-standalone /usr/local/bin/spacetimedb-standalone
 
 # Copy our daemon
 COPY --from=builder /build/target/release/spacenotes /usr/local/bin/spacenotes
