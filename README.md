@@ -38,7 +38,7 @@ The Rust daemon watches your notes folder and syncs bidirectionally with Spaceti
 1. **Clone and configure:**
    ```bash
    git clone https://github.com/mikaelwills/SpaceNotes.git
-   cd spacenotes
+   cd SpaceNotes
    cp docker-compose.example.yml docker-compose.yml
    ```
 
@@ -48,19 +48,14 @@ The Rust daemon watches your notes folder and syncs bidirectionally with Spaceti
      - /path/to/your/notes:/vault  # Change this
    ```
 
-3. **Start the services:**
+3. **Start SpaceNotes:**
    ```bash
    docker-compose up -d
    ```
 
-4. **Publish the SpacetimeDB module:**
-   ```bash
-   spacetime publish spacenotes \
-     --project-path spacetime-module \
-     --server http://localhost:3000
-   ```
+   That's it. SpacetimeDB starts, the module publishes automatically, and the sync daemon begins watching your notes folder.
 
-5. **Connect the Flutter app** to `http://your-server:3000`
+4. **Connect the Flutter app** to `http://your-server:3000`
 
 ## Components
 

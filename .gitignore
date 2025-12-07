@@ -6,4 +6,5 @@ CLAUDE.md
 PLAN.md
 docker-compose.yml
 deploy-to-nas.sh
+Dockerfile.local
 .claude/settings.local.json
