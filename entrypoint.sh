@@ -5,7 +5,7 @@ echo "Starting SpaceNotes..."
 
 # Start SpacetimeDB in background (bind to 0.0.0.0 for external access)
 echo "Starting SpacetimeDB..."
-spacetime start --listen-addr 0.0.0.0:3000 &
+spacetime start --listen-addr 0.0.0.0:3000 --data-dir /var/lib/spacetimedb &
 STDB_PID=$!
 
 # Wait for SpacetimeDB to be ready
