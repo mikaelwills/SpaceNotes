@@ -1,1 +1,9 @@
 /target
+spacetime-module/target/
+
+# Personal config (not committed)
+CLAUDE.md
+PLAN.md
+docker-compose.yml
+deploy-to-nas.sh
+.claude/settings.local.json

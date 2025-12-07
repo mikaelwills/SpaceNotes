@@ -1,5 +1,5 @@
 target/
-!target/x86_64-unknown-linux-musl/release/obsidian-spacetime-sync
+!target/x86_64-unknown-linux-musl/release/spacenotes
 spacetime-module/
 .git/
 .gitignore

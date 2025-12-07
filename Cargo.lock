@@ -1192,30 +1192,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "obsidian-spacetime-sync"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "filetime",
- "hex",
- "notify-debouncer-mini",
- "once_cell",
- "openssl",
- "regex",
- "serde",
- "serde_json",
- "serde_yaml",
- "sha2",
- "spacetimedb-sdk",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "uuid",
- "walkdir",
-]
-
-[[package]]
 name = "once_cell"
 version = "1.21.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1776,6 +1752,30 @@ checksum = "17129e116933cf371d018bb80ae557e889637989d8638274fb25622827b03881"
 dependencies = [
  "libc",
  "windows-sys 0.60.2",
+]
+
+[[package]]
+name = "spacenotes"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "filetime",
+ "hex",
+ "notify-debouncer-mini",
+ "once_cell",
+ "openssl",
+ "regex",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2",
+ "spacetimedb-sdk",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+ "walkdir",
 ]
 
 [[package]]

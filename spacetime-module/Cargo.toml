@@ -1,5 +1,5 @@
 [package]
-name = "obsidian_spacetime_sync"
+name = "spacenotes_module"
 version = "0.1.0"
 edition = "2021"
 

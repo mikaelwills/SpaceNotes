@@ -6,6 +6,7 @@ use walkdir::WalkDir;
 use crate::folder::Folder;
 use crate::frontmatter::{extract_spacetime_id, parse_frontmatter};
 use crate::note::Note;
+use crate::sanitize::sanitize_path;
 
 pub fn read_note_at(vault_path: &Path, abs_path: &Path) -> Result<Option<Note>> {
     // Validation
@@ -18,11 +19,11 @@ pub fn read_note_at(vault_path: &Path, abs_path: &Path) -> Result<Option<Note>> 
         return Ok(None);
     }
 
-    // Relative path
-    let rel_path = abs_path
+    // Relative path - sanitize to prevent URI encoding issues
+    let rel_path = sanitize_path(&abs_path
         .strip_prefix(vault_path)?
         .to_string_lossy()
-        .to_string();
+        .to_string());
 
     // Read content
     let content = std::fs::read_to_string(abs_path)?;
@@ -94,9 +95,9 @@ pub fn scan_notes(vault_path: &Path) -> Result<Vec<Note>> {
             continue;
         }
 
-        // Get relative path
+        // Get relative path - sanitize to prevent URI encoding issues
         let rel_path = match path.strip_prefix(vault_path) {
-            Ok(p) => p.to_string_lossy().to_string(),
+            Ok(p) => sanitize_path(&p.to_string_lossy().to_string()),
             Err(e) => {
                 tracing::warn!("Failed to get relative path for {:?}: {}", path, e);
                 continue;
@@ -169,8 +170,8 @@ pub fn scan_folders(vault_path: &Path) -> Result<Vec<Folder>> {
             continue;
         }
 
-        // Get relative path
-        let rel_path = path.strip_prefix(vault_path)?.to_string_lossy().to_string();
+        // Get relative path - sanitize to prevent URI encoding issues
+        let rel_path = sanitize_path(&path.strip_prefix(vault_path)?.to_string_lossy().to_string());
 
         folders.push(Folder::new(rel_path));
     }

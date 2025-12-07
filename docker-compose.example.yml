@@ -6,22 +6,24 @@ services:
     container_name: spacetimedb
     command: start
     ports:
-      - "3003:3000"
+      - "3000:3000"
     volumes:
       - spacetimedb-data:/var/lib/spacetimedb
     restart: unless-stopped
 
-  obsidian-spacetime-sync:
-    build: .
-    container_name: obsidian-spacetime-sync
+  spacenotes:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: spacenotes
     depends_on:
       - spacetimedb
     volumes:
-      - /volume1/homes/mikael/ObsidianNAS:/vault
+      - /path/to/your/notes:/vault  # Edit this to your notes folder
     environment:
       - VAULT_PATH=/vault
       - SPACETIME_HOST=http://spacetimedb:3000
-      - SPACETIME_DB=obsidian-sync
+      - SPACETIME_DB=spacenotes
     restart: unless-stopped
 
 volumes:

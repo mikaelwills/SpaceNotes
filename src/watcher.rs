@@ -8,6 +8,7 @@ use uuid::Uuid;
 use crate::client::SpacetimeClient;
 use crate::folder::Folder;
 use crate::frontmatter::inject_spacetime_id;
+use crate::sanitize::sanitize_path;
 use crate::scanner::{read_note_at, scan_for_note_by_id};
 use crate::tracker::ContentTracker;
 
@@ -96,7 +97,7 @@ pub async fn start_watcher(
                                 Ok(None) => {
                                     // File was deleted - look up ID from client cache
                                     if let Ok(rel) = path.strip_prefix(&vault_path_clone) {
-                                        let rel_path = rel.to_string_lossy().to_string();
+                                        let rel_path = sanitize_path(&rel.to_string_lossy().to_string());
 
                                         // Find the note in the client cache by path
                                         let notes = client.get_all_notes();
@@ -118,7 +119,7 @@ pub async fn start_watcher(
                         else if path.is_dir() {
                             // Directory exists - created or modified
                             if let Ok(rel) = path.strip_prefix(&vault_path_clone) {
-                                let rel_path = rel.to_string_lossy().to_string();
+                                let rel_path = sanitize_path(&rel.to_string_lossy().to_string());
                                 let folder = Folder::new(rel_path.clone());
                                 client.upsert_folder(&folder);
                                 tracing::info!("Synced folder: {}", rel_path);
@@ -127,7 +128,7 @@ pub async fn start_watcher(
                         // Handle deleted directories (no extension and doesn't exist)
                         else if path.extension().is_none() && !path.exists() {
                             if let Ok(rel) = path.strip_prefix(&vault_path_clone) {
-                                let old_folder_path = rel.to_string_lossy().to_string();
+                                let old_folder_path = sanitize_path(&rel.to_string_lossy().to_string());
 
                                 // Get all notes that were in this folder from DB
                                 let notes_in_folder: Vec<_> = client.get_all_notes()

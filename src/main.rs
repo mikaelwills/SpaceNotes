@@ -3,6 +3,7 @@ mod folder;
 mod frontmatter;
 mod note;
 mod reconcile;
+mod sanitize;
 mod scanner;
 mod spacetime_bindings;
 mod tracker;
@@ -18,8 +19,8 @@ use crate::tracker::ContentTracker;
 use crate::writer::write_note_to_disk;
 
 #[derive(Parser, Debug)]
-#[command(name = "obsidian-spacetime-sync")]
-#[command(about = "Sync Obsidian vault to SpacetimeDB")]
+#[command(name = "spacenotes")]
+#[command(about = "Sync markdown notes to SpacetimeDB")]
 struct Args {
     #[arg(short, long, env = "VAULT_PATH")]
     vault_path: PathBuf,
@@ -29,7 +30,7 @@ struct Args {
     spacetime_host: String,
 
     #[arg(short, long, env = "SPACETIME_DB",
-          default_value = "obsidian-sync")]
+          default_value = "spacenotes")]
     database: String,
 }
 

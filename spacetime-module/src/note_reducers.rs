@@ -37,6 +37,7 @@ pub fn create_note(
         size,
         created_time,
         modified_time,
+        db_updated_at: ctx.timestamp,
     });
     log::info!("Created note: {}", path);
 }
@@ -65,6 +66,7 @@ pub fn update_note_content(
             size,
             created_time: existing.created_time,
             modified_time,
+            db_updated_at: ctx.timestamp,
         });
         log::info!("Updated content for note: {} (ID: {})", existing.path, id);
     } else {
@@ -116,6 +118,7 @@ pub fn rename_note(
             size: existing.size,
             created_time: existing.created_time,
             modified_time: existing.modified_time,
+            db_updated_at: ctx.timestamp,
         });
         log::info!("Renamed note: {} -> {} (ID: {})", existing.path, new_path, id);
     } else {
@@ -164,6 +167,7 @@ pub fn update_note_path(ctx: &ReducerContext, id: String, new_path: String) {
             size: existing.size,
             created_time: existing.created_time,
             modified_time: existing.modified_time,
+            db_updated_at: ctx.timestamp,
         });
         log::info!("Updated path for note {}: {}", id, new_path);
     } else {
@@ -205,6 +209,7 @@ pub fn move_note(ctx: &ReducerContext, old_path: String, new_path: String) {
             size: existing.size,
             created_time: existing.created_time,
             modified_time: existing.modified_time,
+            db_updated_at: ctx.timestamp,
         });
         log::info!("Moved note: {} -> {}", old_path, new_path);
     } else {
@@ -241,5 +246,107 @@ pub fn upsert_note(
         size,
         created_time,
         modified_time,
+        db_updated_at: ctx.timestamp,
     });
+}
+
+/// Append content to an existing note (by path)
+#[spacetimedb::reducer]
+pub fn append_to_note(ctx: &ReducerContext, path: String, content: String) {
+    if let Some(existing) = ctx.db.note().path().find(&path) {
+        let new_content = format!("{}{}", existing.content, content);
+        let new_size = new_content.len() as u64;
+        let now = ctx.timestamp.to_micros_since_unix_epoch() as u64 / 1_000_000;
+
+        ctx.db.note().id().delete(&existing.id);
+        ctx.db.note().insert(Note {
+            id: existing.id.clone(),
+            path: existing.path,
+            name: existing.name,
+            content: new_content,
+            folder_path: existing.folder_path,
+            depth: existing.depth,
+            frontmatter: existing.frontmatter,
+            size: new_size,
+            created_time: existing.created_time,
+            modified_time: now,
+            db_updated_at: ctx.timestamp,
+        });
+        log::info!("Appended {} bytes to note: {}", content.len(), path);
+    } else {
+        log::warn!("Note not found for append: {}", path);
+    }
+}
+
+/// Prepend content to an existing note (by path)
+#[spacetimedb::reducer]
+pub fn prepend_to_note(ctx: &ReducerContext, path: String, content: String) {
+    if let Some(existing) = ctx.db.note().path().find(&path) {
+        let new_content = format!("{}{}", content, existing.content);
+        let new_size = new_content.len() as u64;
+        let now = ctx.timestamp.to_micros_since_unix_epoch() as u64 / 1_000_000;
+
+        ctx.db.note().id().delete(&existing.id);
+        ctx.db.note().insert(Note {
+            id: existing.id.clone(),
+            path: existing.path,
+            name: existing.name,
+            content: new_content,
+            folder_path: existing.folder_path,
+            depth: existing.depth,
+            frontmatter: existing.frontmatter,
+            size: new_size,
+            created_time: existing.created_time,
+            modified_time: now,
+            db_updated_at: ctx.timestamp,
+        });
+        log::info!("Prepended {} bytes to note: {}", content.len(), path);
+    } else {
+        log::warn!("Note not found for prepend: {}", path);
+    }
+}
+
+/// Find and replace text in a note (by path)
+#[spacetimedb::reducer]
+pub fn find_replace_in_note(
+    ctx: &ReducerContext,
+    path: String,
+    old_text: String,
+    new_text: String,
+    replace_all: bool,
+) {
+    if let Some(existing) = ctx.db.note().path().find(&path) {
+        let new_content = if replace_all {
+            existing.content.replace(&old_text, &new_text)
+        } else {
+            existing.content.replacen(&old_text, &new_text, 1)
+        };
+
+        // Check if anything changed
+        if new_content == existing.content {
+            log::warn!("No match found for replacement in note: {}", path);
+            return;
+        }
+
+        let new_size = new_content.len() as u64;
+        let now = ctx.timestamp.to_micros_since_unix_epoch() as u64 / 1_000_000;
+
+        ctx.db.note().id().delete(&existing.id);
+        ctx.db.note().insert(Note {
+            id: existing.id.clone(),
+            path: existing.path,
+            name: existing.name,
+            content: new_content,
+            folder_path: existing.folder_path,
+            depth: existing.depth,
+            frontmatter: existing.frontmatter,
+            size: new_size,
+            created_time: existing.created_time,
+            modified_time: now,
+            db_updated_at: ctx.timestamp,
+        });
+        log::info!("Replaced text in note: {}", path);
+    } else {
+        log::warn!("Note not found for find/replace: {}", path);
+    }
 }

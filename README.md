@@ -1,211 +1,106 @@
-# Obsidian SpacetimeDB Sync
+# SpaceNotes
 
-A Rust file watcher that monitors an Obsidian vault and syncs all changes to SpacetimeDB in real-time. This enables multi-client sync through the SpacetimeDB Dart SDK.
+**Real-time note sync without the cloud.**
 
-## Architecture
+No subscriptions. No cloud storage. No vendor lock-in. Just your notes, synced instantly across all your devices.
 
-```
-NAS Obsidian Vault → Rust Watcher → SpacetimeDB (NAS)
-                                         ↓
-                    Flutter/Dart apps ← Dart SDK
-```
+SpaceNotes is the notes app that doesn't exist yet: real-time cross-platform sync with **zero recurring costs** and **complete data ownership**. Your notes stay on your hardware as plain markdown files - not trapped in someone else's database.
 
-**Current implementation:** One-way sync (Vault → SpacetimeDB)
+- **No cloud** - Runs entirely on your own server. Your data never touches third-party infrastructure.
+- **No costs** - Zero monthly fees. No per-device charges, no storage limits.
+- **True ownership** - Plain markdown files in a folder. Use any editor. Switch apps anytime. Your notes are yours.
+- **Real-time sync** - Edit on your phone, see it on your desktop instantly. Thanks to SpacetimeDb.
+- **LLM-ready** - Built-in MCP server lets AI assistants read and write your notes directly.
 
-## Features
-
-- **Initial scan** - Syncs all notes and folders on startup
-- **Real-time watching** - Monitors vault for file changes
-- **Debouncing** - 2-second debounce to handle editor save spam
-- **Frontmatter parsing** - Extracts YAML frontmatter as JSON
-- **Hidden file filtering** - Skips `.obsidian`, `.git`, etc.
-- **Path canonicalization** - Handles relative/absolute path mismatches
-
-## Data Model
-
-### Note
-- `path` - Relative path (e.g., "Projects/my-note.md")
-- `name` - Note name without extension
-- `content` - Markdown body (without frontmatter)
-- `folder_path` - Parent folder path
-- `depth` - Nesting level
-- `frontmatter` - JSON-serialized YAML frontmatter
-- `size` - File size in bytes
-- `created_time` - Unix timestamp (ms)
-- `modified_time` - Unix timestamp (ms)
-
-### Folder
-- `path` - Relative path
-- `name` - Folder name
-- `depth` - Nesting level
-
-## Project Structure
+## How It Works
 
 ```
-obsidian-spacetime-sync/
-├── src/
-│   ├── main.rs              # CLI args, startup, orchestration
-│   ├── client.rs            # SpacetimeDB client wrapper
-│   ├── scanner.rs           # Vault scanning (notes & folders)
-│   ├── watcher.rs           # File system watcher
-│   ├── note.rs              # Note struct
-│   ├── folder.rs            # Folder struct
-│   ├── frontmatter.rs       # YAML frontmatter parser
-│   ├── tracker.rs           # Content hash tracker (for two-way sync)
-│   ├── writer.rs            # Atomic file writer (for two-way sync)
-│   └── spacetime_bindings/  # Auto-generated SpacetimeDB client code
-├── spacetime-module/
-│   └── src/lib.rs           # SpacetimeDB tables & reducers
-├── Cargo.toml
-├── Dockerfile
-├── docker-compose.yml
-├── PLAN.md                  # Original implementation plan
-├── TWO_WAY_PLAN.md          # Future two-way sync plan
-└── CLAUDE.md                # Teaching progress tracker
+Your Server (NAS/VPS)                    Your Devices
+┌─────────────────────────────────┐      ┌─────────────────┐
+│  Notes Folder ←→ Rust Daemon ←→ │ ←──→ │  Flutter App    │
+│        ↓                        │      │  (iOS/Android/  │
+│  SpacetimeDB (real-time DB)     │      │   Desktop)      │
+│        ↓                        │      └─────────────────┘
+│  MCP Server ←───────────────────│←───→ Claude / LLMs
+└─────────────────────────────────┘
 ```
 
-## SpacetimeDB Reducers
+The Rust daemon watches your notes folder and syncs bidirectionally with SpacetimeDB. Clients connect via WebSocket and receive instant updates. Edit a note on your phone - it appears on your desktop in milliseconds.
 
-- `upsert_note` - Create or update a note
-- `upsert_folder` - Create or update a folder
-- `delete_note` - Delete a note by path
-- `delete_folder` - Delete a folder by path
-- `move_note` - Rename/move a note
-- `move_folder` - Rename/move a folder
-- `clear_all` - Delete all notes and folders
+## Requirements
 
-## Usage
+- Docker and Docker Compose
+- A server accessible from your devices (home server, NAS, VPS)
+- Network access via Tailscale, VPN, or port forwarding
 
-### Local Development
+## Quick Start
 
-```bash
-# Build
-cargo build
-
-# Run with arguments
-cargo run -- --vault-path /path/to/vault \
-             --spacetime-host http://localhost:3003 \
-             --database obsidian-sync
-
-# Or use environment variables
-VAULT_PATH=/path/to/vault cargo run
-```
-
-### CLI Arguments
-
-| Argument | Env Var | Default | Description |
-|----------|---------|---------|-------------|
-| `-v, --vault-path` | `VAULT_PATH` | (required) | Path to Obsidian vault |
-| `-s, --spacetime-host` | `SPACETIME_HOST` | `http://localhost:3003` | SpacetimeDB URL |
-| `-d, --database` | `SPACETIME_DB` | `obsidian-sync` | Database name |
-
-## Deployment
-
-### Prerequisites
-
-1. SpacetimeDB running on NAS (port 3003)
-2. Docker installed on NAS
-
-### Steps
-
-1. **Copy project to NAS:**
+1. **Clone and configure:**
    ```bash
-   scp -r . mikael@192.168.1.161:/volume1/docker/obsidian-spacetime-sync/
+   git clone https://github.com/mikaelwills/SpaceNotes.git
+   cd spacenotes
+   cp docker-compose.example.yml docker-compose.yml
    ```
 
-2. **Start SpacetimeDB:**
-   ```bash
-   ssh mikael@192.168.1.161
-   cd /volume1/docker/obsidian-spacetime-sync
-   docker-compose up -d spacetimedb
+2. **Edit `docker-compose.yml`** - set your notes folder path:
+   ```yaml
+   volumes:
+     - /path/to/your/notes:/vault  # Change this
    ```
 
-3. **Publish module (from development machine):**
+3. **Start the services:**
    ```bash
-   cd spacetime-module
-   spacetime build
-   spacetime publish -s http://192.168.1.161:3003 obsidian-sync
+   docker-compose up -d
    ```
 
-4. **Start watcher:**
+4. **Publish the SpacetimeDB module:**
    ```bash
-   docker-compose up -d obsidian-spacetime-sync
+   spacetime publish spacenotes \
+     --project-path spacetime-module \
+     --server http://localhost:3000
    ```
 
-### Docker Compose
+5. **Connect the Flutter app** to `http://your-server:3000`
 
-```yaml
-services:
-  spacetimedb:
-    image: clockworklabs/spacetime
-    ports:
-      - "3003:3000"
-    volumes:
-      - spacetimedb-data:/var/lib/spacetimedb
+## Components
 
-  obsidian-spacetime-sync:
-    build: .
-    depends_on:
-      - spacetimedb
-    volumes:
-      - /volume1/homes/mikael/ObsidianNAS:/vault:ro
-    environment:
-      - VAULT_PATH=/vault
-      - SPACETIME_HOST=http://spacetimedb:3000
-      - SPACETIME_DB=obsidian-sync
-```
+| Component | Description |
+|-----------|-------------|
+| **spacenotes** (this repo) | Rust daemon that syncs filesystem ↔ SpacetimeDB |
+| **spacenotes-flutter** | Cross-platform client app (iOS, Android, macOS, Windows, Linux) |
+| **spacenotes-mcp** | MCP server for AI assistant integration |
 
 ## Configuration
 
-### Vault Location
-- **NAS Path:** `/volume1/homes/mikael/ObsidianNAS/`
-- **Docker Mount:** `/vault` (read-only)
+| Environment Variable | Default | Description |
+|---------------------|---------|-------------|
+| `VAULT_PATH` | (required) | Path to notes folder inside container |
+| `SPACETIME_HOST` | `http://localhost:3000` | SpacetimeDB server URL |
+| `SPACETIME_DB` | `spacenotes` | Database name |
 
-> **Note for Two-Way Sync:** The `:ro` flag must be removed (change to `:rw` or default) when implementing two-way sync, or `writer.rs` will fail with "Permission Denied" errors.
+## Network Setup
 
-### SpacetimeDB
-- **Host:** `http://192.168.1.161:3003`
-- **Database:** `obsidian-sync`
+SpaceNotes requires your devices to reach your server. Options:
 
-## Dependencies
+- **Tailscale (recommended)** - Zero-config mesh VPN. Install on server and devices, connect via Tailscale IP.
+- **WireGuard/OpenVPN** - Traditional VPN to your home network.
+- **Port forwarding** - Expose port 3000 on your router (less secure).
+- **Cloudflare Tunnel** - Free, secure tunneling without opening ports.
 
-```toml
-spacetimedb-sdk = "1.0"
-notify-debouncer-mini = "0.4"
-tokio = { version = "1", features = ["full"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-serde_yaml = "0.9"
-walkdir = "2.5"
-anyhow = "1.0"
-clap = { version = "4", features = ["derive", "env"] }
-tracing = "0.1"
-tracing-subscriber = "0.3"
-filetime = "0.2"
-sha2 = "0.10"
-hex = "0.4"
-```
+## Architecture
+
+The system uses [SpacetimeDB](https://spacetimedb.com), a real-time database that combines:
+- Relational data storage
+- WebSocket subscriptions for instant updates
+- Server-side logic (reducers) that run atomically
+
+This means clients don't poll for changes - they subscribe once and receive updates pushed to them instantly.
 
 ## Current Limitations
 
-- **One-way sync only** - Changes in Flutter apps don't sync back to vault
-- **Folder deletion** - Deleting a folder doesn't remove child notes from DB
-- **No conflict resolution** - Last write wins
-
-## Future Enhancements
-
-See [TWO_WAY_PLAN.md](TWO_WAY_PLAN.md) for planned bidirectional sync:
-
-- Startup reconciliation (compare timestamps)
-- Subscribe to SpacetimeDB changes
-- Write server changes back to vault
-- Content hashing to prevent infinite loops
-
-## Related Projects
-
-- **SpacetimeDB Dart SDK:** For Flutter/Dart client apps
-- **Obsidian MCP Server:** Reference implementation for vault operations
-- **Remotely Save Plugin:** Syncs Obsidian to NAS via WebDAV
+- **Single user** - No multi-user authentication yet
+- **Last-write-wins** - No conflict resolution for simultaneous edits
+- **Markdown only** - Designed for `.md` files
 
 ## License
 

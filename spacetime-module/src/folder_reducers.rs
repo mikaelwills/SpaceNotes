@@ -8,17 +8,20 @@ use crate::{Folder, folder, note};
 
 #[spacetimedb::reducer]
 pub fn create_folder(ctx: &ReducerContext, path: String, name: String, depth: u32) {
-    if ctx.db.folder().path().find(&path).is_some() {
-        log::warn!("Folder already exists: {}", path);
+    // Normalize: strip trailing slash to match storage standard
+    let normalized_path = path.trim_end_matches('/').to_string();
+
+    if ctx.db.folder().path().find(&normalized_path).is_some() {
+        log::warn!("Folder already exists: {}", normalized_path);
         return;
     }
 
     ctx.db.folder().insert(Folder {
-        path: path.clone(),
+        path: normalized_path.clone(),
         name,
         depth,
     });
-    log::info!("Created folder: {}", path);
+    log::info!("Created folder: {}", normalized_path);
 }
 
 #[spacetimedb::reducer]
@@ -75,26 +78,112 @@ pub fn delete_folder(ctx: &ReducerContext, path: String) {
 
 #[spacetimedb::reducer]
 pub fn move_folder(ctx: &ReducerContext, old_path: String, new_path: String) {
-    if let Some(_existing) = ctx.db.folder().path().find(&old_path) {
-        let new_name = new_path
-            .trim_end_matches('/')
+    // Normalize: strip trailing slashes
+    let old_normalized = old_path.trim_end_matches('/').to_string();
+    let new_normalized = new_path.trim_end_matches('/').to_string();
+
+    // Verify source folder exists
+    if ctx.db.folder().path().find(&old_normalized).is_none() {
+        log::warn!("Folder not found for move: {}", old_normalized);
+        return;
+    }
+
+    // Check if destination already exists
+    if ctx.db.folder().path().find(&new_normalized).is_some() {
+        log::error!("Cannot move: Destination folder already exists: {}", new_normalized);
+        return;
+    }
+
+    // Calculate new metadata for the folder
+    let new_name = new_normalized
+        .rsplit('/')
+        .next()
+        .unwrap_or(&new_normalized)
+        .to_string();
+    let new_depth = new_normalized.matches('/').count() as u32;
+
+    // For cascade operations, use paths with slashes
+    let old_path_with_slash = format!("{}/", old_normalized);
+    let new_path_with_slash = format!("{}/", new_normalized);
+
+    // CASCADE 1: Update all notes inside this folder
+    let notes_to_update: Vec<_> = ctx
+        .db
+        .note()
+        .iter()
+        .filter(|note| note.folder_path.starts_with(&old_path_with_slash))
+        .collect();
+
+    let notes_count = notes_to_update.len();
+    for note in notes_to_update {
+        // Calculate new paths for the note
+        let new_note_folder_path = note.folder_path.replacen(&old_path_with_slash, &new_path_with_slash, 1);
+        let new_note_path = note.path.replacen(&old_path_with_slash, &new_path_with_slash, 1);
+        let new_note_depth = new_note_path.matches('/').count() as u32;
+
+        // Delete old entry and insert with updated paths
+        ctx.db.note().id().delete(&note.id);
+        ctx.db.note().insert(crate::Note {
+            id: note.id.clone(),
+            path: new_note_path,
+            name: note.name,
+            content: note.content,
+            folder_path: new_note_folder_path,
+            depth: new_note_depth,
+            frontmatter: note.frontmatter,
+            size: note.size,
+            created_time: note.created_time,
+            modified_time: note.modified_time,
+            db_updated_at: ctx.timestamp,
+        });
+    }
+
+    if notes_count > 0 {
+        log::info!("Cascade updated {} notes in folder move", notes_count);
+    }
+
+    // CASCADE 2: Update all subfolders
+    let subfolders_to_update: Vec<_> = ctx
+        .db
+        .folder()
+        .iter()
+        .filter(|f| f.path.starts_with(&old_normalized) && f.path != old_normalized)
+        .collect();
+
+    let subfolders_count = subfolders_to_update.len();
+    for subfolder in subfolders_to_update {
+        // Calculate new path for subfolder
+        let new_subfolder_path = subfolder.path.replacen(&old_normalized, &new_normalized, 1);
+        let new_subfolder_name = new_subfolder_path
             .rsplit('/')
             .next()
-            .unwrap_or(&new_path)
+            .unwrap_or(&new_subfolder_path)
             .to_string();
+        let new_subfolder_depth = new_subfolder_path.matches('/').count() as u32;
 
-        let new_depth = new_path.matches('/').count() as u32;
-
-        ctx.db.folder().path().delete(&old_path);
+        // Delete old entry and insert with updated path
+        ctx.db.folder().path().delete(&subfolder.path);
         ctx.db.folder().insert(Folder {
-            path: new_path.clone(),
-            name: new_name,
-            depth: new_depth,
+            path: new_subfolder_path,
+            name: new_subfolder_name,
+            depth: new_subfolder_depth,
         });
-        log::info!("Moved folder: {} -> {}", old_path, new_path);
-    } else {
-        log::warn!("Folder not found for move: {}", old_path);
     }
+
+    if subfolders_count > 0 {
+        log::info!("Cascade updated {} subfolders in folder move", subfolders_count);
+    }
+
+    // Move the folder itself
+    ctx.db.folder().path().delete(&old_normalized);
+    ctx.db.folder().insert(Folder {
+        path: new_normalized.clone(),
+        name: new_name,
+        depth: new_depth,
+    });
+
+    log::info!("Moved folder: {} -> {} (with {} notes, {} subfolders)",
+               old_normalized, new_normalized, notes_count, subfolders_count);
 }
 
 #[spacetimedb::reducer]
