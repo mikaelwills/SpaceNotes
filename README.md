@@ -35,20 +35,16 @@ The Rust daemon watches your notes folder and syncs bidirectionally with Spaceti
 
 ## Quick Start
 
-1. **Clone and configure:**
+1. **Clone:**
    ```bash
    git clone https://github.com/mikaelwills/SpaceNotes.git
    cd SpaceNotes
-   cp docker-compose.example.yml docker-compose.yml
    ```
 
-2. **Edit `docker-compose.yml`:**
+2. **Edit `docker-compose.yml`** - set your notes folder path:
    ```yaml
    volumes:
      - /absolute/path/to/your/notes:/vault  # Your notes folder (must be absolute path)
-     - spacetimedb-data:/var/lib/spacetimedb
-   ports:
-     - "3000:3000"  # Change 3000 if port is already in use
    ```
 
 3. **Build and start:**
@@ -63,18 +59,17 @@ The Rust daemon watches your notes folder and syncs bidirectionally with Spaceti
    ```
    You should see "Watcher started on /vault" when ready.
 
-5. **Connect the Flutter app** to `http://<your-server-ip>:3000`
-   - Same machine: `http://localhost:3000`
-   - Over Tailscale: `http://<tailscale-ip>:3000`
+5. **Access SpaceNotes:**
+   - **Web UI**: `http://<your-server-ip>:8080`
+   - **SpacetimeDB API**: `http://<your-server-ip>:3000` (for mobile app)
    - Find your Tailscale IP: `tailscale ip -4`
 
-## Components
+## Services
 
-| Component | Description |
-|-----------|-------------|
-| **spacenotes** (this repo) | Rust daemon that syncs filesystem ↔ SpacetimeDB |
-| **spacenotes-flutter** | Cross-platform client app (iOS, Android, macOS, Windows, Linux) |
-| **spacenotes-mcp** | MCP server for AI assistant integration |
+| Port | Service | Description |
+|------|---------|-------------|
+| 3000 | SpacetimeDB | Real-time database API (for mobile app connections) |
+| 8080 | Web UI | Flutter web client in browser |
 
 ## Configuration
 

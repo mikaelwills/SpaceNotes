@@ -1,0 +1,25 @@
+services:
+  spacenotes:
+    build: .
+    container_name: spacenotes
+    ports:
+      - "3000:3000"
+    volumes:
+      - /path/to/your/notes:/vault  # Edit this to your notes folder
+      - spacetimedb-data:/var/lib/spacetimedb
+    restart: unless-stopped
+
+  client:
+    image: nginx:alpine
+    container_name: spacenotes-client
+    ports:
+      - "8080:80"
+    volumes:
+      - ./client-web:/usr/share/nginx/html:ro
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    restart: unless-stopped
+    depends_on:
+      - spacenotes
+
+volumes:
+  spacetimedb-data:
