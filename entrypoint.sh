@@ -24,7 +24,7 @@ done
 
 # Publish the pre-built WASM module
 echo "Publishing SpacetimeDB module..."
-spacetime publish "$SPACETIME_DB" --server http://127.0.0.1:3000 -y --bin-path /opt/spacetime-module.wasm || {
+spacetime publish "$SPACETIME_DB" --server http://127.0.0.1:3000 -y --bin-path /opt/spacetime-module.wasm --anonymous || {
     echo "Module may already be published, continuing..."
 }
 
