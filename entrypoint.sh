@@ -28,9 +28,23 @@ spacetime publish "$SPACETIME_DB" --server http://127.0.0.1:3000 -y --bin-path /
     echo "Module may already be published, continuing..."
 }
 
-# Start the sync daemon
+# Start the MCP server in background
+echo "Starting MCP server..."
+spacenotes-mcp &
+MCP_PID=$!
+
+# Start the sync daemon (foreground - keeps container running)
 echo "Starting sync daemon..."
-exec spacenotes \
+spacenotes \
     --vault-path "$VAULT_PATH" \
     --spacetime-host "$SPACETIME_HOST" \
-    --database "$SPACETIME_DB"
+    --database "$SPACETIME_DB" &
+DAEMON_PID=$!
+
+# Wait for any process to exit
+wait -n $STDB_PID $MCP_PID $DAEMON_PID
+
+# If any process exits, kill the others and exit
+echo "A process exited, shutting down..."
+kill $STDB_PID $MCP_PID $DAEMON_PID 2>/dev/null
+exit 1

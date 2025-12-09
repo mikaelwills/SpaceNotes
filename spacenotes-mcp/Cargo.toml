@@ -1,0 +1,22 @@
+[package]
+name = "spacenotes-mcp"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# MCP server basics
+axum = "0.7"
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+anyhow = "1.0"
+tower-http = { version = "0.5", features = ["cors", "trace"] }
+
+# SpacetimeDB integration
+spacetimedb-sdk = "1.0"
+openssl = { version = "0.10", features = ["vendored"] }
+
+# Utilities
+uuid = { version = "1.0", features = ["v4", "serde"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"

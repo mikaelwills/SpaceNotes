@@ -3,7 +3,8 @@ services:
     build: .
     container_name: spacenotes
     ports:
-      - "5050:3000"
+      - "5050:3000"  # SpacetimeDB
+      - "5052:5052"  # MCP Server
     volumes:
       - /path/to/your/notes:/vault  # Edit this to your notes folder
       - spacetimedb-data:/var/lib/spacetimedb

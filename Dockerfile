@@ -1,9 +1,9 @@
 # All-in-one SpaceNotes image
-# Includes: SpacetimeDB + Module + Rust Daemon
+# Includes: SpacetimeDB + Module + Rust Daemon + MCP Server
 
 FROM clockworklabs/spacetime:v1.8.0 AS spacetime
 
-# Build stage for Rust daemon AND SpacetimeDB module
+# Build stage for Rust daemon, MCP server, AND SpacetimeDB module
 FROM rust:latest AS builder
 
 WORKDIR /build
@@ -11,10 +11,13 @@ WORKDIR /build
 # Install wasm target for SpacetimeDB module
 RUN rustup target add wasm32-unknown-unknown
 
-# Build the sync daemon
+# Copy workspace files
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
-RUN cargo build --release
+COPY spacenotes-mcp ./spacenotes-mcp
+
+# Build the sync daemon and MCP server
+RUN cargo build --release --package spacenotes --package spacenotes-mcp
 
 # Build the SpacetimeDB module to WASM
 COPY spacetime-module /build/spacetime-module
@@ -35,8 +38,9 @@ COPY --from=spacetime /opt/spacetime /opt/spacetime
 RUN ln -s /opt/spacetime/spacetimedb-cli /usr/local/bin/spacetime && \
     ln -s /opt/spacetime/spacetimedb-standalone /usr/local/bin/spacetimedb-standalone
 
-# Copy our daemon
+# Copy our daemon and MCP server
 COPY --from=builder /build/target/release/spacenotes /usr/local/bin/spacenotes
+COPY --from=builder /build/target/release/spacenotes-mcp /usr/local/bin/spacenotes-mcp
 
 # Copy the pre-built WASM module
 COPY --from=builder /build/spacetime-module/target/wasm32-unknown-unknown/release/spacenotes_module.wasm /opt/spacetime-module.wasm
@@ -51,8 +55,8 @@ VOLUME /var/lib/spacetimedb
 # Notes folder mount point
 VOLUME /vault
 
-# SpacetimeDB port
-EXPOSE 3000
+# SpacetimeDB port (internal), MCP port
+EXPOSE 3000 5052
 
 ENV VAULT_PATH=/vault
 ENV SPACETIME_HOST=http://127.0.0.1:3000
