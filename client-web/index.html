@@ -33,6 +33,11 @@
   <link rel="manifest" href="manifest.json">
 </head>
 <body>
+  <script>
+    document.addEventListener('contextmenu', function(e) {
+      e.preventDefault();
+    });
+  </script>
   <script src="flutter_bootstrap.js" async></script>
 </body>
 </html>
