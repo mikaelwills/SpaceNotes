@@ -18,6 +18,11 @@ services:
     volumes:
       - ./client-web:/usr/share/nginx/html:ro
       - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    environment:
+      - SPACETIME_HOST=${SPACETIME_HOST:-}
+      - SPACETIME_PORT=${SPACETIME_PORT:-5050}
+    command: >
+      sh -c "echo '{\"spacetimedb_port\": $${SPACETIME_PORT:-5050}}' > /usr/share/nginx/html/config.json && nginx -g 'daemon off;'"
     restart: unless-stopped
     depends_on:
       - spacenotes
