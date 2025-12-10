@@ -2,35 +2,26 @@
 
 **Real-time note sync without the cloud.**
 
-No subscriptions. No cloud storage. No vendor lock-in. Just your notes, synced instantly across all your devices.
+Your notes, synced instantly across all your devices - without paying for cloud subscriptions, without corporations mining your data, without trusting your private thoughts to someone else's servers. 
+True privacy. True ownership. Just plain markdown files across your own hardware.
 
-SpaceNotes is the notes app that doesn't exist yet: real-time cross-platform sync with **zero recurring costs** and **complete data ownership**. Your notes stay on your hardware as plain markdown files - not trapped in someone else's database.
+- **Self-hosted** - Runs entirely on your own server and your TailScale/Wireguard network, your data never touches third-party infrastructure. No monthly fees. No per-device charges. No storage limits.
+- **Real-time sync** - Edit on your phone, see it on your desktop in milliseconds. Powered by SpacetimeDB.
+- **True ownership** - Plain markdown files in a folder. Use any editor. Switch apps anytime. Your notes are free and yours.
+- **AI-ready** - Built-in MCP server.
 
-- **No cloud** - Runs entirely on your own server. Your data never touches third-party infrastructure.
-- **No costs** - Zero monthly fees. No per-device charges, no storage limits.
-- **True ownership** - Plain markdown files in a folder. Use any editor. Switch apps anytime. Your notes are yours.
-- **Real-time sync** - Edit on your phone, see it on your desktop instantly. Thanks to SpacetimeDB.
-- **LLM-ready** - Built-in MCP server lets AI assistants read and write your notes directly.
+## Components
 
+- **SpacetimeDB** - Real-time database. Clients connect once and receive instant updates.
+- **Filesystem sync Daemon** - Watches your notes folder and syncs bidirectionally with SpacetimeDB.
+- **MCP Server** - Let AI services read/write your notes directly.
+- **Flutter Clients** - Native apps for iOS, Android, macOS, Windows, Linux, and web.
 
-```
+## Standard Ports
 
-### Components
-
-| Component | Description |
-|-----------|-------------|
-| **SpacetimeDB** | Real-time database with WebSocket subscriptions. Clients connect once and receive instant updates. |
-| **Rust Daemon** | Watches your notes folder and syncs bidirectionally with SpacetimeDB. File changes sync in milliseconds. |
-| **MCP Server** | Model Context Protocol server for AI assistants. Lets Claude read/write your notes directly. |
-| **Flutter Clients** | Native apps for iOS, Android, macOS, Windows, Linux, and web. |
-
-### Standard Ports
-
-| Port | Service | Protocol | Description |
-|------|---------|----------|-------------|
-| **5050** | SpacetimeDB | WebSocket/HTTP | Database API - Flutter clients connect here |
-| **5051** | Web Client | HTTP | Flutter web app served via nginx |
-| **5052** | MCP Server | HTTP | AI assistant integration endpoint |
+- **5050** - SpacetimeDB (WebSocket/HTTP) - Flutter clients connect here
+- **5051** - Web Client (HTTP) - Flutter web app served via nginx
+- **5052** - MCP Server (HTTP) - AI assistant integration endpoint
 
 All ports are configurable via `docker-compose.yml`.
 
@@ -98,28 +89,23 @@ claude mcp add spacenotes-mcp --type http --url "http://<your-server-ip>:5052/mc
 
 ### Available MCP Tools
 
-| Tool | Description |
-|------|-------------|
-| `search_notes` | Search notes by title, path, or content |
-| `get_note` | Get full content of a note by ID or path |
-| `create_note` | Create a new note with content |
-| `edit_note` | Find and replace text in a note |
-| `append_to_note` | Add content to end of a note |
-| `prepend_to_note` | Add content to beginning of a note |
-| `delete_note` | Delete a note by ID |
-| `move_note` | Move/rename a note |
-| `list_notes_in_folder` | List all notes in a folder |
-| `create_folder` | Create a new folder |
-| `delete_folder` | Delete an empty folder |
-| `move_folder` | Move/rename a folder |
+- `search_notes` - Search notes by title, path, or content
+- `get_note` - Get full content of a note by ID or path
+- `create_note` - Create a new note with content
+- `edit_note` - Find and replace text in a note
+- `append_to_note` / `prepend_to_note` - Add content to a note
+- `delete_note` - Delete a note by ID
+- `move_note` - Move/rename a note
+- `list_notes_in_folder` - List all notes in a folder
+- `create_folder` / `delete_folder` / `move_folder` - Folder operations
 
 ## Configuration
 
-| Environment Variable | Default | Description |
-|---------------------|---------|-------------|
-| `VAULT_PATH` | `/vault` | Path to notes folder inside container |
-| `SPACETIME_HOST` | `http://127.0.0.1:3000` | SpacetimeDB URL (internal) |
-| `SPACETIME_DB` | `spacenotes` | Database name |
+Environment variables (set in `docker-compose.yml`):
+
+- `VAULT_PATH` - Path to notes folder inside container (default: `/vault`)
+- `SPACETIME_HOST` - SpacetimeDB URL, internal (default: `http://127.0.0.1:3000`)
+- `SPACETIME_DB` - Database name (default: `spacenotes`)
 
 ## Network Setup
 
