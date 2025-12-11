@@ -2,8 +2,15 @@
 
 **Real-time note sync without the cloud.**
 
-Your notes, synced instantly across all your devices - without paying for cloud subscriptions, without corporations mining your data, without trusting your private thoughts to someone else's servers. 
-True privacy. True ownership. Just plain markdown files across your own hardware.
+Your notes, true privacy, true ownership and transparency, cross platform sync in real time, no limits, no restrictions, all free.
+
+![Desktop Notes View](assets/screenshots/desktop-notes.png)
+![Desktop AI Chat](assets/screenshots/desktop-chat.png)
+
+<p align="center">
+  <img src="assets/screenshots/mobile-notes.png" width="45%" alt="Mobile Notes View" />
+  <img src="assets/screenshots/mobile-chat.png" width="45%" alt="Mobile AI Chat" />
+</p>
 
 - **Self-hosted** - Runs entirely on your own server and your TailScale/Wireguard network, your data never touches third-party infrastructure. No monthly fees. No per-device charges. No storage limits.
 - **Real-time sync** - Edit on your phone, see it on your desktop in milliseconds. Powered by SpacetimeDB.
