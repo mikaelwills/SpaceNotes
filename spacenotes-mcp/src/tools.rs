@@ -1,3 +1,4 @@
+use regex::RegexBuilder;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -180,6 +181,21 @@ pub fn get_tools() -> Vec<Tool> {
                     }
                 },
                 "required": ["paths", "destination_folder"]
+            }),
+        },
+        Tool {
+            name: "regex_replace".to_string(),
+            description: "Replace text using regex patterns. Powerful for bulk formatting (e.g., '\\n\\n+' -> '\\n\\n' to clean up whitespace).".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Note path (e.g., 'Development/My Note.md')"},
+                    "pattern": {"type": "string", "description": "Regex pattern (e.g., '\\n\\n+' for multiple newlines)"},
+                    "replacement": {"type": "string", "description": "Replacement string (supports $1, $2 for capture groups)"},
+                    "case_insensitive": {"type": "boolean", "description": "Case-insensitive matching (default: false)"},
+                    "multiline": {"type": "boolean", "description": "Multiline mode: ^ and $ match line boundaries (default: false)"}
+                },
+                "required": ["path", "pattern", "replacement"]
             }),
         },
     ]
@@ -424,6 +440,44 @@ pub async fn execute_tool(
             }
 
             Ok(json!({"content": [{"type": "text", "text": result}]}))
+        }
+        "regex_replace" => {
+            let path: String = serde_json::from_value(params.arguments["path"].clone())
+                .map_err(|e| e.to_string())?;
+            let pattern: String = serde_json::from_value(params.arguments["pattern"].clone())
+                .map_err(|e| e.to_string())?;
+            let replacement: String = serde_json::from_value(params.arguments["replacement"].clone())
+                .map_err(|e| e.to_string())?;
+            let case_insensitive: bool = params.arguments.get("case_insensitive")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let multiline: bool = params.arguments.get("multiline")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+
+            let current_note = client.get_note_by_path(&path)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| format!("Note not found: {}", path))?;
+
+            let re = RegexBuilder::new(&pattern)
+                .case_insensitive(case_insensitive)
+                .multi_line(multiline)
+                .build()
+                .map_err(|e| format!("Invalid regex pattern: {}", e))?;
+
+            let new_content = re.replace_all(&current_note.content, replacement.as_str()).to_string();
+
+            if new_content == current_note.content {
+                return Ok(json!({"content": [{"type": "text", "text": "No matches found - note unchanged"}]}));
+            }
+
+            let match_count = re.find_iter(&current_note.content).count();
+
+            client
+                .update_note_content(current_note.id, new_content.clone())
+                .map_err(|e| e.to_string())?;
+
+            Ok(json!({"content": [{"type": "text", "text": format!("Replaced {} matches in {}\n\n---\n\n{}", match_count, path, new_content)}]}))
         }
         _ => Err(format!("Unknown tool: {}", params.name)),
     }
