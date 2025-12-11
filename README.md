@@ -22,7 +22,7 @@ Your notes, true privacy, true ownership and transparency, cross platform sync i
 - **SpacetimeDB** - Real-time database. Clients connect once and receive instant updates.
 - **Filesystem sync Daemon** - Watches your notes folder and syncs bidirectionally with SpacetimeDB.
 - **MCP Server** - Let AI services read/write your notes directly.
-- **Flutter Clients** - Native apps for iOS, Android, macOS, Windows, Linux, and web.
+- **[Flutter Client](https://github.com/mikaelwills/spacenotes-client)** - Native apps for iOS, Android, macOS, Windows, Linux, and web.
 
 ## Standard Ports
 
