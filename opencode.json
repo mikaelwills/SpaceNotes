@@ -1,0 +1,10 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "autoupdate": true,
+  "mcp": {
+    "spacenotes": {
+      "type": "sse",
+      "url": "http://spacenotes:5052/sse"
+    }
+  }
+}

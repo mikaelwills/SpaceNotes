@@ -27,5 +27,22 @@ services:
     depends_on:
       - spacenotes
 
+  opencode:
+    image: ghcr.io/sst/opencode:latest
+    container_name: opencode
+    ports:
+      - "5053:5053"
+    volumes:
+      - opencode-data:/root/.opencode
+      - ./opencode.json:/root/.opencode/config.json:ro
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+    command: ["serve", "--port", "5053", "--hostname", "0.0.0.0"]
+    restart: unless-stopped
+    depends_on:
+      - spacenotes
+
 volumes:
   spacetimedb-data:
+  opencode-data:
