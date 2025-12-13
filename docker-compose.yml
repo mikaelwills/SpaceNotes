@@ -33,8 +33,7 @@ services:
     ports:
       - "5053:5053"
     volumes:
-      - opencode-data:/root/.opencode
-      - ./opencode.json:/root/.opencode/config.json:ro
+      - ./opencode.json:/root/.config/opencode/config.json:ro
     environment:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
