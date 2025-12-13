@@ -16,7 +16,7 @@ services:
     ports:
       - "5051:80"
     volumes:
-      - ./client-web:/usr/share/nginx/html:ro
+      - ./client-web:/usr/share/nginx/html
       - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
     environment:
       - SPACETIME_HOST=${SPACETIME_HOST:-}
