@@ -1,5 +1,6 @@
 /target
 spacetime-module/target/
+client-web/assets/NOTICES
 
 # Personal config (not committed)
 CLAUDE.md
