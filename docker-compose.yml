@@ -22,7 +22,7 @@ services:
       - SPACETIME_HOST=${SPACETIME_HOST:-}
       - SPACETIME_PORT=${SPACETIME_PORT:-5050}
     command: >
-      sh -c "echo '{\"spacetimedb_port\": $${SPACETIME_PORT:-5050}}' > /usr/share/nginx/html/config.json && nginx -g 'daemon off;'"
+      sh -c "echo '{\"spacetimedb_port\": $${SPACETIME_PORT:-5050}, \"opencode_port\": $${OPENCODE_PORT:-5053}}' > /usr/share/nginx/html/config.json && nginx -g 'daemon off;'"
     restart: unless-stopped
     depends_on:
       - spacenotes
