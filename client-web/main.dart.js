@@ -101240,7 +101240,7 @@ i=b==null?5053:b
 h=A.aG(J.ab(n.a,"selected_provider_id"))
 g=A.aG(J.ab(n.a,"selected_model_id"))
 a=A.aG(J.ab(n.a,"default_agent"))
-f=a==null?"personal-assistant":a
+f=a==null?"spacenotes":a
 e="http://"+m+":"+A.m(i)
 o.m1(new A.hD(e,m,i,h,g,f))
 q=1
