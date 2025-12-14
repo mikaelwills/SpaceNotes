@@ -15,7 +15,39 @@ Your notes, true privacy, true ownership and transparency, cross platform sync i
 - **Self-hosted** - Runs entirely on your own server and your TailScale/Wireguard network, your data never touches third-party infrastructure. No monthly fees. No per-device charges. No storage limits.
 - **Real-time sync** - Edit on your phone, see it on your desktop in milliseconds. Powered by SpacetimeDB.
 - **True ownership** - Plain markdown files in a folder. Use any editor. Switch apps anytime. Your notes are free and yours.
-- **AI-ready** - Built-in MCP server.
+- **AI-ready** - Built-in MCP server and optional OpenCode chat interface.
+
+## Why SpaceNotes?
+
+| Feature | SpaceNotes | Obsidian Sync | Notion | Evernote | Notesnook | Syncthing | iCloud/Google | Basic Memory | zk |
+|---------|------------|---------------|--------|----------|-----------|-----------|---------------|--------------|-----|
+| **Self-hosted** | Yes | No | No | No | Yes | Yes | No | No | N/A |
+| **Real-time sync** | Yes | Yes | Yes | Yes | Yes | Delayed | Delayed | Yes | None |
+| **Mobile app** | Yes | Yes | Yes | Yes | Yes | Partial | Yes | Web only | No |
+| **Web access** | Yes | No | Yes | Yes | Yes | No | Yes | Yes | No |
+| **AI integration** | MCP + Chat UI | None | Built-in | Built-in | None | None | None | MCP | None |
+| **Plain markdown** | Yes | Yes | No | No | Partial | Yes | Varies | Yes | Yes |
+| **Conflict handling** | Auto-resolve | Manual | Auto | Auto | Auto | Manual | Overwrites | Auto | N/A |
+| **Cost** | Free | $8/mo | Free/$10/mo | Free/$15/mo | Free/$5/mo | Free | Free tier limits | Paid | Free |
+| **Offline editing** | Yes | Yes | Limited | Paid only | Yes | Yes | Yes | Yes | Yes |
+| **Data ownership** | Full | Partial | None | None | Full | Full | None | Partial | Full |
+| **Export freedom** | Native files | Native files | Lossy export | Lossy export | Markdown | Native files | Varies | Markdown | Native files |
+| **End-to-end encrypted** | No | No | No | No | Yes | N/A | No | No | N/A |
+
+**SpaceNotes is for you if:**
+- You want Obsidian-style markdown notes accessible everywhere
+- You don't trust cloud providers with your personal notes
+- You have a home server, NAS, or VPS and want to use it
+- You want AI to help organize and search your notes
+- You're tired of sync conflicts and delayed updates
+
+**SpaceNotes is NOT for you if:**
+- You don't have a home server, NAS, or VPS (there's no hosted option)
+- You're not comfortable with Docker, command line, or basic networking
+- You need E2E encryption (consider Notesnook instead)
+- You want a polished, plug-and-play experience (consider Obsidian Sync)
+- You need multi-user collaboration with permissions (not supported yet)
+- You're not on a private network like Tailscale/WireGuard (exposing to public internet requires extra security setup)
 
 ## Components
 
