@@ -247,24 +247,49 @@ impl SpacetimeClient {
     pub fn search_notes(&self, query: &str) -> Result<Vec<NoteInfo>> {
         tracing::info!("Searching notes for: {}", query);
 
-        let query_lower = query.to_lowercase();
+        let tokens: Vec<String> = query
+            .to_lowercase()
+            .split_whitespace()
+            .map(|s| s.to_string())
+            .collect();
 
-        let notes: Vec<NoteInfo> = self
+        let mut notes: Vec<(usize, NoteInfo)> = self
             .conn
             .db()
             .note()
             .iter()
-            .filter(|note| {
-                note.name.to_lowercase().contains(&query_lower)
-                    || note.path.to_lowercase().contains(&query_lower)
-                    || note.content.to_lowercase().contains(&query_lower)
-            })
-            .map(|note| NoteInfo {
-                id: note.id.clone(),
-                path: note.path.clone(),
-                name: note.name.clone(),
+            .filter_map(|note| {
+                let name_lower = note.name.to_lowercase();
+                let path_lower = note.path.to_lowercase();
+                let content_lower = note.content.to_lowercase();
+
+                let match_count = tokens
+                    .iter()
+                    .filter(|token| {
+                        name_lower.contains(*token)
+                            || path_lower.contains(*token)
+                            || content_lower.contains(*token)
+                    })
+                    .count();
+
+                if match_count > 0 {
+                    Some((
+                        match_count,
+                        NoteInfo {
+                            id: note.id.clone(),
+                            path: note.path.clone(),
+                            name: note.name.clone(),
+                        },
+                    ))
+                } else {
+                    None
+                }
             })
             .collect();
+
+        notes.sort_by(|a, b| b.0.cmp(&a.0));
+
+        let notes: Vec<NoteInfo> = notes.into_iter().map(|(_, note)| note).collect();
 
         tracing::info!("Found {} notes matching '{}'", notes.len(), query);
 

@@ -1,5 +1,5 @@
 # All-in-one SpaceNotes image
-# Includes: SpacetimeDB + Module + Rust Daemon + MCP Server
+# Includes: SpacetimeDB + Module + Rust Daemon + MCP Server + Web Client
 
 FROM clockworklabs/spacetime:v1.8.0 AS spacetime
 
@@ -31,6 +31,7 @@ FROM ubuntu:24.04
 RUN apt-get update && apt-get install -y \
     ca-certificates \
     curl \
+    nginx \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy SpacetimeDB from official image (both CLI and standalone server)
@@ -45,7 +46,11 @@ COPY --from=builder /build/target/release/spacenotes-mcp /usr/local/bin/spacenot
 # Copy the pre-built WASM module
 COPY --from=builder /build/spacetime-module/target/wasm32-unknown-unknown/release/spacenotes_module.wasm /opt/spacetime-module.wasm
 
-# Copy entrypoint
+# Copy the pre-built Flutter web client
+COPY client-web /var/www/html
+
+# Copy nginx config and entrypoint
+COPY nginx-client.conf /etc/nginx/sites-available/default
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
@@ -55,8 +60,8 @@ VOLUME /var/lib/spacetimedb
 # Notes folder mount point
 VOLUME /vault
 
-# SpacetimeDB port (internal), MCP port
-EXPOSE 3000 5052
+# SpacetimeDB port, MCP port, Web client port
+EXPOSE 3000 5052 80
 
 ENV VAULT_PATH=/vault
 ENV SPACETIME_HOST=http://127.0.0.1:3000

@@ -3,6 +3,10 @@ set -e
 
 echo "Starting SpaceNotes..."
 
+# Start nginx for web client
+echo "Starting nginx..."
+nginx
+
 # Start SpacetimeDB in background (bind to 0.0.0.0 for external access)
 echo "Starting SpacetimeDB..."
 spacetime start --listen-addr 0.0.0.0:3000 --data-dir /var/lib/spacetimedb &

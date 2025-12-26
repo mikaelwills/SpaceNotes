@@ -1,31 +1,15 @@
 services:
   spacenotes:
-    build: .
+    image: ghcr.io/mikaelwills/spacenotes:latest
     container_name: spacenotes
     ports:
       - "5050:3000"  # SpacetimeDB
+      - "5051:80"    # Web Client
       - "5052:5052"  # MCP Server
     volumes:
       - /path/to/your/notes:/vault  # Edit this to your notes folder
       - spacetimedb-data:/var/lib/spacetimedb
     restart: unless-stopped
-
-  client:
-    image: nginx:alpine
-    container_name: spacenotes-client
-    ports:
-      - "5051:80"
-    volumes:
-      - ./client-web:/usr/share/nginx/html
-      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
-    environment:
-      - SPACETIME_HOST=${SPACETIME_HOST:-}
-      - SPACETIME_PORT=${SPACETIME_PORT:-5050}
-    command: >
-      sh -c "echo '{\"spacetimedb_port\": $${SPACETIME_PORT:-5050}, \"opencode_port\": $${OPENCODE_PORT:-5053}}' > /usr/share/nginx/html/config.json && nginx -g 'daemon off;'"
-    restart: unless-stopped
-    depends_on:
-      - spacenotes
 
   opencode:
     image: ghcr.io/sst/opencode:latest
@@ -44,4 +28,3 @@ services:
 
 volumes:
   spacetimedb-data:
-  opencode-data:
