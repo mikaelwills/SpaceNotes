@@ -54,6 +54,9 @@ COPY nginx-client.conf /etc/nginx/sites-available/default
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
+# Copy OpenCode config (will be exported to shared volume on startup)
+COPY opencode.json /opt/opencode.json
+
 # SpacetimeDB data directory
 VOLUME /var/lib/spacetimedb
 

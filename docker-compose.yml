@@ -9,6 +9,7 @@ services:
     volumes:
       - /path/to/your/notes:/vault  # Edit this to your notes folder
       - spacetimedb-data:/var/lib/spacetimedb
+      - opencode-config:/config
     restart: unless-stopped
 
   opencode:
@@ -17,10 +18,7 @@ services:
     ports:
       - "5053:5053"
     volumes:
-      - ./opencode.json:/root/.config/opencode/config.json:ro
-    environment:
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - opencode-config:/root/.config/opencode:ro
     command: ["serve", "--port", "5053", "--hostname", "0.0.0.0"]
     restart: unless-stopped
     depends_on:
@@ -28,3 +26,4 @@ services:
 
 volumes:
   spacetimedb-data:
+  opencode-config:

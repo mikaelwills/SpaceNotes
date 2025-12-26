@@ -3,6 +3,12 @@ set -e
 
 echo "Starting SpaceNotes..."
 
+# Export OpenCode config to shared volume (if volume mounted)
+if [ -d /config ]; then
+    cp /opt/opencode.json /config/config.json
+    echo "Exported OpenCode config to /config/config.json"
+fi
+
 # Start nginx for web client
 echo "Starting nginx..."
 nginx
