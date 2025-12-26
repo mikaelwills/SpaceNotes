@@ -4,6 +4,10 @@ set -e
 FLUTTER_REPO="/Users/mikaelwills/Productivity/Development/Flutter/spacenotes_client"
 CLIENT_DIR="./client-web"
 
+VERSION="${1:-dev}"
+echo "Injecting version: $VERSION"
+echo "const String appVersion = '$VERSION';" > "$FLUTTER_REPO/lib/version.dart"
+
 echo "Building Flutter web client..."
 cd "$FLUTTER_REPO"
 flutter build web --release

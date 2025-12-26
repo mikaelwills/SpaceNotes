@@ -7,5 +7,5 @@ CLAUDE.md
 PLAN.md
 deploy-to-nas.sh
 Dockerfile.local
-update-client.sh
+publish-instructions.md
 .claude/settings.local.json
