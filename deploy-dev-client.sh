@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-NAS_HOST="mikael@192.168.1.161"
+NAS_HOST="mikael@100.84.184.121"
 CONTAINER="spacenotes"
 REMOTE_PATH="/var/www/html"
 
@@ -15,4 +15,4 @@ echo "Deploying to container..."
 ssh "$NAS_HOST" "docker cp ~/client-web-dev/. $CONTAINER:$REMOTE_PATH && rm -rf ~/client-web-dev"
 
 echo ""
-echo "Done! Refresh http://192.168.1.161:5051"
+echo "Done! Refresh http://100.84.184.121:5051"

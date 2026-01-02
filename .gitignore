@@ -6,6 +6,7 @@ client-web/assets/NOTICES
 CLAUDE.md
 PLAN.md
 deploy-to-nas.sh
+deploy-dev-client.sh
 Dockerfile.local
 publish-instructions.md
 .claude/settings.local.json
