@@ -26,6 +26,12 @@ pub fn create_note(
         return;
     }
 
+    // Check if path already exists (unique constraint)
+    if ctx.db.note().path().find(&path).is_some() {
+        log::warn!("Note already exists with path: {}", path);
+        return;
+    }
+
     ctx.db.note().insert(Note {
         id,
         path: path.clone(),
