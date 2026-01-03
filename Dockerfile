@@ -3,24 +3,33 @@
 
 FROM clockworklabs/spacetime:v1.8.0 AS spacetime
 
-# Build stage for Rust daemon, MCP server, AND SpacetimeDB module
-FROM rust:latest AS builder
-
+# Chef stage - install cargo-chef
+FROM rust:latest AS chef
+RUN cargo install cargo-chef
 WORKDIR /build
 
-# Install wasm target for SpacetimeDB module
-RUN rustup target add wasm32-unknown-unknown
-
-# Copy workspace files
+# Planner stage - generate recipe from dependencies
+FROM chef AS planner
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 COPY spacenotes-mcp ./spacenotes-mcp
+COPY spacetime-module ./spacetime-module
+RUN cargo chef prepare --recipe-path recipe.json
 
-# Build the sync daemon and MCP server
+# Builder stage - cook dependencies first (cached), then build
+FROM chef AS builder
+RUN rustup target add wasm32-unknown-unknown
+
+COPY --from=planner /build/recipe.json recipe.json
+RUN cargo chef cook --release --recipe-path recipe.json
+RUN cargo chef cook --release --target wasm32-unknown-unknown --recipe-path recipe.json
+
+COPY Cargo.toml Cargo.lock ./
+COPY src ./src
+COPY spacenotes-mcp ./spacenotes-mcp
 RUN cargo build --release --package spacenotes --package spacenotes-mcp
 
-# Build the SpacetimeDB module to WASM
-COPY spacetime-module /build/spacetime-module
+COPY spacetime-module ./spacetime-module
 WORKDIR /build/spacetime-module
 RUN cargo build --release --target wasm32-unknown-unknown
 
