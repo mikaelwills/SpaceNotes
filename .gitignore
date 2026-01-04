@@ -9,5 +9,6 @@ deploy-to-nas.sh
 deploy-dev-client.sh
 Dockerfile.local
 publish-instructions.md
+build-and-push.sh
 .claude/settings.local.json
 deploy-mcp-local.sh
