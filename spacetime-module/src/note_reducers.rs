@@ -262,7 +262,7 @@ pub fn append_to_note(ctx: &ReducerContext, path: String, content: String) {
     if let Some(existing) = ctx.db.note().path().find(&path) {
         let new_content = format!("{}{}", existing.content, content);
         let new_size = new_content.len() as u64;
-        let now = ctx.timestamp.to_micros_since_unix_epoch() as u64 / 1_000_000;
+        let now = ctx.timestamp.to_micros_since_unix_epoch() as u64 / 1_000;
 
         ctx.db.note().id().delete(&existing.id);
         ctx.db.note().insert(Note {
@@ -290,7 +290,7 @@ pub fn prepend_to_note(ctx: &ReducerContext, path: String, content: String) {
     if let Some(existing) = ctx.db.note().path().find(&path) {
         let new_content = format!("{}{}", content, existing.content);
         let new_size = new_content.len() as u64;
-        let now = ctx.timestamp.to_micros_since_unix_epoch() as u64 / 1_000_000;
+        let now = ctx.timestamp.to_micros_since_unix_epoch() as u64 / 1_000;
 
         ctx.db.note().id().delete(&existing.id);
         ctx.db.note().insert(Note {
@@ -335,7 +335,7 @@ pub fn find_replace_in_note(
         }
 
         let new_size = new_content.len() as u64;
-        let now = ctx.timestamp.to_micros_since_unix_epoch() as u64 / 1_000_000;
+        let now = ctx.timestamp.to_micros_since_unix_epoch() as u64 / 1_000;
 
         ctx.db.note().id().delete(&existing.id);
         ctx.db.note().insert(Note {
