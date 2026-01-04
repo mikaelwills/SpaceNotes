@@ -13,7 +13,7 @@ services:
     restart: unless-stopped
 
   opencode:
-    image: ghcr.io/sst/opencode:latest
+    image: ghcr.io/anomalyco/opencode:latest
     container_name: opencode
     ports:
       - "5053:5053"
