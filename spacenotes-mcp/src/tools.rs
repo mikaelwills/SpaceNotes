@@ -81,6 +81,21 @@ pub fn get_tools() -> Vec<Tool> {
             }),
         },
         Tool {
+            name: "delete_notes".to_string(),
+            description: "Delete multiple notes by ID in a single operation".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Array of note UUIDs to delete"
+                    }
+                },
+                "required": ["ids"]
+            }),
+        },
+        Tool {
             name: "move_note".to_string(),
             description: "Move a note to a new path".to_string(),
             input_schema: json!({
@@ -158,10 +173,10 @@ pub fn get_tools() -> Vec<Tool> {
                 "properties": {
                     "path": {"type": "string", "description": "Note path (e.g., 'Development/My Note.md')"},
                     "old_string": {"type": "string", "description": "Text to find (must match exactly)"},
-                    "new_string": {"type": "string", "description": "Text to replace with"},
+                    "new_string": {"type": "string", "description": "Text to replace with (empty to delete)"},
                     "replace_all": {"type": "boolean", "description": "Replace all occurrences (default: false, replaces first only)"}
                 },
-                "required": ["path", "old_string", "new_string"]
+                "required": ["path", "old_string"]
             }),
         },
         Tool {
@@ -236,7 +251,6 @@ pub async fn execute_tool(
             }))
         }
         "get_note" => {
-            // Try by ID first, then by path
             let note = if let Some(id) = params.arguments.get("id").and_then(|v| v.as_str()) {
                 client.get_note_by_id(id).map_err(|e| e.to_string())?
             } else if let Some(path) = params.arguments.get("path").and_then(|v| v.as_str()) {
@@ -246,12 +260,19 @@ pub async fn execute_tool(
             };
 
             match note {
-                Some(n) => Ok(json!({
-                    "content": [{
-                        "type": "text",
-                        "text": serde_json::to_string_pretty(&n).unwrap_or_else(|_| "{}".to_string())
-                    }]
-                })),
+                Some(n) => {
+                    let numbered_content: String = n.content.lines()
+                        .enumerate()
+                        .map(|(i, line)| format!("{:>4}| {}", i + 1, line))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+
+                    let text = format!(
+                        "id: {}\npath: {}\nname: {}\nfolder_path: {}\nfrontmatter: {}\n\n{}",
+                        n.id, n.path, n.name, n.folder_path, n.frontmatter, numbered_content
+                    );
+                    Ok(json!({"content": [{"type": "text", "text": text}]}))
+                },
                 None => Ok(json!({"content": [{"type": "text", "text": "Note not found"}]})),
             }
         }
@@ -295,6 +316,27 @@ pub async fn execute_tool(
             client.delete_note(id.clone()).map_err(|e| e.to_string())?;
 
             Ok(json!({"content": [{"type": "text", "text": format!("Deleted note: {}", id)}]}))
+        }
+        "delete_notes" => {
+            let ids: Vec<String> = serde_json::from_value(params.arguments["ids"].clone())
+                .map_err(|e| e.to_string())?;
+
+            let mut deleted = Vec::new();
+            let mut errors = Vec::new();
+
+            for id in ids {
+                match client.delete_note(id.clone()) {
+                    Ok(_) => deleted.push(id),
+                    Err(e) => errors.push(format!("{}: {}", id, e)),
+                }
+            }
+
+            let mut result = format!("Deleted {} notes", deleted.len());
+            if !errors.is_empty() {
+                result.push_str(&format!("\nErrors: {:?}", errors));
+            }
+
+            Ok(json!({"content": [{"type": "text", "text": result}]}))
         }
         "move_note" => {
             let old_path: String = serde_json::from_value(params.arguments["old_path"].clone())
@@ -378,34 +420,25 @@ pub async fn execute_tool(
         "edit_note" => {
             let path: String = serde_json::from_value(params.arguments["path"].clone())
                 .map_err(|e| e.to_string())?;
-            let old_string: String = serde_json::from_value(params.arguments["old_string"].clone())
-                .map_err(|e| e.to_string())?;
-            let new_string: String = serde_json::from_value(params.arguments["new_string"].clone())
-                .map_err(|e| e.to_string())?;
+            let old_string: String = params.arguments.get("old_string")
+                .or_else(|| params.arguments.get("oldString"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .ok_or_else(|| "old_string is required".to_string())?;
+            let new_string: String = params.arguments.get("new_string")
+                .or_else(|| params.arguments.get("newString"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .unwrap_or_default();
             let replace_all: bool = params.arguments.get("replace_all")
+                .or_else(|| params.arguments.get("replaceAll"))
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
 
-            let current_note = client.get_note_by_path(&path)
-                .map_err(|e| e.to_string())?
-                .ok_or_else(|| format!("Note not found: {}", path))?;
-
-            if !current_note.content.contains(&old_string) {
-                return Err(format!("Text not found in note: '{}'",
-                    if old_string.len() > 50 { format!("{}...", &old_string[..50]) } else { old_string }));
-            }
-
-            let new_content = if replace_all {
-                current_note.content.replace(&old_string, &new_string)
-            } else {
-                current_note.content.replacen(&old_string, &new_string, 1)
-            };
-
-            client
-                .find_replace_in_note(path.clone(), old_string, new_string, replace_all)
+            client.find_replace_in_note(path.clone(), old_string, new_string, replace_all)
                 .map_err(|e| e.to_string())?;
 
-            Ok(json!({"content": [{"type": "text", "text": format!("Edited note: {}\n\n---\n\n{}", path, new_content)}]}))
+            Ok(json!({"content": [{"type": "text", "text": format!("Edited note: {}", path)}]}))
         }
         "move_notes_to_folder" => {
             let paths: Vec<String> = serde_json::from_value(params.arguments["paths"].clone())
