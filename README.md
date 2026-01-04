@@ -38,7 +38,7 @@ Contributions welcome.
 | **End-to-end encrypted** | No | No | No | No | Yes | N/A | No | No | N/A |
 
 **Requirements:**
-- A server you control (home server, NAS, VPS, Raspberry Pi)
+- A server or laptop.
 - Comfort with Docker and basic command line
 - A private network setup (Tailscale, WireGuard, or similar)
 
@@ -83,24 +83,23 @@ All ports are configurable via `docker-compose.yml`.
 
 ## Quick Start
 
-1. **Clone:**
+1. **Download docker-compose.yml:**
    ```bash
-   git clone https://github.com/mikaelwills/SpaceNotes.git
-   cd SpaceNotes
+   curl -O https://raw.githubusercontent.com/mikaelwills/SpaceNotes/master/docker-compose.yml
    ```
 
-2. **Edit `docker-compose.yml`** - set your notes folder path:
+2. **Edit it** - set your notes folder path:
    ```yaml
    volumes:
      - /path/to/your/notes:/vault
    ```
    Replace `/path/to/your/notes` with the absolute path to your markdown folder (e.g., `/home/user/notes` or `/volume1/notes`).
 
-3. **Build and start:**
+3. **Start:**
    ```bash
    docker-compose up -d
    ```
-   First build compiles Rust and takes several minutes. Subsequent starts are instant.
+   Docker pulls the pre-built image. First run takes a minute to download.
 
 4. **Verify it's running:**
    ```bash
@@ -113,6 +112,16 @@ All ports are configurable via `docker-compose.yml`.
    - **Mobile App**: Connect to `http://<your-server-ip>:5050` in settings
    - **MCP Server**: `http://<your-server-ip>:5052/mcp` (for Claude Code, Cursor, etc.)
    - **OpenCode API**: `http://<your-server-ip>:5053` (powers the chat UI)
+
+## Updating
+
+To update to the latest version:
+
+```bash
+docker-compose pull && docker-compose up -d
+```
+
+Your notes are safe - they live on your filesystem, not in the database.
 
 ## MCP Integration (Claude Code)
 
