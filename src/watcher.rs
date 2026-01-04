@@ -40,9 +40,17 @@ pub async fn start_watcher(
                                 Ok(Some(mut note)) => {
                                     // CHECK TRACKER (Echo Prevention)
                                     // If we extracted an ID, and the content hasn't changed, STOP.
-                                    if !note.id.is_empty() && !tracker.has_changed(&note.id, &note.content) {
-                                        tracing::debug!("Watcher ignoring echo: {}", note.path);
-                                        continue;
+                                    if !note.id.is_empty() {
+                                        let content_hash = ContentTracker::hash(&note.content);
+                                        let has_changed = tracker.has_changed(&note.id, &note.content);
+                                        tracing::info!(
+                                            "Watcher echo check: path={}, id={}, content_len={}, hash={}, has_changed={}",
+                                            note.path, note.id, note.content.len(), &content_hash[..16], has_changed
+                                        );
+                                        if !has_changed {
+                                            tracing::info!("Watcher ignoring echo: {}", note.path);
+                                            continue;
+                                        }
                                     }
 
                                     // Check if note has a UUID

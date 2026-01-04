@@ -130,6 +130,11 @@ async fn main() -> Result<()> {
             modified_time: new_note.modified_time,
         };
 
+        let content_hash = crate::tracker::ContentTracker::hash(&note.content);
+        tracing::info!(
+            "Tracker update: path={}, id={}, content_len={}, hash={}",
+            note.path, note.id, note.content.len(), &content_hash[..16]
+        );
         tracker_clone.update(&note.id, &note.content);
         if let Err(e) = write_note_to_disk(&vault_clone, &note) {
             tracing::error!("Failed to write {}: {}", note.path, e);
@@ -161,6 +166,11 @@ async fn main() -> Result<()> {
             modified_time: db_note.modified_time,
         };
 
+        let content_hash = crate::tracker::ContentTracker::hash(&note.content);
+        tracing::info!(
+            "Tracker insert: path={}, id={}, content_len={}, hash={}",
+            note.path, note.id, note.content.len(), &content_hash[..16]
+        );
         tracker_clone.update(&note.id, &note.content);
         if let Err(e) = write_note_to_disk(&vault_clone, &note) {
             tracing::error!("Failed to write {}: {}", note.path, e);

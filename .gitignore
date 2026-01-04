@@ -12,3 +12,4 @@ publish-instructions.md
 build-and-push.sh
 .claude/settings.local.json
 deploy-mcp-local.sh
+deploy-filewatcher-local.sh

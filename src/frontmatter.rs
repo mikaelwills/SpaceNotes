@@ -19,7 +19,11 @@ pub fn parse_frontmatter(content: &str) -> (String, String) {
     };
 
     let yaml_str = rest[..end_idx].trim();
-    let body = rest[end_idx + 4..].trim_start();
+    let after_marker = &rest[end_idx + 4..];
+    let body = after_marker
+        .strip_prefix("\n\n")
+        .or_else(|| after_marker.strip_prefix("\n"))
+        .unwrap_or(after_marker);
 
     // Parse properly using serde_yaml
     let frontmatter = match serde_yaml::from_str::<Value>(yaml_str) {
