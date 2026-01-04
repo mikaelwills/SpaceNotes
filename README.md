@@ -71,14 +71,11 @@ All ports are configurable via `docker-compose.yml`.
 - Recent notes for quick access
 - Fuzzy real-time search
 - Create and edit notes with markdown
-- OpenCode AI chat with access to your notes
-- Manage OpenCode chat sessions
-- Swipe actions for quick operations
+- Pull up AI chat within any note to discuss or expand on it
 
 **Desktop (macOS/Windows/Linux/Web):**
 - Split-pane view: notes list + editor + AI chat
 - Full markdown editor
-- Keyboard shortcuts
 - Drag and drop file organization
 
 ## Quick Start
@@ -155,7 +152,7 @@ claude mcp add spacenotes-mcp --type http --url "http://<your-server-ip>:5052/mc
 - `edit_note` - Find and replace text in a note
 - `regex_replace` - Replace text using regex patterns
 - `append_to_note` / `prepend_to_note` - Add content to a note
-- `delete_note` - Delete a note by ID
+- `delete_note` / `delete_notes` - Delete one or multiple notes by ID
 - `move_note` - Move/rename a note
 - `move_notes_to_folder` - Bulk move multiple notes
 - `list_notes_in_folder` - List all notes in a folder
@@ -173,20 +170,6 @@ Environment variables (set in `docker-compose.yml`):
 
 OpenCode configuration is in `opencode.json`. By default it uses the free `opencode/big-pickle` model. Edit this file to change models or add custom agents.
 
-## Project Structure
-
-```
-spacenotes/
-├── src/                    # Rust sync daemon
-├── spacetime-module/       # SpacetimeDB schema and reducers
-├── spacenotes-mcp/         # MCP server for AI assistants
-├── client-web/             # Flutter web client (pre-built)
-├── assets/                 # Screenshots and icons
-├── Dockerfile              # All-in-one container build
-├── docker-compose.yml      # Container orchestration
-├── entrypoint.sh           # Container startup script
-├── opencode.json           # OpenCode AI chat configuration
-└── nginx.conf              # Web client server config
 ```
 
 ## License
