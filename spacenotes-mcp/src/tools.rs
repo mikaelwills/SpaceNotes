@@ -58,6 +58,25 @@ pub fn get_tools() -> Vec<Tool> {
             }),
         },
         Tool {
+            name: "get_notes".to_string(),
+            description: "Get multiple notes' full content by IDs or paths in a single request".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Array of note UUIDs (optional if paths provided)"
+                    },
+                    "paths": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Array of note paths (optional if ids provided)"
+                    }
+                }
+            }),
+        },
+        Tool {
             name: "create_note".to_string(),
             description: "Create a new note with content".to_string(),
             input_schema: json!({
@@ -276,6 +295,43 @@ pub async fn execute_tool(
                 None => Ok(json!({"content": [{"type": "text", "text": "Note not found"}]})),
             }
         }
+        "get_notes" => {
+            let notes = if let Some(ids) = params.arguments.get("ids").and_then(|v| v.as_array()) {
+                let ids: Vec<String> = ids
+                    .iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect();
+                client.get_notes_by_ids(&ids).map_err(|e| e.to_string())?
+            } else if let Some(paths) = params.arguments.get("paths").and_then(|v| v.as_array()) {
+                let paths: Vec<String> = paths
+                    .iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect();
+                client.get_notes_by_paths(&paths).map_err(|e| e.to_string())?
+            } else {
+                return Err("Must provide either 'ids' or 'paths' array".to_string());
+            };
+
+            if notes.is_empty() {
+                return Ok(json!({"content": [{"type": "text", "text": "No notes found"}]}));
+            }
+
+            let mut result = String::new();
+            for note in &notes {
+                let numbered_content: String = note.content.lines()
+                    .enumerate()
+                    .map(|(i, line)| format!("{:>4}| {}", i + 1, line))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+
+                result.push_str(&format!(
+                    "---\nid: {}\npath: {}\nname: {}\nfolder_path: {}\nfrontmatter: {}\n\n{}\n\n",
+                    note.id, note.path, note.name, note.folder_path, note.frontmatter, numbered_content
+                ));
+            }
+
+            Ok(json!({"content": [{"type": "text", "text": format!("Found {} notes:\n\n{}", notes.len(), result)}]}))
+        }
         "create_note" => {
             let path: String = serde_json::from_value(params.arguments["path"].clone())
                 .map_err(|e| e.to_string())?;
@@ -434,6 +490,23 @@ pub async fn execute_tool(
                 .or_else(|| params.arguments.get("replaceAll"))
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
+
+            if let Ok(Some(note)) = client.get_note_by_path(&path) {
+                if !note.content.contains(&old_string) {
+                    let old_preview: String = old_string.chars().take(80).collect();
+                    let content_preview: String = note.content.chars().take(200).collect();
+                    tracing::warn!(
+                        "EDIT_NOTE FAILED: old_string not found in note. old_preview={:?}, content_preview={:?}",
+                        old_preview, content_preview
+                    );
+                    return Err(format!(
+                        "Edit failed: The text to replace was not found in '{}'. The old_string you provided does not exactly match any content in the note. This often happens due to whitespace differences. Try using append_to_note or prepend_to_note instead, or read the note again and use the exact content.",
+                        path
+                    ));
+                }
+            } else {
+                return Err(format!("Note not found: {}", path));
+            }
 
             client.find_replace_in_note(path.clone(), old_string, new_string, replace_all)
                 .map_err(|e| e.to_string())?;

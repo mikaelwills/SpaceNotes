@@ -147,6 +147,58 @@ impl SpacetimeClient {
         Ok(note)
     }
 
+    pub fn get_notes_by_paths(&self, paths: &[String]) -> Result<Vec<FullNote>> {
+        tracing::info!("Getting {} notes by paths", paths.len());
+
+        let notes: Vec<FullNote> = paths
+            .iter()
+            .filter_map(|path| {
+                self.conn
+                    .db()
+                    .note()
+                    .path()
+                    .find(path)
+                    .map(|note| FullNote {
+                        id: note.id.clone(),
+                        path: note.path.clone(),
+                        name: note.name.clone(),
+                        content: note.content.clone(),
+                        folder_path: note.folder_path.clone(),
+                        frontmatter: note.frontmatter.clone(),
+                    })
+            })
+            .collect();
+
+        tracing::info!("Found {} of {} requested notes", notes.len(), paths.len());
+        Ok(notes)
+    }
+
+    pub fn get_notes_by_ids(&self, ids: &[String]) -> Result<Vec<FullNote>> {
+        tracing::info!("Getting {} notes by ids", ids.len());
+
+        let notes: Vec<FullNote> = ids
+            .iter()
+            .filter_map(|id| {
+                self.conn
+                    .db()
+                    .note()
+                    .id()
+                    .find(id)
+                    .map(|note| FullNote {
+                        id: note.id.clone(),
+                        path: note.path.clone(),
+                        name: note.name.clone(),
+                        content: note.content.clone(),
+                        folder_path: note.folder_path.clone(),
+                        frontmatter: note.frontmatter.clone(),
+                    })
+            })
+            .collect();
+
+        tracing::info!("Found {} of {} requested notes", notes.len(), ids.len());
+        Ok(notes)
+    }
+
     pub fn create_note(
         &self,
         id: String,
