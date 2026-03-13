@@ -2,6 +2,14 @@ use regex::RegexBuilder;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+fn normalize_for_matching(s: &str) -> String {
+    s.replace("\r\n", "\n")
+        .lines()
+        .map(|line| line.trim_end())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Tool {
     pub name: String,
@@ -191,7 +199,7 @@ pub fn get_tools() -> Vec<Tool> {
                 "type": "object",
                 "properties": {
                     "path": {"type": "string", "description": "Note path (e.g., 'Development/My Note.md')"},
-                    "old_string": {"type": "string", "description": "Text to find (must match exactly)"},
+                    "old_string": {"type": "string", "description": "Text to find (whitespace differences are handled automatically)"},
                     "new_string": {"type": "string", "description": "Text to replace with (empty to delete)"},
                     "replace_all": {"type": "boolean", "description": "Replace all occurrences (default: false, replaces first only)"}
                 },
@@ -491,27 +499,45 @@ pub async fn execute_tool(
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
 
-            if let Ok(Some(note)) = client.get_note_by_path(&path) {
-                if !note.content.contains(&old_string) {
+            let note = client.get_note_by_path(&path)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| format!("Note not found: {}", path))?;
+
+            if note.content.contains(&old_string) {
+                client.find_replace_in_note(path.clone(), old_string, new_string, replace_all)
+                    .map_err(|e| e.to_string())?;
+                Ok(json!({"content": [{"type": "text", "text": format!("Edited note: {}", path)}]}))
+            } else {
+                let norm_content = normalize_for_matching(&note.content);
+                let norm_old = normalize_for_matching(&old_string);
+
+                if norm_content.contains(&norm_old) {
+                    let new_content = if replace_all {
+                        norm_content.replace(&norm_old, &new_string)
+                    } else {
+                        norm_content.replacen(&norm_old, &new_string, 1)
+                    };
+
+                    client
+                        .update_note_content(note.id, new_content)
+                        .map_err(|e| e.to_string())?;
+
+                    tracing::info!("edit_note used normalized fallback for path={}", path);
+
+                    Ok(json!({"content": [{"type": "text", "text": format!("Edited note: {}", path)}]}))
+                } else {
                     let old_preview: String = old_string.chars().take(80).collect();
                     let content_preview: String = note.content.chars().take(200).collect();
                     tracing::warn!(
-                        "EDIT_NOTE FAILED: old_string not found in note. old_preview={:?}, content_preview={:?}",
+                        "EDIT_NOTE FAILED: old_string not found even after normalization. old_preview={:?}, content_preview={:?}",
                         old_preview, content_preview
                     );
-                    return Err(format!(
-                        "Edit failed: The text to replace was not found in '{}'. The old_string you provided does not exactly match any content in the note. This often happens due to whitespace differences. Try using append_to_note or prepend_to_note instead, or read the note again and use the exact content.",
+                    Err(format!(
+                        "Edit failed: The text to replace was not found in '{}'. The old_string does not match any content even after whitespace normalization. Try reading the note again and using the exact content.",
                         path
-                    ));
+                    ))
                 }
-            } else {
-                return Err(format!("Note not found: {}", path));
             }
-
-            client.find_replace_in_note(path.clone(), old_string, new_string, replace_all)
-                .map_err(|e| e.to_string())?;
-
-            Ok(json!({"content": [{"type": "text", "text": format!("Edited note: {}", path)}]}))
         }
         "move_notes_to_folder" => {
             let paths: Vec<String> = serde_json::from_value(params.arguments["paths"].clone())

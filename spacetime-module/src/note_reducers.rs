@@ -351,7 +351,7 @@ pub fn find_replace_in_note(
             modified_time: now,
             db_updated_at: ctx.timestamp,
         });
-        log::info!("Replaced text in note: {}", path);
+        log::info!("REDUCER_EXECUTED: find_replace_in_note path={}, new_size={}", path, new_size);
     } else {
         log::warn!("Note not found for find/replace: {}", path);
     }
