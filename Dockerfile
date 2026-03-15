@@ -1,7 +1,7 @@
 # All-in-one SpaceNotes image
 # Includes: SpacetimeDB + Module + Rust Daemon + MCP Server + Web Client
 
-FROM clockworklabs/spacetime:v1.8.0 AS spacetime
+FROM clockworklabs/spacetime:v2.0.5 AS spacetime
 
 # Chef stage - install cargo-chef
 FROM rust:latest AS chef
@@ -20,17 +20,28 @@ RUN cargo chef prepare --recipe-path recipe.json
 FROM chef AS builder
 RUN rustup target add wasm32-unknown-unknown
 
+ARG TARGETARCH
+
 COPY --from=planner /build/recipe.json recipe.json
-RUN cargo chef cook --release --recipe-path recipe.json
+RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry-${TARGETARCH} \
+    --mount=type=cache,target=/build/target,id=cargo-target-${TARGETARCH} \
+    cargo chef cook --release --recipe-path recipe.json
 
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 COPY spacenotes-mcp ./spacenotes-mcp
-RUN cargo build --release --package spacenotes --package spacenotes-mcp
+RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry-${TARGETARCH} \
+    --mount=type=cache,target=/build/target,id=cargo-target-${TARGETARCH} \
+    cargo build --release --package spacenotes --package spacenotes-mcp && \
+    cp /build/target/release/spacenotes /build/spacenotes-bin && \
+    cp /build/target/release/spacenotes-mcp /build/spacenotes-mcp-bin
 
 COPY spacetime-module ./spacetime-module
 WORKDIR /build/spacetime-module
-RUN cargo build --release --target wasm32-unknown-unknown
+RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry-${TARGETARCH} \
+    --mount=type=cache,target=/build/spacetime-module/target,id=cargo-wasm-target-${TARGETARCH} \
+    cargo build --release --target wasm32-unknown-unknown && \
+    cp /build/spacetime-module/target/wasm32-unknown-unknown/release/spacenotes_module.wasm /build/spacenotes_module.wasm
 
 # Runtime stage - Ubuntu 24.04 has glibc 2.39
 FROM ubuntu:24.04
@@ -48,11 +59,11 @@ RUN ln -s /opt/spacetime/spacetimedb-cli /usr/local/bin/spacetime && \
     ln -s /opt/spacetime/spacetimedb-standalone /usr/local/bin/spacetimedb-standalone
 
 # Copy our daemon and MCP server
-COPY --from=builder /build/target/release/spacenotes /usr/local/bin/spacenotes
-COPY --from=builder /build/target/release/spacenotes-mcp /usr/local/bin/spacenotes-mcp
+COPY --from=builder /build/spacenotes-bin /usr/local/bin/spacenotes
+COPY --from=builder /build/spacenotes-mcp-bin /usr/local/bin/spacenotes-mcp
 
 # Copy the pre-built WASM module
-COPY --from=builder /build/spacetime-module/target/wasm32-unknown-unknown/release/spacenotes_module.wasm /opt/spacetime-module.wasm
+COPY --from=builder /build/spacenotes_module.wasm /opt/spacetime-module.wasm
 
 # Copy the pre-built Flutter web client
 COPY client-web /var/www/html

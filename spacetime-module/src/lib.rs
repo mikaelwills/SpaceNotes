@@ -1,36 +1,48 @@
-use spacetimedb::{ReducerContext, Table, Timestamp};
+use spacetimedb::{CaseConversionPolicy, ReducerContext, Table, Timestamp};
 
-mod note_reducers;
+#[spacetimedb::settings]
+const CASE_CONVERSION_POLICY: CaseConversionPolicy = CaseConversionPolicy::None;
+
+mod call_reducers;
 mod folder_reducers;
+mod note_reducers;
 
 // =============================================================================
 // Tables
 // =============================================================================
 
-#[spacetimedb::table(name = note, public)]
+#[spacetimedb::table(accessor = note, public)]
 pub struct Note {
     #[primary_key]
-    pub id: String,          // UUID (e.g., "550e8400-e29b...")
+    pub id: String, // UUID (e.g., "550e8400-e29b...")
     #[unique]
-    pub path: String,        // "Projects/my-note.md"
-    pub name: String,        // "my-note"
+    pub path: String, // "Projects/my-note.md"
+    pub name: String, // "my-note"
     pub content: String,
     pub folder_path: String, // "Projects/"
     pub depth: u32,
     pub frontmatter: String, // JSON-serialized Map
     pub size: u64,
-    pub created_time: u64,   // ms since epoch (filesystem)
-    pub modified_time: u64,  // ms since epoch (filesystem)
+    pub created_time: u64,  // ms since epoch (filesystem)
+    pub modified_time: u64, // ms since epoch (filesystem)
     #[index(btree)]
     pub db_updated_at: Timestamp, // SpacetimeDB transaction time
 }
 
-#[spacetimedb::table(name = folder, public)]
+#[spacetimedb::table(accessor = folder, public)]
 pub struct Folder {
     #[primary_key]
     pub path: String,
     pub name: String,
     pub depth: u32,
+}
+
+#[spacetimedb::table(accessor = connected_user, public)]
+pub struct ConnectedUser {
+    #[primary_key]
+    pub identity: spacetimedb::Identity,
+    pub connected_at: u64,
+    pub name: String,
 }
 
 // =============================================================================
@@ -43,15 +55,47 @@ pub fn init(_ctx: &ReducerContext) {
 }
 
 #[spacetimedb::reducer(client_connected)]
-pub fn identity_connected(_ctx: &ReducerContext) {
-    log::info!("Client connected");
+pub fn identity_connected(ctx: &ReducerContext) {
+    ctx.db.connected_user().insert(ConnectedUser {
+        identity: ctx.sender(),
+        connected_at: ctx.timestamp.to_duration_since_unix_epoch().unwrap_or_default().as_millis() as u64,
+        name: String::new(),
+    });
+    log::info!("Client connected: {:?}", ctx.sender());
 }
 
 #[spacetimedb::reducer(client_disconnected)]
-pub fn identity_disconnected(_ctx: &ReducerContext) {
-    log::info!("Client disconnected");
+pub fn identity_disconnected(ctx: &ReducerContext) {
+    use call_reducers::{call_session, CallSession, CallState};
+
+    ctx.db.connected_user().identity().delete(&ctx.sender());
+
+    for session in ctx.db.call_session().iter() {
+        let dominated = session.caller == ctx.sender()
+            || session.callee == ctx.sender();
+        let active = session.state != CallState::Ended;
+
+        if dominated && active {
+            ctx.db.call_session().session_id().update(CallSession {
+                state: CallState::Ended,
+                ..session
+            });
+        }
+    }
+    log::info!("Client disconnected: {:?}", ctx.sender());
 }
 
+#[spacetimedb::reducer]
+pub fn set_display_name(ctx: &ReducerContext, name: String) {
+    let Some(user) = ctx.db.connected_user().identity().find(&ctx.sender()) else {
+        log::warn!("set_display_name: user not found");
+        return;
+    };
+    ctx.db.connected_user().identity().update(ConnectedUser {
+        name,
+        ..user
+    });
+}
 
 #[spacetimedb::reducer]
 #[allow(clippy::too_many_arguments)]
@@ -97,6 +141,10 @@ pub fn get_recent_notes(ctx: &ReducerContext, limit: u32) {
 
     // Return results via log
     for note in notes {
-        log::info!("Recent note: {} (updated: {:?})", note.path, note.db_updated_at);
+        log::info!(
+            "Recent note: {} (updated: {:?})",
+            note.path,
+            note.db_updated_at
+        );
     }
 }

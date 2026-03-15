@@ -32,7 +32,12 @@
   <title>SpaceNotes Client</title>
   <link rel="manifest" href="manifest.json">
 </head>
-<body>
+<body style="margin:0;background:#0a0a0f;display:flex;align-items:center;justify-content:center;height:100vh;overflow:hidden">
+  <div id="loading" style="text-align:center">
+    <div style="width:40px;height:40px;border:3px solid #1a1a2e;border-top:3px solid #8b5cf6;border-radius:50%;animation:spin .8s linear infinite;margin:0 auto"></div>
+    <div style="color:#6b7280;font-family:system-ui;font-size:13px;margin-top:16px">Loading SpaceNotes...</div>
+  </div>
+  <style>@keyframes spin{to{transform:rotate(360deg)}}</style>
   <script>
     document.addEventListener('contextmenu', function(e) {
       e.preventDefault();
