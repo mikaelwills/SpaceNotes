@@ -214,7 +214,7 @@ impl SpacetimeClient {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
-            .as_secs();
+            .as_millis() as u64;
 
         self.conn.reducers().create_note(
             id,
@@ -239,7 +239,7 @@ impl SpacetimeClient {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
-            .as_secs();
+            .as_millis() as u64;
 
         self.conn.reducers().update_note_content(
             id,
@@ -296,8 +296,8 @@ impl SpacetimeClient {
         Ok(())
     }
 
-    pub fn search_notes(&self, query: &str) -> Result<Vec<NoteInfo>> {
-        tracing::info!("Searching notes for: {}", query);
+    pub fn search_notes(&self, query: &str, context_lines: Option<u32>) -> Result<Vec<SearchResult>> {
+        tracing::info!("Searching notes for: {} (context_lines: {:?})", query, context_lines);
 
         let tokens: Vec<String> = query
             .to_lowercase()
@@ -305,7 +305,7 @@ impl SpacetimeClient {
             .map(|s| s.to_string())
             .collect();
 
-        let mut notes: Vec<(usize, NoteInfo)> = self
+        let mut notes: Vec<(usize, SearchResult)> = self
             .conn
             .db()
             .note()
@@ -324,24 +324,56 @@ impl SpacetimeClient {
                     })
                     .count();
 
-                if match_count > 0 {
-                    Some((
-                        match_count,
-                        NoteInfo {
-                            id: note.id.clone(),
-                            path: note.path.clone(),
-                            name: note.name.clone(),
-                        },
-                    ))
-                } else {
-                    None
+                if match_count == 0 {
+                    return None;
                 }
+
+                let excerpts = context_lines.map(|ctx| {
+                    let lines: Vec<&str> = note.content.lines().collect();
+                    let total = lines.len();
+                    let ctx = ctx as usize;
+                    let mut matched_ranges: Vec<(usize, usize)> = Vec::new();
+
+                    for (i, line) in lines.iter().enumerate() {
+                        let line_lower = line.to_lowercase();
+                        if tokens.iter().any(|t| line_lower.contains(t)) {
+                            let start = i.saturating_sub(ctx);
+                            let end = (i + ctx + 1).min(total);
+                            matched_ranges.push((start, end));
+                        }
+                    }
+
+                    let merged = merge_ranges(&matched_ranges);
+
+                    merged
+                        .into_iter()
+                        .map(|(start, end)| {
+                            let snippet: String = lines[start..end]
+                                .iter()
+                                .enumerate()
+                                .map(|(j, line)| format!("{:>4}| {}", start + j + 1, line))
+                                .collect::<Vec<_>>()
+                                .join("\n");
+                            format!("[lines {}-{}]\n{}", start + 1, end, snippet)
+                        })
+                        .collect()
+                });
+
+                Some((
+                    match_count,
+                    SearchResult {
+                        id: note.id.clone(),
+                        path: note.path.clone(),
+                        name: note.name.clone(),
+                        excerpts,
+                    },
+                ))
             })
             .collect();
 
         notes.sort_by(|a, b| b.0.cmp(&a.0));
 
-        let notes: Vec<NoteInfo> = notes.into_iter().map(|(_, note)| note).collect();
+        let notes: Vec<SearchResult> = notes.into_iter().map(|(_, note)| note).collect();
 
         tracing::info!("Found {} notes matching '{}'", notes.len(), query);
 
@@ -357,6 +389,15 @@ pub struct NoteInfo {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct SearchResult {
+    pub id: String,
+    pub path: String,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub excerpts: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct FullNote {
     pub id: String,
     pub path: String,
@@ -364,4 +405,22 @@ pub struct FullNote {
     pub content: String,
     pub folder_path: String,
     pub frontmatter: String,
+}
+
+fn merge_ranges(ranges: &[(usize, usize)]) -> Vec<(usize, usize)> {
+    if ranges.is_empty() {
+        return Vec::new();
+    }
+    let mut sorted: Vec<(usize, usize)> = ranges.to_vec();
+    sorted.sort_by_key(|r| r.0);
+    let mut merged = vec![sorted[0]];
+    for &(start, end) in &sorted[1..] {
+        let last = merged.last_mut().unwrap();
+        if start <= last.1 {
+            last.1 = last.1.max(end);
+        } else {
+            merged.push((start, end));
+        }
+    }
+    merged
 }
