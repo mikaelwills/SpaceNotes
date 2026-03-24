@@ -41,14 +41,9 @@ pub async fn start_watcher(
                                     // CHECK TRACKER (Echo Prevention)
                                     // If we extracted an ID, and the content hasn't changed, STOP.
                                     if !note.id.is_empty() {
-                                        let content_hash = ContentTracker::hash(&note.content);
                                         let has_changed = tracker.has_changed(&note.id, &note.content);
-                                        tracing::info!(
-                                            "Watcher echo check: path={}, id={}, content_len={}, hash={}, has_changed={}",
-                                            note.path, note.id, note.content.len(), &content_hash[..16], has_changed
-                                        );
                                         if !has_changed {
-                                            tracing::info!("Watcher ignoring echo: {}", note.path);
+                                            tracing::debug!("Watcher ignoring echo: {}", note.path);
                                             continue;
                                         }
                                     }
@@ -97,7 +92,7 @@ pub async fn start_watcher(
                                     if tracker.is_modified(&note.id, &note.content) {
                                         client.upsert_note(&note);
                                         tracker.update(&note.id, &note.content);
-                                        tracing::info!("Synced: {} (ID: {})", note.name, note.id);
+                                        tracing::debug!("Synced: {} (ID: {})", note.name, note.id);
                                     } else {
                                         tracing::debug!("Skipping unchanged: {} (ID: {})", note.path, note.id);
                                     }
@@ -130,7 +125,7 @@ pub async fn start_watcher(
                                 let rel_path = sanitize_path(&rel.to_string_lossy().to_string());
                                 let folder = Folder::new(rel_path.clone());
                                 client.upsert_folder(&folder);
-                                tracing::info!("Synced folder: {}", rel_path);
+                                tracing::debug!("Synced folder: {}", rel_path);
                             }
                         }
                         // Handle deleted directories (no extension and doesn't exist)

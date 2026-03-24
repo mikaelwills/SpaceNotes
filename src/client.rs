@@ -50,7 +50,6 @@ impl SpacetimeClient {
                 "SELECT * FROM folder"
             ]);
 
-        tracing::debug!("Subscription registered for note and folder tables");
         tracing::info!("Connected to SpacetimeDB at {}/{}", host, db_name);
         Ok(Self { conn, synced })
     }
