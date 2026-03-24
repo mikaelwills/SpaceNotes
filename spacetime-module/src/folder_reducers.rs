@@ -188,11 +188,12 @@ pub fn move_folder(ctx: &ReducerContext, old_path: String, new_path: String) {
 
 #[spacetimedb::reducer]
 pub fn upsert_folder(ctx: &ReducerContext, path: String, name: String, depth: u32) {
-    // Normalize: strip trailing slash to match storage standard
     let normalized_path = path.trim_end_matches('/').to_string();
 
-    // Delete if exists, then insert
-    if ctx.db.folder().path().find(&normalized_path).is_some() {
+    if let Some(existing) = ctx.db.folder().path().find(&normalized_path) {
+        if existing.name == name && existing.depth == depth {
+            return;
+        }
         ctx.db.folder().path().delete(&normalized_path);
     }
     ctx.db.folder().insert(Folder {

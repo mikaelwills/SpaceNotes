@@ -237,8 +237,16 @@ pub fn upsert_note(
     created_time: u64,
     modified_time: u64,
 ) {
-    // Delete if exists (by ID), then insert
-    if ctx.db.note().id().find(&id).is_some() {
+    if let Some(existing) = ctx.db.note().id().find(&id) {
+        if existing.path == path
+            && existing.content == content
+            && existing.folder_path == folder_path
+            && existing.depth == depth
+            && existing.size == size
+            && existing.modified_time == modified_time
+        {
+            return;
+        }
         ctx.db.note().id().delete(&id);
     }
     ctx.db.note().insert(Note {

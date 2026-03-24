@@ -98,13 +98,10 @@ pub async fn start_watcher(
                                     }
                                 }
                                 Ok(None) => {
-                                    // File was deleted - look up ID from client cache
                                     if let Ok(rel) = path.strip_prefix(&vault_path_clone) {
                                         let rel_path = sanitize_path(&rel.to_string_lossy().to_string());
 
-                                        // Find the note in the client cache by path
-                                        let notes = client.get_all_notes();
-                                        if let Some(note) = notes.iter().find(|n| n.path == rel_path) {
+                                        if let Some(note) = client.get_note_by_path(&rel_path) {
                                             client.delete_note(&note.id);
                                             tracker.remove(&note.id);
                                             tracing::info!("Deleted note: {} (ID: {})", rel_path, note.id);
@@ -133,11 +130,7 @@ pub async fn start_watcher(
                             if let Ok(rel) = path.strip_prefix(&vault_path_clone) {
                                 let old_folder_path = sanitize_path(&rel.to_string_lossy().to_string());
 
-                                // Get all notes that were in this folder from DB
-                                let notes_in_folder: Vec<_> = client.get_all_notes()
-                                    .into_iter()
-                                    .filter(|n| n.path.starts_with(&format!("{}/", old_folder_path)))
-                                    .collect();
+                                let notes_in_folder = client.get_notes_in_folder(&format!("{}/", old_folder_path));
 
                                 // Check if notes still exist on disk (indicates folder rename)
                                 for note in &notes_in_folder {

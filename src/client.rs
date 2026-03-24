@@ -131,6 +131,47 @@ impl SpacetimeClient {
             })
     }
 
+    pub fn get_note_by_id(&self, id: &str) -> Option<LocalNote> {
+        self.conn
+            .db
+            .note()
+            .id()
+            .find(&id.to_string())
+            .map(|db_note| LocalNote {
+                id: db_note.id,
+                path: db_note.path,
+                name: db_note.name,
+                content: db_note.content,
+                folder_path: db_note.folder_path,
+                depth: db_note.depth,
+                frontmatter: db_note.frontmatter,
+                size: db_note.size,
+                created_time: db_note.created_time,
+                modified_time: db_note.modified_time,
+            })
+    }
+
+    pub fn get_notes_in_folder(&self, folder_path_prefix: &str) -> Vec<LocalNote> {
+        self.conn
+            .db
+            .note()
+            .iter()
+            .filter(|n| n.path.starts_with(folder_path_prefix))
+            .map(|db_note| LocalNote {
+                id: db_note.id,
+                path: db_note.path,
+                name: db_note.name,
+                content: db_note.content,
+                folder_path: db_note.folder_path,
+                depth: db_note.depth,
+                frontmatter: db_note.frontmatter,
+                size: db_note.size,
+                created_time: db_note.created_time,
+                modified_time: db_note.modified_time,
+            })
+            .collect()
+    }
+
     /// Register callback for note updates
     pub fn on_note_updated<F>(&self, mut callback: F)
     where
