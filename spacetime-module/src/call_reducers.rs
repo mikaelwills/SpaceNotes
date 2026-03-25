@@ -22,7 +22,9 @@ pub struct VideoFrame {
     pub session_id: u64,
     pub from: Identity,
     pub seq: u32,
-    pub jpeg: Vec<u8>,
+    pub codec: u8,
+    pub is_keyframe: bool,
+    pub data: Vec<u8>,
 }
 
 #[spacetimedb::table(accessor = audio_frame, public, event)]
@@ -75,7 +77,6 @@ pub fn request_call(ctx: &ReducerContext, callee: Identity) -> Result<(), String
         ..session
     });
     Ok(())
-
   }
 
 #[spacetimedb::reducer]
@@ -83,13 +84,17 @@ pub fn send_video_frame(
     ctx: &ReducerContext,
     session_id: u64,
     seq: u32,
-    jpeg: Vec<u8>,
+    codec: u8,
+    is_keyframe: bool,
+    data: Vec<u8>,
 ) {
     ctx.db.video_frame().insert(VideoFrame {
         session_id,
         from: ctx.sender(),
         seq,
-        jpeg,
+        codec,
+        is_keyframe,
+        data,
     });
 }
 

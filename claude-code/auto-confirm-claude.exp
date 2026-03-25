@@ -1,0 +1,7 @@
+#!/usr/bin/expect -f
+set timeout 30
+spawn claude --dangerously-load-development-channels server:space-channel --dangerously-skip-permissions
+expect "confirm"
+sleep 1
+send "\r"
+interact

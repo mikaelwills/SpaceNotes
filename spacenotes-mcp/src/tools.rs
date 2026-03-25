@@ -41,6 +41,28 @@ pub fn get_tools() -> Vec<Tool> {
             }),
         },
         Tool {
+            name: "search_notes_content".to_string(),
+            description: "Search notes and return content excerpts around matches. Use after search_notes to find specific text within notes.".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Search query (case-insensitive, matches content)"
+                    },
+                    "context_lines": {
+                        "type": "integer",
+                        "description": "Number of lines to include above and below each match (default: 5)"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max number of notes to return (default: 10)"
+                    }
+                },
+                "required": ["query"]
+            }),
+        },
+        Tool {
             name: "list_notes_in_folder".to_string(),
             description: "List all notes in a specific folder".to_string(),
             input_schema: json!({
@@ -252,7 +274,29 @@ pub async fn execute_tool(
             let query: String = serde_json::from_value(params.arguments["query"].clone())
                 .map_err(|e| e.to_string())?;
 
-            let notes = client.search_notes(&query).map_err(|e| e.to_string())?;
+            let notes = client.search_notes(&query, None).map_err(|e| e.to_string())?;
+
+            Ok(json!({
+                "content": [{
+                    "type": "text",
+                    "text": serde_json::to_string_pretty(&notes).unwrap_or_else(|_| "[]".to_string())
+                }]
+            }))
+        }
+        "search_notes_content" => {
+            let query: String = serde_json::from_value(params.arguments["query"].clone())
+                .map_err(|e| e.to_string())?;
+            let context_lines = params.arguments.get("context_lines")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as u32)
+                .unwrap_or(5);
+            let limit = params.arguments.get("limit")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as usize)
+                .unwrap_or(10);
+
+            let mut notes = client.search_notes(&query, Some(context_lines)).map_err(|e| e.to_string())?;
+            notes.truncate(limit);
 
             Ok(json!({
                 "content": [{

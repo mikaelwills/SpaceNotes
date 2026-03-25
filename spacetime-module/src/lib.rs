@@ -45,6 +45,13 @@ pub struct ConnectedUser {
     pub name: String,
 }
 
+#[spacetimedb::table(accessor = user_profile, public)]
+pub struct UserProfile {
+    #[primary_key]
+    pub identity: spacetimedb::Identity,
+    pub name: String,
+}
+
 // =============================================================================
 // Lifecycle Reducers
 // =============================================================================
@@ -56,10 +63,14 @@ pub fn init(_ctx: &ReducerContext) {
 
 #[spacetimedb::reducer(client_connected)]
 pub fn identity_connected(ctx: &ReducerContext) {
+    let saved_name = ctx.db.user_profile().identity().find(&ctx.sender())
+        .map(|p| p.name)
+        .unwrap_or_default();
+    ctx.db.connected_user().identity().delete(&ctx.sender());
     ctx.db.connected_user().insert(ConnectedUser {
         identity: ctx.sender(),
         connected_at: ctx.timestamp.to_duration_since_unix_epoch().unwrap_or_default().as_millis() as u64,
-        name: String::new(),
+        name: saved_name,
     });
     log::info!("Client connected: {:?}", ctx.sender());
 }
@@ -92,9 +103,20 @@ pub fn set_display_name(ctx: &ReducerContext, name: String) {
         return;
     };
     ctx.db.connected_user().identity().update(ConnectedUser {
-        name,
+        name: name.clone(),
         ..user
     });
+    if ctx.db.user_profile().identity().find(&ctx.sender()).is_some() {
+        ctx.db.user_profile().identity().update(UserProfile {
+            identity: ctx.sender(),
+            name,
+        });
+    } else {
+        ctx.db.user_profile().insert(UserProfile {
+            identity: ctx.sender(),
+            name,
+        });
+    }
 }
 
 #[spacetimedb::reducer]

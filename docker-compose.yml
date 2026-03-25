@@ -6,6 +6,9 @@ services:
       - "5050:3000"  # SpacetimeDB
       - "5051:80"    # Web Client
       - "5052:5052"  # MCP Server
+      - "5054:5054"  # SpaceChannelServer - Flutter WebSocket
+      - "5055:5055"  # SpaceChannelServer - SpaceChannel client WebSocket
+      - "5056:5056"  # SpaceChannelServer - Webhook HTTP
     volumes:
       - /path/to/your/notes:/vault  # Edit this to your notes folder
       - spacetimedb-data:/var/lib/spacetimedb

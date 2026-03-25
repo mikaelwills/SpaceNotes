@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "spacenotes-mcp"]
+members = [".", "spacenotes-mcp", "space-channel-server"]
 exclude = ["spacetime-module"]
 resolver = "2"
 

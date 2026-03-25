@@ -1,0 +1,18 @@
+{
+  "mcpServers": {
+    "spacenotes-mcp": {
+      "type": "http",
+      "url": "http://spacenotes:5052/mcp"
+    },
+    "space-channel": {
+      "command": "bun",
+      "args": [
+        "/home/claude/space-channel/space-channel.ts",
+        "--server", "ws://spacenotes:5055/ws",
+        "--project", "SpaceNotes",
+        "--task", "note-assistant",
+        "--session", "note-assistant"
+      ]
+    }
+  }
+}

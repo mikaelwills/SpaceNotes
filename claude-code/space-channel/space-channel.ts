@@ -5,7 +5,6 @@ import {
   ListToolsRequestSchema,
   CallToolRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import * as z from "zod/v4";
 
 const args = parseArgs();
 
@@ -17,14 +16,13 @@ const mcp = new Server(
   { name: "space-channel", version: "0.1.0" },
   {
     capabilities: {
-      experimental: { "claude/channel": {}, "claude/channel/permission": {} },
+      experimental: { "claude/channel": {} },
       tools: {},
     },
     instructions: [
-      "The user reads the SpaceNotes app, not this terminal session.",
-      "Anything you want them to see MUST go through the reply tool — your transcript output never reaches the app.",
       'Messages from the user arrive as <channel source="space-channel" ...>.',
       "Reply using the reply tool. Use edit_message to update a previous reply by id.",
+      "You are a helpful assistant connected to the SpaceNotes app.",
     ].join(" "),
   }
 );
@@ -84,38 +82,11 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
   throw new Error(`unknown tool: ${req.params.name}`);
 });
 
-const PermissionRequestSchema = z.object({
-  method: z.literal("notifications/claude/channel/permission_request"),
-  params: z.object({
-    request_id: z.string().optional(),
-    tool_name: z.string().optional(),
-    description: z.string().optional(),
-    input_preview: z.string().optional(),
-  }).optional(),
-});
-
-mcp.setNotificationHandler(
-  PermissionRequestSchema,
-  async (notification) => {
-    const params = notification.params || {};
-    sendToServer({
-      type: "permission_request",
-      session: args.session,
-      project: args.project,
-      task: args.task,
-      request_id: params.request_id,
-      tool_name: params.tool_name,
-      description: params.description,
-      input_preview: params.input_preview,
-    });
-  }
-);
-
 await mcp.connect(new StdioServerTransport());
 
 connectToServer();
 
-await startHookServer();
+startHookServer();
 
 function parseArgs() {
   const serverUrl =
@@ -123,7 +94,7 @@ function parseArgs() {
   const project = getArg("--project") || process.env.SPACE_CHANNEL_PROJECT || "Unknown";
   const task = getArg("--task") || process.env.SPACE_CHANNEL_TASK || "default";
   const session = getArg("--session") || process.env.SPACE_CHANNEL_SESSION || `session-${Date.now()}`;
-  const hookPort = parseInt(getArg("--hook-port") || process.env.SPACE_CHANNEL_HOOK_PORT || "0");
+  const hookPort = parseInt(getArg("--hook-port") || process.env.SPACE_CHANNEL_HOOK_PORT || "8788");
   const isMaster = process.argv.includes("--master") || process.env.SPACE_CHANNEL_MASTER === "true";
 
   return { serverUrl, project, task, session, hookPort, isMaster };
@@ -170,10 +141,8 @@ function connectToServer() {
         params: {
           content: parsed.text,
           meta: {
-            chat_id: parsed.chat_id || "flutter",
-            message_id: parsed.id || `msg-${Date.now()}`,
-            user: "flutter",
-            ts: new Date().toISOString(),
+            sender: "user",
+            ...(parsed.chat_id ? { chat_id: parsed.chat_id } : {}),
           },
         },
       });
@@ -183,20 +152,9 @@ function connectToServer() {
         params: {
           content: parsed.text,
           meta: {
-            chat_id: "webhook",
-            message_id: `webhook-${Date.now()}`,
-            user: parsed.source || "webhook",
-            ts: new Date().toISOString(),
+            sender: "webhook",
             source: parsed.source || "unknown",
           },
-        },
-      });
-    } else if (parsed.type === "permission_response") {
-      await mcp.notification({
-        method: "notifications/claude/channel/permission",
-        params: {
-          request_id: parsed.request_id,
-          behavior: parsed.behavior,
         },
       });
     } else if (parsed.type === "worker_reply") {
@@ -205,10 +163,7 @@ function connectToServer() {
         params: {
           content: parsed.text,
           meta: {
-            chat_id: "worker",
-            message_id: `worker-${Date.now()}`,
-            user: parsed.session || "worker",
-            ts: new Date().toISOString(),
+            sender: "worker",
             project: parsed.project || "unknown",
             task: parsed.task || "unknown",
             session: parsed.session || "unknown",
@@ -242,9 +197,9 @@ function sendToServer(msg: Record<string, unknown>) {
   }
 }
 
-async function startHookServer() {
-  const server = Bun.serve({
-    port: 0,
+function startHookServer() {
+  Bun.serve({
+    port: args.hookPort,
     hostname: "127.0.0.1",
     async fetch(req) {
       if (req.method !== "POST") {
@@ -271,7 +226,8 @@ async function startHookServer() {
       return new Response("ok");
     },
   });
-  log(`Hook HTTP server listening on http://127.0.0.1:${server.port}`);
+
+  log(`Hook HTTP server listening on http://127.0.0.1:${args.hookPort}`);
 }
 
 function log(msg: string) {
