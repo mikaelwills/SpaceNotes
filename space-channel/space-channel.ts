@@ -122,7 +122,7 @@ function parseArgs() {
     getArg("--server") || process.env.SPACE_CHANNEL_SERVER || "ws://127.0.0.1:5055/ws";
   const project = getArg("--project") || process.env.SPACE_CHANNEL_PROJECT || "Unknown";
   const task = getArg("--task") || process.env.SPACE_CHANNEL_TASK || "default";
-  const session = getArg("--session") || process.env.SPACE_CHANNEL_SESSION || `session-${Date.now()}`;
+  const session = getArg("--session") || process.env.SPACE_CHANNEL_SESSION || project || `session-${Date.now()}`;
   const hookPort = parseInt(getArg("--hook-port") || process.env.SPACE_CHANNEL_HOOK_PORT || "0");
 
   return { serverUrl, project, task, session, hookPort };
