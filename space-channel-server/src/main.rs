@@ -104,6 +104,24 @@ async fn handle_flutter_socket(socket: WebSocket, state: Arc<AppState>) {
 
     info!("Flutter client connected");
 
+    {
+        let sessions = state.sessions.read().await;
+        for cs in sessions.values() {
+            let event = serde_json::json!({
+                "type": "session",
+                "action": "connected",
+                "session": &cs.session_id,
+                "project": &cs.project,
+                "task": &cs.task,
+            });
+            if sender.send(Message::Text(event.to_string().into())).await.is_err() {
+                info!("Flutter client disconnected during session sync");
+                return;
+            }
+        }
+        info!("Sent {} existing sessions to Flutter client", sessions.len());
+    }
+
     let mut flutter_rx = state.to_flutter.subscribe();
 
     let send_task = tokio::spawn(async move {
