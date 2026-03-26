@@ -407,13 +407,8 @@ async fn webhook_handler(
             "text": text,
             "ts": ts,
         });
-        let senders = state.session_senders.read().await;
-        if senders.contains_key(session_name.as_str()) {
-            state.send_to_session(session_name, session_event.to_string()).await;
-            info!(session = %session_name, source = %source, "Webhook routed to session");
-        } else {
-            info!(session = %session_name, source = %source, "Webhook target session not connected, Flutter only");
-        }
+        state.send_to_session(session_name, session_event.to_string()).await;
+        info!(session = %session_name, source = %source, "Webhook routed to session");
     }
 
     "ok"
