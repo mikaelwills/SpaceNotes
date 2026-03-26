@@ -68,7 +68,6 @@ struct ChannelSession {
 
 struct AppState {
     to_flutter: broadcast::Sender<String>,
-    to_master: broadcast::Sender<String>,
     sessions: RwLock<HashMap<String, ChannelSession>>,
     session_senders: RwLock<HashMap<String, broadcast::Sender<String>>>,
 }
@@ -76,10 +75,8 @@ struct AppState {
 impl AppState {
     fn new() -> Self {
         let (to_flutter, _) = broadcast::channel(256);
-        let (to_master, _) = broadcast::channel(256);
         Self {
             to_flutter,
-            to_master,
             sessions: RwLock::new(HashMap::new()),
             session_senders: RwLock::new(HashMap::new()),
         }
@@ -134,6 +131,7 @@ async fn handle_flutter_socket(socket: WebSocket, state: Arc<AppState>) {
             match msg_type {
                 "chat" | "msg" | "" => {
                     if !text.is_empty() || raw.get("image_base64").is_some() {
+                        let target_session = raw.get("session").and_then(|v| v.as_str()).unwrap_or("");
                         let mut forward = serde_json::json!({
                             "type": "chat",
                             "text": text,
@@ -144,9 +142,16 @@ async fn handle_flutter_socket(socket: WebSocket, state: Arc<AppState>) {
                         if let Some(mime) = raw.get("image_mime") {
                             forward["image_mime"] = mime.clone();
                         }
-                        let _ = state_clone.to_master.send(forward.to_string());
-                        let has_image = raw.get("image_base64").is_some();
-                        info!("Routed Flutter message to master: {text} (image: {has_image})");
+                        if target_session.is_empty() {
+                            let senders = state_clone.session_senders.read().await;
+                            for tx in senders.values() {
+                                let _ = tx.send(forward.to_string());
+                            }
+                            info!("Broadcast Flutter message to all sessions: {text}");
+                        } else {
+                            state_clone.send_to_session(target_session, forward.to_string()).await;
+                            info!("Routed Flutter message to session {target_session}: {text}");
+                        }
                     }
                 }
                 "permission_response" => {
@@ -356,13 +361,6 @@ async fn webhook_handler(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("webhook")
         .to_string();
-
-    let forward = serde_json::json!({
-        "type": "webhook",
-        "text": body,
-        "source": source,
-    });
-    let _ = state.to_master.send(forward.to_string());
 
     let flutter_event = serde_json::json!({
         "type": "webhook",
