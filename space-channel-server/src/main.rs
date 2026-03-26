@@ -396,6 +396,7 @@ async fn webhook_handler(
         "type": "webhook",
         "source": source,
         "text": text,
+        "session": target_session.as_deref().unwrap_or(""),
         "ts": ts,
     });
     let _ = state.to_flutter.send(flutter_event.to_string());
