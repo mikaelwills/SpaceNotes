@@ -165,10 +165,30 @@ function connectToServer() {
     }
 
     if (parsed.type === "chat") {
+      let content = parsed.text || "";
+
+      if (parsed.image_base64 && parsed.image_mime) {
+        const ext = parsed.image_mime === "image/png" ? "png"
+          : parsed.image_mime === "image/gif" ? "gif"
+          : parsed.image_mime === "image/webp" ? "webp"
+          : "jpg";
+        const imagePath = `/tmp/flutter-image-${Date.now()}.${ext}`;
+        try {
+          const bytes = Buffer.from(parsed.image_base64, "base64");
+          await Bun.write(imagePath, bytes);
+          log(`Saved image to ${imagePath} (${bytes.length} bytes)`);
+          content = content
+            ? `${content}\n\n[Image attached: ${imagePath}]`
+            : `[Image attached: ${imagePath}]`;
+        } catch (e) {
+          log(`Failed to save image: ${e}`);
+        }
+      }
+
       await mcp.notification({
         method: "notifications/claude/channel",
         params: {
-          content: parsed.text,
+          content,
           meta: {
             chat_id: parsed.chat_id || "flutter",
             message_id: parsed.id || `msg-${Date.now()}`,
@@ -263,6 +283,7 @@ async function startHookServer() {
         task: args.task,
         tool: body.tool_name || "unknown",
         input: body.tool_input || {},
+        hook_event: body.hook_event || "PreToolUse",
         ts: Date.now(),
       };
 
@@ -271,9 +292,29 @@ async function startHookServer() {
       return new Response("ok");
     },
   });
-  log(`Hook HTTP server listening on http://127.0.0.1:${server.port}`);
+  const portFile = `/tmp/space-channel-${args.session}.port`;
+  await Bun.write(portFile, String(server.port));
+  log(`Hook HTTP server listening on http://127.0.0.1:${server.port} (port file: ${portFile})`);
 }
 
+function cleanupPortFile() {
+  const portFile = `/tmp/space-channel-${args.session}.port`;
+  try {
+    require("fs").unlinkSync(portFile);
+    log(`Cleaned up port file: ${portFile}`);
+  } catch {}
+}
+
+process.on("SIGTERM", () => { log("SIGTERM received"); cleanupPortFile(); process.exit(0); });
+process.on("SIGINT", () => { log("SIGINT received"); cleanupPortFile(); process.exit(0); });
+process.on("exit", (code) => { log(`Exiting with code ${code}`); cleanupPortFile(); });
+process.on("uncaughtException", (err) => { log(`Uncaught exception: ${err.message}\n${err.stack}`); cleanupPortFile(); process.exit(1); });
+process.on("unhandledRejection", (reason) => { log(`Unhandled rejection: ${reason}`); });
+
+const LOG_FILE = `/tmp/space-channel-${args.session}.log`;
+
 function log(msg: string) {
+  const line = `[${new Date().toISOString()}] ${msg}\n`;
   process.stderr.write(`[space-channel] ${msg}\n`);
+  try { require("fs").appendFileSync(LOG_FILE, line); } catch {}
 }

@@ -32,6 +32,8 @@ enum ClientMessage {
         #[serde(default)]
         input: serde_json::Value,
         #[serde(default)]
+        hook_event: Option<String>,
+        #[serde(default)]
         ts: u64,
     },
     Session {
@@ -132,13 +134,20 @@ async fn handle_flutter_socket(socket: WebSocket, state: Arc<AppState>) {
                 .unwrap_or("");
             match msg_type {
                 "chat" | "msg" | "" => {
-                    if !text.is_empty() {
-                        let forward = serde_json::json!({
+                    if !text.is_empty() || raw.get("image_base64").is_some() {
+                        let mut forward = serde_json::json!({
                             "type": "chat",
                             "text": text,
                         });
+                        if let Some(img) = raw.get("image_base64") {
+                            forward["image_base64"] = img.clone();
+                        }
+                        if let Some(mime) = raw.get("image_mime") {
+                            forward["image_mime"] = mime.clone();
+                        }
                         let _ = state_clone.to_master.send(forward.to_string());
-                        info!("Routed Flutter message to master: {text}");
+                        let has_image = raw.get("image_base64").is_some();
+                        info!("Routed Flutter message to master: {text} (image: {has_image})");
                     }
                 }
                 "permission_response" => {
@@ -311,7 +320,7 @@ async fn handle_channel_socket(socket: WebSocket, state: Arc<AppState>) {
                         });
                         let _ = state.to_flutter.send(forward.to_string());
                     }
-                    ClientMessage::ToolEvent { tool, input, .. } => {
+                    ClientMessage::ToolEvent { tool, input, hook_event, .. } => {
                         let forward = serde_json::json!({
                             "type": "tool_event",
                             "session": &session,
@@ -319,6 +328,7 @@ async fn handle_channel_socket(socket: WebSocket, state: Arc<AppState>) {
                             "task": &task,
                             "tool": tool,
                             "input": input,
+                            "hook_event": hook_event.as_deref().unwrap_or("PreToolUse"),
                             "ts": chrono_ts(),
                         });
                         let _ = state.to_flutter.send(forward.to_string());
