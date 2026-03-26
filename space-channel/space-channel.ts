@@ -124,9 +124,8 @@ function parseArgs() {
   const task = getArg("--task") || process.env.SPACE_CHANNEL_TASK || "default";
   const session = getArg("--session") || process.env.SPACE_CHANNEL_SESSION || `session-${Date.now()}`;
   const hookPort = parseInt(getArg("--hook-port") || process.env.SPACE_CHANNEL_HOOK_PORT || "0");
-  const isMaster = process.argv.includes("--master") || process.env.SPACE_CHANNEL_MASTER === "true";
 
-  return { serverUrl, project, task, session, hookPort, isMaster };
+  return { serverUrl, project, task, session, hookPort };
 }
 
 function getArg(name: string): string | undefined {
@@ -147,7 +146,6 @@ function connectToServer() {
       session: args.session,
       project: args.project,
       task: args.task,
-      is_master: args.isMaster,
     });
     if (reconnectTimer) {
       clearTimeout(reconnectTimer);
@@ -217,22 +215,6 @@ function connectToServer() {
         params: {
           request_id: parsed.request_id,
           behavior: parsed.behavior,
-        },
-      });
-    } else if (parsed.type === "worker_reply") {
-      await mcp.notification({
-        method: "notifications/claude/channel",
-        params: {
-          content: parsed.text,
-          meta: {
-            chat_id: "worker",
-            message_id: `worker-${Date.now()}`,
-            user: parsed.session || "worker",
-            ts: new Date().toISOString(),
-            project: parsed.project || "unknown",
-            task: parsed.task || "unknown",
-            session: parsed.session || "unknown",
-          },
         },
       });
     }
