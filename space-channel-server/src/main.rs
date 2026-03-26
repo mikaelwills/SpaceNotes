@@ -297,19 +297,7 @@ async fn handle_channel_socket(socket: WebSocket, state: Arc<AppState>) {
                             "text": text,
                             "ts": chrono_ts(),
                         });
-                        let msg = forward.to_string();
-                        let _ = state.to_flutter.send(msg.clone());
-                        if !is_master {
-                            let worker_report = serde_json::json!({
-                                "type": "worker_reply",
-                                "session": &session,
-                                "project": &project,
-                                "task": &task,
-                                "text": text,
-                                "ts": chrono_ts(),
-                            });
-                            let _ = state.to_master.send(worker_report.to_string());
-                        }
+                        let _ = state.to_flutter.send(forward.to_string());
                     }
                     ClientMessage::Edit { id, text, .. } => {
                         let forward = serde_json::json!({
