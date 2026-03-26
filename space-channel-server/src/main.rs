@@ -374,19 +374,47 @@ async fn webhook_handler(
     headers: axum::http::HeaderMap,
     body: String,
 ) -> impl IntoResponse {
-    let source = headers
+    let header_source = headers
         .get("X-Source")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("webhook")
         .to_string();
 
+    let (source, text, target_session) = match serde_json::from_str::<serde_json::Value>(&body) {
+        Ok(json) => {
+            let src = json["source"].as_str().unwrap_or(&header_source).to_string();
+            let txt = json["text"].as_str().unwrap_or("").to_string();
+            let sess = json["session"].as_str().map(|s| s.to_string());
+            (src, txt, sess)
+        }
+        Err(_) => (header_source, body, None),
+    };
+
+    let ts = chrono_ts();
+
     let flutter_event = serde_json::json!({
         "type": "webhook",
         "source": source,
-        "text": body,
-        "ts": chrono_ts(),
+        "text": text,
+        "ts": ts,
     });
     let _ = state.to_flutter.send(flutter_event.to_string());
+
+    if let Some(session_name) = &target_session {
+        let session_event = serde_json::json!({
+            "type": "webhook",
+            "source": source,
+            "text": text,
+            "ts": ts,
+        });
+        let senders = state.session_senders.read().await;
+        if senders.contains_key(session_name.as_str()) {
+            state.send_to_session(session_name, session_event.to_string()).await;
+            info!(session = %session_name, source = %source, "Webhook routed to session");
+        } else {
+            info!(session = %session_name, source = %source, "Webhook target session not connected, Flutter only");
+        }
+    }
 
     "ok"
 }
