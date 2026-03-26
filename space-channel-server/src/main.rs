@@ -21,7 +21,7 @@ use tracing::{info, warn, error};
 #[serde(rename_all = "snake_case")]
 enum ClientMessage {
     Chat { text: String },
-    Register { session: String, project: String, task: String, #[serde(default)] is_master: bool },
+    Register { session: String, project: String, task: String },
     Reply { session: String, id: String, text: String },
     Edit { session: String, id: String, text: String },
     ToolEvent {
@@ -64,7 +64,6 @@ struct ChannelSession {
     session_id: String,
     project: String,
     task: String,
-    is_master: bool,
 }
 
 struct AppState {
@@ -206,7 +205,7 @@ async fn handle_channel_socket(socket: WebSocket, state: Arc<AppState>) {
         return;
     };
 
-    let ClientMessage::Register { session, project, task, is_master } = register else {
+    let ClientMessage::Register { session, project, task } = register else {
         warn!("SpaceChannel first message was not a register");
         return;
     };
@@ -215,14 +214,12 @@ async fn handle_channel_socket(socket: WebSocket, state: Arc<AppState>) {
         session_id: session.clone(),
         project: project.clone(),
         task: task.clone(),
-        is_master,
     };
 
     info!(
         session = %session,
         project = %project,
         task = %task,
-        is_master = is_master,
         "SpaceChannel registered"
     );
 
@@ -240,30 +237,16 @@ async fn handle_channel_socket(socket: WebSocket, state: Arc<AppState>) {
         "session": &session,
         "project": &project,
         "task": &task,
-        "is_master": is_master,
     });
     let _ = state.to_flutter.send(connect_event.to_string());
 
-    let mut master_rx = if is_master {
-        Some(state.to_master.subscribe())
-    } else {
-        None
-    };
     let mut session_rx = session_tx.subscribe();
 
     let send_task = tokio::spawn({
         let session = session.clone();
         async move {
             loop {
-                let msg = if let Some(ref mut rx) = master_rx {
-                    tokio::select! {
-                        result = rx.recv() => result.ok(),
-                        result = session_rx.recv() => result.ok(),
-                    }
-                } else {
-                    session_rx.recv().await.ok()
-                };
-                let Some(msg) = msg else { break };
+                let Some(msg) = session_rx.recv().await.ok() else { break };
                 if sender.send(Message::Text(msg.into())).await.is_err() {
                     break;
                 }
