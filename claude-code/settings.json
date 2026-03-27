@@ -1,0 +1,35 @@
+{
+  "skipDangerousModePermissionPrompt": true,
+  "skipDevelopmentChannelPrompt": true,
+  "acceptedDevelopmentChannels": [
+    "server:space-channel"
+  ],
+  "permissions": {
+    "allow": [
+      "mcp__spacenotes-mcp__*",
+      "mcp__space-channel__*"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/claude/space-channel-hook.sh"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/claude/space-channel-hook.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
