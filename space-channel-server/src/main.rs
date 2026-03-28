@@ -415,7 +415,64 @@ async fn webhook_handler(
         .unwrap_or("webhook")
         .to_string();
 
-    let (source, text, target_session) = match serde_json::from_str::<serde_json::Value>(&body) {
+    let parsed = serde_json::from_str::<serde_json::Value>(&body);
+
+    let msg_type = parsed.as_ref().ok()
+        .and_then(|j| j["type"].as_str())
+        .unwrap_or("webhook")
+        .to_string();
+
+    if msg_type == "msg" {
+        let session = parsed.as_ref().ok()
+            .and_then(|j| j["session"].as_str())
+            .unwrap_or("")
+            .to_string();
+        let text = parsed.as_ref().ok()
+            .and_then(|j| j["text"].as_str())
+            .unwrap_or("")
+            .to_string();
+        let id = parsed.as_ref().ok()
+            .and_then(|j| j["id"].as_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| format!("hook-{}", chrono_ts()));
+        let ts = chrono_ts();
+        let flutter_event = serde_json::json!({
+            "type": "msg",
+            "from": "assistant",
+            "session": session,
+            "id": id,
+            "text": text,
+            "ts": ts,
+        });
+        let msg_str = flutter_event.to_string();
+        if !session.is_empty() {
+            state.push_history(&session, msg_str.clone()).await;
+        }
+        let _ = state.to_flutter.send(msg_str);
+        info!(session = %session, "Hook msg forwarded to Flutter");
+        return "ok";
+    }
+
+    if msg_type == "status" {
+        let session = parsed.as_ref().ok()
+            .and_then(|j| j["session"].as_str())
+            .unwrap_or("")
+            .to_string();
+        let status_state = parsed.as_ref().ok()
+            .and_then(|j| j["state"].as_str())
+            .unwrap_or("")
+            .to_string();
+        let flutter_event = serde_json::json!({
+            "type": "status",
+            "session": session,
+            "state": status_state,
+        });
+        let _ = state.to_flutter.send(flutter_event.to_string());
+        info!(session = %session, state = %status_state, "Status forwarded to Flutter");
+        return "ok";
+    }
+
+    let (source, text, target_session) = match parsed {
         Ok(json) => {
             let src = json["source"].as_str().unwrap_or(&header_source).to_string();
             let txt = json["text"].as_str().unwrap_or("").to_string();
