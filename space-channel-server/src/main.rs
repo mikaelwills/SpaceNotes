@@ -9,7 +9,7 @@ use axum::{
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     net::SocketAddr,
     sync::Arc,
 };
@@ -70,15 +70,28 @@ struct AppState {
     to_flutter: broadcast::Sender<String>,
     sessions: RwLock<HashMap<String, ChannelSession>>,
     session_senders: RwLock<HashMap<String, broadcast::Sender<String>>>,
+    message_history: RwLock<HashMap<String, VecDeque<String>>>,
 }
 
 impl AppState {
+    const MAX_HISTORY: usize = 20;
+
     fn new() -> Self {
         let (to_flutter, _) = broadcast::channel(256);
         Self {
             to_flutter,
             sessions: RwLock::new(HashMap::new()),
             session_senders: RwLock::new(HashMap::new()),
+            message_history: RwLock::new(HashMap::new()),
+        }
+    }
+
+    async fn push_history(&self, session_id: &str, msg: String) {
+        let mut history = self.message_history.write().await;
+        let buf = history.entry(session_id.to_string()).or_insert_with(VecDeque::new);
+        buf.push_back(msg);
+        if buf.len() > Self::MAX_HISTORY {
+            buf.pop_front();
         }
     }
 
@@ -106,6 +119,7 @@ async fn handle_flutter_socket(socket: WebSocket, state: Arc<AppState>) {
 
     {
         let sessions = state.sessions.read().await;
+        let history = state.message_history.read().await;
         for cs in sessions.values() {
             let event = serde_json::json!({
                 "type": "session",
@@ -117,6 +131,23 @@ async fn handle_flutter_socket(socket: WebSocket, state: Arc<AppState>) {
             if sender.send(Message::Text(event.to_string().into())).await.is_err() {
                 info!("Flutter client disconnected during session sync");
                 return;
+            }
+
+            if let Some(buf) = history.get(&cs.session_id) {
+                if !buf.is_empty() {
+                    let messages: Vec<serde_json::Value> = buf.iter()
+                        .filter_map(|m| serde_json::from_str(m).ok())
+                        .collect();
+                    let batch = serde_json::json!({
+                        "type": "history_batch",
+                        "session": &cs.session_id,
+                        "messages": messages,
+                    });
+                    if sender.send(Message::Text(batch.to_string().into())).await.is_err() {
+                        info!("Flutter client disconnected during history sync");
+                        return;
+                    }
+                }
             }
         }
         info!("Sent {} existing sessions to Flutter client", sessions.len());
@@ -303,7 +334,9 @@ async fn handle_channel_socket(socket: WebSocket, state: Arc<AppState>) {
                             "text": text,
                             "ts": chrono_ts(),
                         });
-                        let _ = state.to_flutter.send(forward.to_string());
+                        let msg_str = forward.to_string();
+                        state.push_history(&session, msg_str.clone()).await;
+                        let _ = state.to_flutter.send(msg_str);
                     }
                     ClientMessage::Edit { id, text, .. } => {
                         let forward = serde_json::json!({
@@ -399,7 +432,11 @@ async fn webhook_handler(
         "session": target_session.as_deref().unwrap_or(""),
         "ts": ts,
     });
-    let _ = state.to_flutter.send(flutter_event.to_string());
+    let msg_str = flutter_event.to_string();
+    if let Some(session_name) = &target_session {
+        state.push_history(session_name, msg_str.clone()).await;
+    }
+    let _ = state.to_flutter.send(msg_str);
 
     if let Some(session_name) = &target_session {
         let session_event = serde_json::json!({
