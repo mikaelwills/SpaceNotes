@@ -7,7 +7,9 @@ use axum::{
     response::IntoResponse,
 };
 use futures_util::{SinkExt, StreamExt};
+use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
+use sha1::Sha1;
 use std::{
     collections::{HashMap, VecDeque},
     net::SocketAddr,
@@ -452,6 +454,124 @@ async fn webhook_handler(
     "ok"
 }
 
+async fn trello_webhook_head() -> impl IntoResponse {
+    axum::http::StatusCode::OK
+}
+
+async fn trello_webhook_post(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    body: String,
+) -> impl IntoResponse {
+    let Ok(secret) = std::env::var("TRELLO_WEBHOOK_SECRET") else {
+        warn!("TRELLO_WEBHOOK_SECRET not set");
+        return (axum::http::StatusCode::INTERNAL_SERVER_ERROR, "not configured").into_response();
+    };
+
+    let Ok(callback_url) = std::env::var("TRELLO_CALLBACK_URL") else {
+        warn!("TRELLO_CALLBACK_URL not set");
+        return (axum::http::StatusCode::INTERNAL_SERVER_ERROR, "not configured").into_response();
+    };
+
+    let signature = headers
+        .get("x-trello-webhook")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    if !verify_trello_signature(&body, &callback_url, &secret, signature) {
+        warn!("Trello webhook rejected: invalid signature");
+        return (axum::http::StatusCode::UNAUTHORIZED, "unauthorized").into_response();
+    }
+
+    let Ok(payload) = serde_json::from_str::<serde_json::Value>(&body) else {
+        warn!("Trello webhook: invalid JSON body");
+        return (axum::http::StatusCode::BAD_REQUEST, "invalid json").into_response();
+    };
+
+    let action_type = payload["action"]["type"].as_str().unwrap_or("");
+
+    let text = match action_type {
+        "createCard" => format_trello_card_event("created", &payload),
+        "updateCard" => format_trello_update_event(&payload),
+        "commentCard" => format_trello_comment_event(&payload),
+        "addLabelToCard" => format_trello_card_event("labelled", &payload),
+        _ => {
+            info!(action_type, "Trello webhook: filtered out");
+            return (axum::http::StatusCode::OK, "filtered").into_response();
+        }
+    };
+
+    let Some(text) = text else {
+        return (axum::http::StatusCode::OK, "filtered").into_response();
+    };
+
+    let ts = chrono_ts();
+    let flutter_event = serde_json::json!({
+        "type": "webhook",
+        "source": "trello",
+        "text": text,
+        "session": "lmc-website",
+        "ts": ts,
+    });
+    let _ = state.to_flutter.send(flutter_event.to_string());
+
+    let session_event = serde_json::json!({
+        "type": "webhook",
+        "source": "trello",
+        "text": text,
+        "ts": ts,
+    });
+    state.send_to_session("lmc-website", session_event.to_string()).await;
+
+    info!(action_type, "Trello webhook forwarded");
+    (axum::http::StatusCode::OK, "ok").into_response()
+}
+
+fn verify_trello_signature(body: &str, callback_url: &str, secret: &str, signature: &str) -> bool {
+    let mut mac = match Hmac::<Sha1>::new_from_slice(secret.as_bytes()) {
+        Ok(m) => m,
+        Err(_) => return false,
+    };
+    mac.update(body.as_bytes());
+    mac.update(callback_url.as_bytes());
+    let result = mac.finalize().into_bytes();
+    let expected = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, result);
+    expected == signature
+}
+
+fn format_trello_card_event(verb: &str, payload: &serde_json::Value) -> Option<String> {
+    let card_name = payload["action"]["data"]["card"]["name"].as_str()?;
+    let list_name = payload["action"]["data"]["list"]["name"].as_str().unwrap_or("unknown list");
+    let member = payload["action"]["memberCreator"]["fullName"].as_str().unwrap_or("Someone");
+    Some(format!("{member} {verb} card \"{card_name}\" in {list_name}"))
+}
+
+fn format_trello_update_event(payload: &serde_json::Value) -> Option<String> {
+    let card_name = payload["action"]["data"]["card"]["name"].as_str()?;
+    let member = payload["action"]["memberCreator"]["fullName"].as_str().unwrap_or("Someone");
+
+    if let Some(list_after) = payload["action"]["data"]["listAfter"]["name"].as_str() {
+        let list_before = payload["action"]["data"]["listBefore"]["name"].as_str().unwrap_or("unknown");
+        return Some(format!("{member} moved \"{card_name}\" from {list_before} to {list_after}"));
+    }
+
+    if payload["action"]["data"]["old"].get("closed").is_some() {
+        let closed = payload["action"]["data"]["card"]["closed"].as_bool().unwrap_or(false);
+        let action = if closed { "archived" } else { "unarchived" };
+        return Some(format!("{member} {action} \"{card_name}\""));
+    }
+
+    None
+}
+
+fn format_trello_comment_event(payload: &serde_json::Value) -> Option<String> {
+    let card_name = payload["action"]["data"]["card"]["name"].as_str()?;
+    let member = payload["action"]["memberCreator"]["fullName"].as_str().unwrap_or("Someone");
+    let comment = payload["action"]["data"]["text"].as_str().unwrap_or("");
+    let preview = if comment.len() > 100 { &comment[..100] } else { comment };
+    Some(format!("{member} commented on \"{card_name}\": {preview}"))
+}
+
 fn chrono_ts() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -475,6 +595,7 @@ async fn main() {
 
     let webhook_app = Router::new()
         .route("/webhook", axum::routing::post(webhook_handler))
+        .route("/trello-webhook", axum::routing::head(trello_webhook_head).post(trello_webhook_post))
         .with_state(state.clone());
 
     let flutter_addr = SocketAddr::from(([0, 0, 0, 0], 5054));
