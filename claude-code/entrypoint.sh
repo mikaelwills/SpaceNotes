@@ -1,6 +1,9 @@
 #!/bin/bash
 set -e
 
+export SPACE_CHANNEL_SESSION="${SPACE_CHANNEL_SESSION:-note-assistant}"
+export SPACE_CHANNEL_WEBHOOK="${SPACE_CHANNEL_WEBHOOK:-http://spacenotes:5056/webhook}"
+
 mkdir -p $HOME/.claude
 
 CLAUDE_JSON="$HOME/.claude.json"
@@ -32,7 +35,8 @@ fi
 cp "$CLAUDE_JSON" "$HOME/.claude/.claude.json.bak"
 
 cp /opt/CLAUDE.md $HOME/.claude/CLAUDE.md
-echo "System prompt configured"
+cp /opt/settings.json $HOME/.claude/settings.json
+echo "System prompt and settings configured"
 
 if [ ! -d "$HOME/.git" ]; then
     git init "$HOME" > /dev/null 2>&1

@@ -28,10 +28,8 @@ RUN chmod +x /auto-confirm-claude.exp
 
 COPY space-channel/ /home/claude/space-channel/
 COPY space-channel-hook.sh /home/claude/space-channel-hook.sh
-COPY user-prompt-hook.sh /home/claude/user-prompt-hook.sh
-COPY stop-hook.sh /home/claude/stop-hook.sh
-COPY settings.json /home/claude/.claude/settings.json
-RUN chmod +x /home/claude/space-channel-hook.sh /home/claude/user-prompt-hook.sh /home/claude/stop-hook.sh
+COPY settings.json /opt/settings.json
+RUN chmod +x /home/claude/space-channel-hook.sh
 RUN chown -R claude:claude /home/claude/space-channel /home/claude/.claude
 
 USER claude

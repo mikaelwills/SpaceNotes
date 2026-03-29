@@ -16,7 +16,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/home/claude/space-channel-hook.sh"
+            "command": "$HOME/space-channel-hook.sh"
           }
         ]
       }
@@ -26,7 +26,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/home/claude/space-channel-hook.sh"
+            "command": "$HOME/space-channel-hook.sh"
           }
         ]
       }
@@ -36,7 +36,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/home/claude/user-prompt-hook.sh"
+            "command": "$HOME/space-channel-hook.sh"
           }
         ]
       }
@@ -46,7 +46,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/home/claude/stop-hook.sh"
+            "command": "$HOME/space-channel-hook.sh"
           }
         ]
       }
