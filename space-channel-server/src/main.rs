@@ -17,7 +17,7 @@ use std::{
         Arc,
         atomic::{AtomicU64, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tokio::sync::{broadcast, watch, RwLock};
 use tokio::time::{interval, timeout};
@@ -90,6 +90,8 @@ static CONN_ID: AtomicU64 = AtomicU64::new(0);
 
 const PING_INTERVAL: Duration = Duration::from_secs(30);
 const PONG_TIMEOUT: Duration = Duration::from_secs(60);
+const HISTORY_TTL: Duration = Duration::from_secs(60 * 60 * 48);
+const HISTORY_SWEEP_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
 struct AppState {
     to_flutter: broadcast::Sender<String>,
@@ -98,6 +100,7 @@ struct AppState {
     session_conn_ids: RwLock<HashMap<String, u64>>,
     session_cancel: RwLock<HashMap<String, watch::Sender<()>>>,
     message_history: RwLock<HashMap<String, VecDeque<String>>>,
+    history_last_write: RwLock<HashMap<String, Instant>>,
     session_logs: RwLock<HashMap<String, VecDeque<String>>>,
 }
 
@@ -114,6 +117,7 @@ impl AppState {
             session_conn_ids: RwLock::new(HashMap::new()),
             session_cancel: RwLock::new(HashMap::new()),
             message_history: RwLock::new(HashMap::new()),
+            history_last_write: RwLock::new(HashMap::new()),
             session_logs: RwLock::new(HashMap::new()),
         }
     }
@@ -125,6 +129,36 @@ impl AppState {
         if buf.len() > Self::MAX_HISTORY {
             buf.pop_front();
         }
+        drop(history);
+        let mut last_write = self.history_last_write.write().await;
+        last_write.insert(session_id.to_string(), Instant::now());
+    }
+
+    async fn sweep_expired_history(&self) {
+        let now = Instant::now();
+        let expired: Vec<String> = {
+            let last_write = self.history_last_write.read().await;
+            last_write
+                .iter()
+                .filter_map(|(k, t)| {
+                    if now.duration_since(*t) >= HISTORY_TTL {
+                        Some(k.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        };
+        if expired.is_empty() {
+            return;
+        }
+        let mut history = self.message_history.write().await;
+        let mut last_write = self.history_last_write.write().await;
+        for session in &expired {
+            history.remove(session);
+            last_write.remove(session);
+        }
+        info!(count = expired.len(), "Swept expired history buffers");
     }
 
     async fn push_log(&self, session_id: &str, line: String) {
@@ -494,8 +528,6 @@ async fn handle_channel_socket(socket: WebSocket, state: Arc<AppState>) {
                         if status_state == "disconnected" {
                             let mut sessions = state.sessions.write().await;
                             sessions.remove(&session);
-                            let mut history = state.message_history.write().await;
-                            history.remove(&session);
                             let disconnect_event = serde_json::json!({
                                 "type": "session",
                                 "action": "disconnected",
@@ -787,6 +819,16 @@ async fn main() {
     info!("Flutter WebSocket on {flutter_addr}");
     info!("SpaceChannel WebSocket on {channel_addr}");
     info!("Webhook HTTP on {webhook_addr}");
+
+    let sweep_state = state.clone();
+    tokio::spawn(async move {
+        let mut ticker = interval(HISTORY_SWEEP_INTERVAL);
+        ticker.tick().await;
+        loop {
+            ticker.tick().await;
+            sweep_state.sweep_expired_history().await;
+        }
+    });
 
     let flutter_server = tokio::spawn(async move {
         let listener = tokio::net::TcpListener::bind(flutter_addr).await.unwrap();
