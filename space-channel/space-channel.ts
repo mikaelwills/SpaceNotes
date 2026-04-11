@@ -6,12 +6,18 @@ import {
   CallToolRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import * as z from "zod/v4";
+import { existsSync, readFileSync, writeFileSync, unlinkSync, appendFileSync } from "fs";
 
 const args = parseArgs();
 
 let ws: WebSocket | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-const RECONNECT_INTERVAL = 3000;
+let hookServerPort: number | null = null;
+let registered = false;
+let reconnectDelay = 3000;
+const RECONNECT_BASE = 3000;
+const RECONNECT_MAX = 60000;
+const PID_FILE = `/tmp/space-channel-${args.session}.pid`;
 
 const mcp = new Server(
   { name: "space-channel", version: "0.1.0" },
@@ -61,23 +67,29 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
   if (req.params.name === "reply") {
     const { text } = req.params.arguments as { text: string };
     const id = `reply-${Date.now()}`;
-    sendToServer({
+    const sent = sendToServer({
       type: "reply",
       session: args.session,
       id,
       text,
     });
+    if (!sent) {
+      return { content: [{ type: "text" as const, text: "FAILED: WebSocket not connected — message not delivered" }], isError: true };
+    }
     return { content: [{ type: "text" as const, text: `sent (id: ${id})` }] };
   }
 
   if (req.params.name === "edit_message") {
     const { id, text } = req.params.arguments as { id: string; text: string };
-    sendToServer({
+    const sent = sendToServer({
       type: "edit",
       session: args.session,
       id,
       text,
     });
+    if (!sent) {
+      return { content: [{ type: "text" as const, text: "FAILED: WebSocket not connected — edit not delivered" }], isError: true };
+    }
     return { content: [{ type: "text" as const, text: "edited" }] };
   }
 
@@ -101,7 +113,6 @@ mcp.setNotificationHandler(
     sendToServer({
       type: "permission_request",
       session: args.session,
-      project: args.project,
       task: args.task,
       request_id: params.request_id,
       tool_name: params.tool_name,
@@ -113,6 +124,7 @@ mcp.setNotificationHandler(
 
 await mcp.connect(new StdioServerTransport());
 
+killPreviousInstance();
 connectToServer();
 
 await startHookServer();
@@ -120,12 +132,11 @@ await startHookServer();
 function parseArgs() {
   const serverUrl =
     getArg("--server") || process.env.SPACE_CHANNEL_SERVER || "ws://127.0.0.1:5055/ws";
-  const project = getArg("--project") || process.env.SPACE_CHANNEL_PROJECT || "Unknown";
   const task = getArg("--task") || process.env.SPACE_CHANNEL_TASK || "default";
-  const session = getArg("--session") || process.env.SPACE_CHANNEL_SESSION || project || `session-${Date.now()}`;
+  const session = getArg("--session") || process.env.SPACE_CHANNEL_SESSION || `session-${Date.now()}`;
   const hookPort = parseInt(getArg("--hook-port") || process.env.SPACE_CHANNEL_HOOK_PORT || "0");
 
-  return { serverUrl, project, task, session, hookPort };
+  return { serverUrl, task, session, hookPort };
 }
 
 function getArg(name: string): string | undefined {
@@ -140,11 +151,11 @@ function connectToServer() {
   ws = new WebSocket(args.serverUrl);
 
   ws.addEventListener("open", () => {
-    log(`Connected to SpaceChannelServer at ${args.serverUrl}`);
+    registered = false;
+    reconnectDelay = RECONNECT_BASE;
     sendToServer({
       type: "register",
       session: args.session,
-      project: args.project,
       task: args.task,
     });
     if (reconnectTimer) {
@@ -159,6 +170,12 @@ function connectToServer() {
     try {
       parsed = JSON.parse(data);
     } catch {
+      return;
+    }
+
+    if (parsed.type === "register_ack") {
+      registered = true;
+      log(`Connected and registered to SpaceChannelServer at ${args.serverUrl}`);
       return;
     }
 
@@ -220,33 +237,45 @@ function connectToServer() {
     }
   });
 
-  ws.addEventListener("close", () => {
-    log("Disconnected from SpaceChannelServer, reconnecting...");
+  ws.addEventListener("close", (event) => {
+    registered = false;
+    log(`Disconnected from SpaceChannelServer (code=${event.code} reason=${event.reason || "none"}), reconnecting...`);
+    if (event.code === 4001) {
+      reconnectDelay = RECONNECT_BASE;
+    }
     scheduleReconnect();
   });
 
-  ws.addEventListener("error", () => {
-    log("WebSocket error, will reconnect...");
+  ws.addEventListener("error", (event) => {
+    log(`WebSocket error: ${event.message || event.type || "unknown"}, will reconnect...`);
+    scheduleReconnect();
   });
 }
 
 function scheduleReconnect() {
   if (reconnectTimer) return;
+  const delay = reconnectDelay;
+  reconnectDelay = Math.min(reconnectDelay * 2, RECONNECT_MAX);
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null;
     connectToServer();
-  }, RECONNECT_INTERVAL);
+  }, delay);
 }
 
-function sendToServer(msg: Record<string, unknown>) {
+function sendToServer(msg: Record<string, unknown>): boolean {
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify(msg));
+    return true;
   }
+  const type = msg.type || "unknown";
+  process.stderr.write(`[space-channel] sendToServer DROPPED (ws ${ws ? `readyState=${ws.readyState}` : "null"}): type=${type}\n`);
+  try { appendFileSync(LOG_FILE, `[${new Date().toISOString()}] DROPPED message type=${type} (ws ${ws ? `readyState=${ws.readyState}` : "null"})\n`); } catch {}
+  return false;
 }
 
 async function startHookServer() {
   const server = Bun.serve({
-    port: 0,
+    port: args.hookPort || 0,
     hostname: "127.0.0.1",
     async fetch(req) {
       if (req.method !== "POST") {
@@ -258,45 +287,88 @@ async function startHookServer() {
         return new Response("invalid json", { status: 400 });
       }
 
-      const toolEvent = {
-        type: "tool_event",
-        session: args.session,
-        project: args.project,
-        task: args.task,
-        tool: body.tool_name || "unknown",
-        input: body.tool_input || {},
-        hook_event: body.hook_event || "PreToolUse",
-        ts: Date.now(),
-      };
+      const hookEvent = body.hook_event_name || body.hook_event || "unknown";
+      log(`Hook received: ${hookEvent} | keys: ${Object.keys(body).join(",")} | body: ${JSON.stringify(body).slice(0, 500)}`);
 
-      sendToServer(toolEvent);
+      if (hookEvent === "UserPromptSubmit") {
+        sendToServer({ type: "status", session: args.session, state: "thinking" });
+      } else if (hookEvent === "Stop") {
+        const message = body.last_assistant_message;
+        if (message) {
+          const id = `hook-${Date.now()}`;
+          sendToServer({ type: "msg", session: args.session, text: message, id, from: "assistant" });
+        }
+        sendToServer({ type: "status", session: args.session, state: "idle" });
+      } else if (hookEvent === "SessionEnd") {
+        sendToServer({ type: "status", session: args.session, state: "disconnected" });
+      } else if (hookEvent === "PreToolUse" || hookEvent === "PostToolUse" || hookEvent === "PostToolUseFailure") {
+        sendToServer({
+          type: "tool_event",
+          session: args.session,
+          task: args.task,
+          tool: body.tool_name || "unknown",
+          input: body.tool_input || {},
+          hook_event: hookEvent,
+          ts: Date.now(),
+        });
+      }
 
-      return new Response("ok");
+      return new Response(null, { status: 200 });
     },
   });
+  hookServerPort = server.port;
   const portFile = `/tmp/space-channel-${args.session}.port`;
   await Bun.write(portFile, String(server.port));
-  log(`Hook HTTP server listening on http://127.0.0.1:${server.port} (port file: ${portFile})`);
+  log(`Hook HTTP server listening on http://127.0.0.1:${server.port}`);
 }
 
-function cleanupPortFile() {
-  const portFile = `/tmp/space-channel-${args.session}.port`;
+function killPreviousInstance() {
   try {
-    require("fs").unlinkSync(portFile);
-    log(`Cleaned up port file: ${portFile}`);
+    if (!existsSync(PID_FILE)) return;
+    const oldPid = parseInt(readFileSync(PID_FILE, "utf-8").trim(), 10);
+    if (isNaN(oldPid) || oldPid === process.pid) return;
+    try {
+      process.kill(oldPid, 0);
+      process.kill(oldPid, "SIGTERM");
+      log(`Killed previous instance (PID ${oldPid})`);
+    } catch {}
   } catch {}
+  writePidFile();
 }
 
-process.on("SIGTERM", () => { log("SIGTERM received"); cleanupPortFile(); process.exit(0); });
-process.on("SIGINT", () => { log("SIGINT received"); cleanupPortFile(); process.exit(0); });
-process.on("exit", (code) => { log(`Exiting with code ${code}`); cleanupPortFile(); });
-process.on("uncaughtException", (err) => { log(`Uncaught exception: ${err.message}\n${err.stack}`); cleanupPortFile(); process.exit(1); });
+function writePidFile() {
+  try { writeFileSync(PID_FILE, String(process.pid)); } catch {}
+}
+
+function cleanup() {
+  try {
+    const current = readFileSync(PID_FILE, "utf-8").trim();
+    if (current === String(process.pid)) unlinkSync(PID_FILE);
+  } catch {}
+  if (hookServerPort !== null) {
+    const portFile = `/tmp/space-channel-${args.session}.port`;
+    try {
+      const current = readFileSync(portFile, "utf-8").trim();
+      if (current === String(hookServerPort)) {
+        unlinkSync(portFile);
+        log(`Cleaned up port file: ${portFile}`);
+      }
+    } catch {}
+    hookServerPort = null;
+  }
+}
+
+process.on("SIGTERM", () => { log("SIGTERM received"); cleanup(); process.exit(0); });
+process.on("SIGINT", () => { log("SIGINT received"); cleanup(); process.exit(0); });
+process.on("exit", (code) => { log(`Exiting with code ${code}`); cleanup(); });
+process.on("uncaughtException", (err) => { log(`Uncaught exception: ${err.message}\n${err.stack}`); cleanup(); process.exit(1); });
 process.on("unhandledRejection", (reason) => { log(`Unhandled rejection: ${reason}`); });
 
 const LOG_FILE = `/tmp/space-channel-${args.session}.log`;
 
 function log(msg: string) {
-  const line = `[${new Date().toISOString()}] ${msg}\n`;
+  const line = `[${new Date().toISOString()}] ${msg}`;
   process.stderr.write(`[space-channel] ${msg}\n`);
-  try { require("fs").appendFileSync(LOG_FILE, line); } catch {}
+  try { appendFileSync(LOG_FILE, line + "\n"); } catch {}
+  if (registered) sendToServer({ type: "log", session: args.session, line });
 }

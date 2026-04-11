@@ -15,8 +15,8 @@
       {
         "hooks": [
           {
-            "type": "command",
-            "command": "$HOME/space-channel-hook.sh"
+            "type": "http",
+            "url": "http://127.0.0.1:8788/hook"
           }
         ]
       }
@@ -25,8 +25,18 @@
       {
         "hooks": [
           {
-            "type": "command",
-            "command": "$HOME/space-channel-hook.sh"
+            "type": "http",
+            "url": "http://127.0.0.1:8788/hook"
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://127.0.0.1:8788/hook"
           }
         ]
       }
@@ -35,8 +45,8 @@
       {
         "hooks": [
           {
-            "type": "command",
-            "command": "$HOME/space-channel-hook.sh"
+            "type": "http",
+            "url": "http://127.0.0.1:8788/hook"
           }
         ]
       }
@@ -45,8 +55,18 @@
       {
         "hooks": [
           {
-            "type": "command",
-            "command": "$HOME/space-channel-hook.sh"
+            "type": "http",
+            "url": "http://127.0.0.1:8788/hook"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://127.0.0.1:8788/hook"
           }
         ]
       }

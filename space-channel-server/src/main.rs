@@ -13,9 +13,14 @@ use sha1::Sha1;
 use std::{
     collections::{HashMap, VecDeque},
     net::SocketAddr,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::Duration,
 };
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::{broadcast, watch, RwLock};
+use tokio::time::{interval, timeout};
 use tracing::{info, warn, error};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -23,12 +28,12 @@ use tracing::{info, warn, error};
 #[serde(rename_all = "snake_case")]
 enum ClientMessage {
     Chat { text: String },
-    Register { session: String, project: String, task: String },
+    Register { session: String, #[serde(default)] task: String },
     Reply { session: String, id: String, text: String },
     Edit { session: String, id: String, text: String },
     ToolEvent {
         session: String,
-        project: String,
+        #[serde(default)]
         task: String,
         tool: String,
         #[serde(default)]
@@ -41,8 +46,6 @@ enum ClientMessage {
     Session {
         action: String,
         session: String,
-        #[serde(default)]
-        project: Option<String>,
         #[serde(default)]
         task: Option<String>,
     },
@@ -59,24 +62,48 @@ enum ClientMessage {
         request_id: String,
         behavior: String,
     },
+    Log {
+        session: String,
+        line: String,
+    },
+    Status {
+        session: String,
+        state: String,
+    },
+    Msg {
+        session: String,
+        text: String,
+        #[serde(default)]
+        id: String,
+        #[serde(default)]
+        from: String,
+    },
 }
 
 #[derive(Debug, Clone)]
 struct ChannelSession {
     session_id: String,
-    project: String,
     task: String,
 }
+
+static CONN_ID: AtomicU64 = AtomicU64::new(0);
+
+const PING_INTERVAL: Duration = Duration::from_secs(30);
+const PONG_TIMEOUT: Duration = Duration::from_secs(60);
 
 struct AppState {
     to_flutter: broadcast::Sender<String>,
     sessions: RwLock<HashMap<String, ChannelSession>>,
     session_senders: RwLock<HashMap<String, broadcast::Sender<String>>>,
+    session_conn_ids: RwLock<HashMap<String, u64>>,
+    session_cancel: RwLock<HashMap<String, watch::Sender<()>>>,
     message_history: RwLock<HashMap<String, VecDeque<String>>>,
+    session_logs: RwLock<HashMap<String, VecDeque<String>>>,
 }
 
 impl AppState {
     const MAX_HISTORY: usize = 20;
+    const MAX_LOGS: usize = 1000;
 
     fn new() -> Self {
         let (to_flutter, _) = broadcast::channel(256);
@@ -84,7 +111,10 @@ impl AppState {
             to_flutter,
             sessions: RwLock::new(HashMap::new()),
             session_senders: RwLock::new(HashMap::new()),
+            session_conn_ids: RwLock::new(HashMap::new()),
+            session_cancel: RwLock::new(HashMap::new()),
             message_history: RwLock::new(HashMap::new()),
+            session_logs: RwLock::new(HashMap::new()),
         }
     }
 
@@ -97,6 +127,15 @@ impl AppState {
         }
     }
 
+    async fn push_log(&self, session_id: &str, line: String) {
+        let mut logs = self.session_logs.write().await;
+        let buf = logs.entry(session_id.to_string()).or_insert_with(VecDeque::new);
+        buf.push_back(line);
+        if buf.len() > Self::MAX_LOGS {
+            buf.pop_front();
+        }
+    }
+
     async fn send_to_session(&self, session_id: &str, msg: String) {
         let senders = self.session_senders.read().await;
         if let Some(tx) = senders.get(session_id) {
@@ -104,6 +143,26 @@ impl AppState {
         } else {
             warn!("No session sender found for session: {session_id}");
         }
+    }
+
+    async fn ensure_webhook_session(&self, session_id: &str) -> bool {
+        let mut sessions = self.sessions.write().await;
+        if sessions.contains_key(session_id) {
+            return false;
+        }
+        sessions.insert(session_id.to_string(), ChannelSession {
+            session_id: session_id.to_string(),
+            task: String::new(),
+        });
+        let connect_event = serde_json::json!({
+            "type": "session",
+            "action": "connected",
+            "session": session_id,
+            "task": "",
+        });
+        let _ = self.to_flutter.send(connect_event.to_string());
+        info!(session = %session_id, "Webhook session auto-registered");
+        true
     }
 }
 
@@ -127,7 +186,6 @@ async fn handle_flutter_socket(socket: WebSocket, state: Arc<AppState>) {
                 "type": "session",
                 "action": "connected",
                 "session": &cs.session_id,
-                "project": &cs.project,
                 "task": &cs.task,
             });
             if sender.send(Message::Text(event.to_string().into())).await.is_err() {
@@ -248,10 +306,14 @@ async fn handle_channel_socket(socket: WebSocket, state: Arc<AppState>) {
 
     info!("SpaceChannel client connected, waiting for register...");
 
-    let first_msg = match receiver.next().await {
-        Some(Ok(Message::Text(text))) => text.to_string(),
-        _ => {
+    let first_msg = match timeout(Duration::from_secs(10), receiver.next()).await {
+        Ok(Some(Ok(Message::Text(text)))) => text.to_string(),
+        Ok(_) => {
             warn!("SpaceChannel disconnected before registering");
+            return;
+        }
+        Err(_) => {
+            warn!("SpaceChannel registration timed out (10s)");
             return;
         }
     };
@@ -261,50 +323,94 @@ async fn handle_channel_socket(socket: WebSocket, state: Arc<AppState>) {
         return;
     };
 
-    let ClientMessage::Register { session, project, task } = register else {
+    let ClientMessage::Register { session, task } = register else {
         warn!("SpaceChannel first message was not a register");
         return;
     };
 
     let channel_session = ChannelSession {
         session_id: session.clone(),
-        project: project.clone(),
         task: task.clone(),
     };
 
+    let conn_id = CONN_ID.fetch_add(1, Ordering::Relaxed);
+
     info!(
         session = %session,
-        project = %project,
         task = %task,
+        conn_id = conn_id,
         "SpaceChannel registered"
     );
 
-    let (session_tx, _) = broadcast::channel::<String>(64);
-    {
+    let (cancel_tx, cancel_rx) = watch::channel(());
+    let session_tx = {
         let mut sessions = state.sessions.write().await;
         sessions.insert(session.clone(), channel_session);
         let mut senders = state.session_senders.write().await;
+        let (session_tx, _) = broadcast::channel::<String>(64);
         senders.insert(session.clone(), session_tx.clone());
-    }
+        let mut conn_ids = state.session_conn_ids.write().await;
+        conn_ids.insert(session.clone(), conn_id);
+        let mut cancels = state.session_cancel.write().await;
+        if let Some(old_cancel) = cancels.insert(session.clone(), cancel_tx) {
+            let _ = old_cancel.send(());
+            info!(session = %session, "Cancelled previous connection");
+        }
+        session_tx
+    };
 
     let connect_event = serde_json::json!({
         "type": "session",
         "action": "connected",
         "session": &session,
-        "project": &project,
         "task": &task,
     });
     let _ = state.to_flutter.send(connect_event.to_string());
 
+    let ack = serde_json::json!({ "type": "register_ack" }).to_string();
+    if sender.send(Message::Text(ack.into())).await.is_err() {
+        warn!(session = %session, "Failed to send register_ack");
+        return;
+    }
+
     let mut session_rx = session_tx.subscribe();
+
+    let last_pong = Arc::new(RwLock::new(tokio::time::Instant::now()));
 
     let send_task = tokio::spawn({
         let session = session.clone();
+        let last_pong = last_pong.clone();
+        let mut cancel_rx = cancel_rx;
         async move {
+            let mut ping_interval = interval(PING_INTERVAL);
+            ping_interval.tick().await;
             loop {
-                let Some(msg) = session_rx.recv().await.ok() else { break };
-                if sender.send(Message::Text(msg.into())).await.is_err() {
-                    break;
+                tokio::select! {
+                    msg = session_rx.recv() => {
+                        let Some(msg) = msg.ok() else { break };
+                        if sender.send(Message::Text(msg.into())).await.is_err() {
+                            break;
+                        }
+                    }
+                    _ = ping_interval.tick() => {
+                        if sender.send(Message::Ping(vec![].into())).await.is_err() {
+                            info!(session = %session, "Ping send failed, client gone");
+                            break;
+                        }
+                        let elapsed = last_pong.read().await.elapsed();
+                        if elapsed > PONG_TIMEOUT {
+                            info!(session = %session, elapsed_secs = elapsed.as_secs(), "No pong received, timing out");
+                            break;
+                        }
+                    }
+                    _ = cancel_rx.changed() => {
+                        info!(session = %session, "Superseded, sending close 4001");
+                        let _ = sender.send(Message::Close(Some(axum::extract::ws::CloseFrame {
+                            code: 4001,
+                            reason: "superseded".into(),
+                        }))).await;
+                        break;
+                    }
                 }
             }
             session
@@ -314,10 +420,18 @@ async fn handle_channel_socket(socket: WebSocket, state: Arc<AppState>) {
     let recv_task = tokio::spawn({
         let state = state.clone();
         let session = session.clone();
-        let project = project.clone();
         let task = task.clone();
+        let last_pong = last_pong.clone();
         async move {
             while let Some(Ok(msg)) = receiver.next().await {
+                match &msg {
+                    Message::Pong(_) => {
+                        *last_pong.write().await = tokio::time::Instant::now();
+                        continue;
+                    }
+                    Message::Text(_) => {}
+                    _ => continue,
+                }
                 let Message::Text(text) = msg else { continue };
                 let text_str: &str = &text;
                 let Ok(parsed) = serde_json::from_str::<ClientMessage>(text_str) else {
@@ -330,7 +444,6 @@ async fn handle_channel_socket(socket: WebSocket, state: Arc<AppState>) {
                             "type": "msg",
                             "from": "assistant",
                             "session": &session,
-                            "project": &project,
                             "task": &task,
                             "id": id,
                             "text": text,
@@ -353,7 +466,6 @@ async fn handle_channel_socket(socket: WebSocket, state: Arc<AppState>) {
                         let forward = serde_json::json!({
                             "type": "tool_event",
                             "session": &session,
-                            "project": &project,
                             "task": &task,
                             "tool": tool,
                             "input": input,
@@ -366,7 +478,6 @@ async fn handle_channel_socket(socket: WebSocket, state: Arc<AppState>) {
                         let forward = serde_json::json!({
                             "type": "permission_request",
                             "session": &session,
-                            "project": &project,
                             "task": &task,
                             "request_id": request_id,
                             "tool_name": tool_name,
@@ -375,6 +486,47 @@ async fn handle_channel_socket(socket: WebSocket, state: Arc<AppState>) {
                         });
                         let _ = state.to_flutter.send(forward.to_string());
                         info!(session = %session, request_id = %request_id, tool = %tool_name, "Permission request forwarded to Flutter");
+                    }
+                    ClientMessage::Log { line, .. } => {
+                        state.push_log(&session, line).await;
+                    }
+                    ClientMessage::Status { state: status_state, .. } => {
+                        if status_state == "disconnected" {
+                            let mut sessions = state.sessions.write().await;
+                            sessions.remove(&session);
+                            let mut history = state.message_history.write().await;
+                            history.remove(&session);
+                            let disconnect_event = serde_json::json!({
+                                "type": "session",
+                                "action": "disconnected",
+                                "session": &session,
+                            });
+                            let _ = state.to_flutter.send(disconnect_event.to_string());
+                            info!(session = %session, "WS session disconnected via status");
+                        } else {
+                            let forward = serde_json::json!({
+                                "type": "status",
+                                "session": &session,
+                                "state": status_state,
+                            });
+                            let _ = state.to_flutter.send(forward.to_string());
+                            info!(session = %session, state = %status_state, "WS status forwarded to Flutter");
+                        }
+                    }
+                    ClientMessage::Msg { text, id, from, .. } => {
+                        let forward = serde_json::json!({
+                            "type": "msg",
+                            "from": from,
+                            "session": &session,
+                            "task": &task,
+                            "id": id,
+                            "text": text,
+                            "ts": chrono_ts(),
+                        });
+                        let msg_str = forward.to_string();
+                        state.push_history(&session, msg_str.clone()).await;
+                        let _ = state.to_flutter.send(msg_str);
+                        info!(session = %session, "WS msg forwarded to Flutter");
                     }
                     _ => {}
                 }
@@ -387,21 +539,30 @@ async fn handle_channel_socket(socket: WebSocket, state: Arc<AppState>) {
         _ = recv_task => {},
     }
 
-    {
+    let is_current = {
+        let conn_ids = state.session_conn_ids.read().await;
+        conn_ids.get(&session).copied() == Some(conn_id)
+    };
+
+    if is_current {
         let mut sessions = state.sessions.write().await;
         sessions.remove(&session);
         let mut senders = state.session_senders.write().await;
         senders.remove(&session);
+        let mut conn_ids = state.session_conn_ids.write().await;
+        conn_ids.remove(&session);
+        let mut cancels = state.session_cancel.write().await;
+        cancels.remove(&session);
+
+        let disconnect_event = serde_json::json!({
+            "type": "session",
+            "action": "disconnected",
+            "session": &session,
+        });
+        let _ = state.to_flutter.send(disconnect_event.to_string());
     }
 
-    let disconnect_event = serde_json::json!({
-        "type": "session",
-        "action": "disconnected",
-        "session": &session,
-    });
-    let _ = state.to_flutter.send(disconnect_event.to_string());
-
-    info!(session = %session, "SpaceChannel disconnected");
+    info!(session = %session, conn_id = conn_id, is_current = is_current, "SpaceChannel disconnected");
 }
 
 async fn webhook_handler(
@@ -417,61 +578,6 @@ async fn webhook_handler(
 
     let parsed = serde_json::from_str::<serde_json::Value>(&body);
 
-    let msg_type = parsed.as_ref().ok()
-        .and_then(|j| j["type"].as_str())
-        .unwrap_or("webhook")
-        .to_string();
-
-    if msg_type == "msg" {
-        let session = parsed.as_ref().ok()
-            .and_then(|j| j["session"].as_str())
-            .unwrap_or("")
-            .to_string();
-        let text = parsed.as_ref().ok()
-            .and_then(|j| j["text"].as_str())
-            .unwrap_or("")
-            .to_string();
-        let id = parsed.as_ref().ok()
-            .and_then(|j| j["id"].as_str())
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| format!("hook-{}", chrono_ts()));
-        let ts = chrono_ts();
-        let flutter_event = serde_json::json!({
-            "type": "msg",
-            "from": "assistant",
-            "session": session,
-            "id": id,
-            "text": text,
-            "ts": ts,
-        });
-        let msg_str = flutter_event.to_string();
-        if !session.is_empty() {
-            state.push_history(&session, msg_str.clone()).await;
-        }
-        let _ = state.to_flutter.send(msg_str);
-        info!(session = %session, "Hook msg forwarded to Flutter");
-        return "ok";
-    }
-
-    if msg_type == "status" {
-        let session = parsed.as_ref().ok()
-            .and_then(|j| j["session"].as_str())
-            .unwrap_or("")
-            .to_string();
-        let status_state = parsed.as_ref().ok()
-            .and_then(|j| j["state"].as_str())
-            .unwrap_or("")
-            .to_string();
-        let flutter_event = serde_json::json!({
-            "type": "status",
-            "session": session,
-            "state": status_state,
-        });
-        let _ = state.to_flutter.send(flutter_event.to_string());
-        info!(session = %session, state = %status_state, "Status forwarded to Flutter");
-        return "ok";
-    }
-
     let (source, text, target_session) = match parsed {
         Ok(json) => {
             let src = json["source"].as_str().unwrap_or(&header_source).to_string();
@@ -483,6 +589,10 @@ async fn webhook_handler(
     };
 
     let ts = chrono_ts();
+
+    if let Some(session_name) = &target_session {
+        state.ensure_webhook_session(session_name).await;
+    }
 
     let flutter_event = serde_json::json!({
         "type": "webhook",
@@ -629,6 +739,20 @@ fn format_trello_comment_event(payload: &serde_json::Value) -> Option<String> {
     Some(format!("{member} commented on \"{card_name}\": {preview}"))
 }
 
+async fn logs_handler(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Path(session): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    let logs = state.session_logs.read().await;
+    match logs.get(&session) {
+        Some(buf) => {
+            let lines: Vec<&str> = buf.iter().map(|s| s.as_str()).collect();
+            lines.join("\n")
+        }
+        None => format!("No logs for session: {session}"),
+    }
+}
+
 fn chrono_ts() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -653,6 +777,7 @@ async fn main() {
     let webhook_app = Router::new()
         .route("/webhook", axum::routing::post(webhook_handler))
         .route("/trello-webhook", axum::routing::head(trello_webhook_head).post(trello_webhook_post))
+        .route("/logs/{session}", axum::routing::get(logs_handler))
         .with_state(state.clone());
 
     let flutter_addr = SocketAddr::from(([0, 0, 0, 0], 5054));

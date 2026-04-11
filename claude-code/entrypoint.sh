@@ -2,7 +2,6 @@
 set -e
 
 export SPACE_CHANNEL_SESSION="${SPACE_CHANNEL_SESSION:-note-assistant}"
-export SPACE_CHANNEL_WEBHOOK="${SPACE_CHANNEL_WEBHOOK:-http://spacenotes:5056/webhook}"
 
 mkdir -p $HOME/.claude
 

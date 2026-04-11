@@ -7,12 +7,13 @@
     "space-channel": {
       "command": "bun",
       "args": [
-        "/home/claude/space-channel/space-channel.ts",
-        "--server", "ws://spacenotes:5055/ws",
-        "--project", "SpaceNotes",
-        "--task", "note-assistant",
-        "--session", "note-assistant"
-      ]
+        "/home/claude/space-channel/space-channel.ts"
+      ],
+      "env": {
+        "SPACE_CHANNEL_SESSION": "note-assistant",
+        "SPACE_CHANNEL_SERVER": "ws://spacenotes:5055/ws",
+        "SPACE_CHANNEL_HOOK_PORT": "8788"
+      }
     }
   }
 }
