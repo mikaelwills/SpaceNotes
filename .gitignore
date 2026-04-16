@@ -2,6 +2,10 @@
 spacetime-module/target/
 client-web/assets/NOTICES
 
+# SpaceChannel build artifacts (rebuilt by deploy-channel-server-local.sh)
+space-channel/space-channel
+space-channel/space-channel-linux
+
 # Personal config (not committed)
 CLAUDE.md
 PLAN.md
