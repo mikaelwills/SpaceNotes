@@ -7,8 +7,13 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import * as z from "zod/v4";
 import { existsSync, readFileSync, writeFileSync, unlinkSync, appendFileSync } from "fs";
+import { hostname } from "os";
+import { randomUUID } from "crypto";
 
 const args = parseArgs();
+const HOST = hostname().split(".")[0];
+const CLIENT_ID = randomUUID();
+const PARENT_DEATH_POLL_MS = 2000;
 
 let ws: WebSocket | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -125,9 +130,23 @@ mcp.setNotificationHandler(
 await mcp.connect(new StdioServerTransport());
 
 killPreviousInstance();
+startParentDeathWatcher();
 connectToServer();
 
 await startHookServer();
+
+function startParentDeathWatcher() {
+  const startingPpid = process.ppid;
+  setInterval(() => {
+    const ppid = process.ppid;
+    if (ppid === 1 && startingPpid !== 1) {
+      log(`Parent died (ppid=1, was ${startingPpid}), exiting cleanly`);
+      try { ws?.close(1000, "parent-died"); } catch {}
+      cleanup();
+      process.exit(0);
+    }
+  }, PARENT_DEATH_POLL_MS).unref();
+}
 
 function parseArgs() {
   const serverUrl =
@@ -157,6 +176,8 @@ function connectToServer() {
       type: "register",
       session: args.session,
       task: args.task,
+      host: HOST,
+      client_id: CLIENT_ID,
     });
     if (reconnectTimer) {
       clearTimeout(reconnectTimer);
@@ -299,8 +320,6 @@ async function startHookServer() {
           sendToServer({ type: "msg", session: args.session, text: message, id, from: "assistant" });
         }
         sendToServer({ type: "status", session: args.session, state: "idle" });
-      } else if (hookEvent === "SessionEnd") {
-        sendToServer({ type: "status", session: args.session, state: "disconnected" });
       } else if (hookEvent === "PreToolUse" || hookEvent === "PostToolUse" || hookEvent === "PostToolUseFailure") {
         sendToServer({
           type: "tool_event",

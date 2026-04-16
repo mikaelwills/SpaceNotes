@@ -28,7 +28,12 @@ use tracing::{info, warn, error};
 #[serde(rename_all = "snake_case")]
 enum ClientMessage {
     Chat { text: String },
-    Register { session: String, #[serde(default)] task: String },
+    Register {
+        session: String,
+        #[serde(default)] task: String,
+        #[serde(default)] host: String,
+        #[serde(default)] client_id: String,
+    },
     Reply { session: String, id: String, text: String },
     Edit { session: String, id: String, text: String },
     ToolEvent {
@@ -84,6 +89,12 @@ enum ClientMessage {
 struct ChannelSession {
     session_id: String,
     task: String,
+    host: String,
+    client_id: String,
+}
+
+fn session_key(session: &str, host: &str) -> String {
+    if host.is_empty() { session.to_string() } else { format!("{session}@{host}") }
 }
 
 static CONN_ID: AtomicU64 = AtomicU64::new(0);
@@ -92,6 +103,13 @@ const PING_INTERVAL: Duration = Duration::from_secs(30);
 const PONG_TIMEOUT: Duration = Duration::from_secs(60);
 const HISTORY_TTL: Duration = Duration::from_secs(60 * 60 * 48);
 const HISTORY_SWEEP_INTERVAL: Duration = Duration::from_secs(60 * 60);
+const ACTIVITY_STALE: Duration = Duration::from_secs(120);
+
+struct SessionActivity {
+    state: String,
+    last_tool_event: Option<String>,
+    updated_at: Instant,
+}
 
 struct AppState {
     to_flutter: broadcast::Sender<String>,
@@ -102,6 +120,7 @@ struct AppState {
     message_history: RwLock<HashMap<String, VecDeque<String>>>,
     history_last_write: RwLock<HashMap<String, Instant>>,
     session_logs: RwLock<HashMap<String, VecDeque<String>>>,
+    session_activity: RwLock<HashMap<String, SessionActivity>>,
 }
 
 impl AppState {
@@ -119,6 +138,7 @@ impl AppState {
             message_history: RwLock::new(HashMap::new()),
             history_last_write: RwLock::new(HashMap::new()),
             session_logs: RwLock::new(HashMap::new()),
+            session_activity: RwLock::new(HashMap::new()),
         }
     }
 
@@ -170,12 +190,20 @@ impl AppState {
         }
     }
 
-    async fn send_to_session(&self, session_id: &str, msg: String) {
+    async fn send_to_session(&self, key: &str, msg: String) {
         let senders = self.session_senders.read().await;
-        if let Some(tx) = senders.get(session_id) {
+        if let Some(tx) = senders.get(key) {
             let _ = tx.send(msg);
-        } else {
-            warn!("No session sender found for session: {session_id}");
+            return;
+        }
+        let prefix = format!("{key}@");
+        let matches: Vec<_> = senders.iter().filter(|(k, _)| k.starts_with(&prefix)).collect();
+        if matches.is_empty() {
+            warn!("No session sender found for key: {key}");
+            return;
+        }
+        for (_, tx) in matches {
+            let _ = tx.send(msg.clone());
         }
     }
 
@@ -187,12 +215,15 @@ impl AppState {
         sessions.insert(session_id.to_string(), ChannelSession {
             session_id: session_id.to_string(),
             task: String::new(),
+            host: String::new(),
+            client_id: String::new(),
         });
         let connect_event = serde_json::json!({
             "type": "session",
             "action": "connected",
             "session": session_id,
             "task": "",
+            "host": "",
         });
         let _ = self.to_flutter.send(connect_event.to_string());
         info!(session = %session_id, "Webhook session auto-registered");
@@ -221,13 +252,15 @@ async fn handle_flutter_socket(socket: WebSocket, state: Arc<AppState>) {
                 "action": "connected",
                 "session": &cs.session_id,
                 "task": &cs.task,
+                "host": &cs.host,
             });
             if sender.send(Message::Text(event.to_string().into())).await.is_err() {
                 info!("Flutter client disconnected during session sync");
                 return;
             }
 
-            if let Some(buf) = history.get(&cs.session_id) {
+            let key = session_key(&cs.session_id, &cs.host);
+            if let Some(buf) = history.get(&key) {
                 if !buf.is_empty() {
                     let messages: Vec<serde_json::Value> = buf.iter()
                         .filter_map(|m| serde_json::from_str(m).ok())
@@ -235,6 +268,7 @@ async fn handle_flutter_socket(socket: WebSocket, state: Arc<AppState>) {
                     let batch = serde_json::json!({
                         "type": "history_batch",
                         "session": &cs.session_id,
+                        "host": &cs.host,
                         "messages": messages,
                     });
                     if sender.send(Message::Text(batch.to_string().into())).await.is_err() {
@@ -245,6 +279,35 @@ async fn handle_flutter_socket(socket: WebSocket, state: Arc<AppState>) {
             }
         }
         info!("Sent {} existing sessions to Flutter client", sessions.len());
+    }
+
+    {
+        let activity_map = state.session_activity.read().await;
+        for (key, activity) in activity_map.iter() {
+            if activity.updated_at.elapsed() > ACTIVITY_STALE {
+                continue;
+            }
+            let (session_id, host_id) = match key.split_once('@') {
+                Some((s, h)) => (s, h),
+                None => (key.as_str(), ""),
+            };
+            let status_event = serde_json::json!({
+                "type": "status",
+                "session": session_id,
+                "host": host_id,
+                "state": &activity.state,
+            });
+            if sender.send(Message::Text(status_event.to_string().into())).await.is_err() {
+                info!("Flutter client disconnected during activity rebroadcast");
+                return;
+            }
+            if let Some(tool_json) = &activity.last_tool_event {
+                if sender.send(Message::Text(tool_json.clone().into())).await.is_err() {
+                    info!("Flutter client disconnected during activity rebroadcast");
+                    return;
+                }
+            }
+        }
     }
 
     let mut flutter_rx = state.to_flutter.subscribe();
@@ -275,6 +338,7 @@ async fn handle_flutter_socket(socket: WebSocket, state: Arc<AppState>) {
                 "chat" | "msg" | "" => {
                     if !text.is_empty() || raw.get("image_base64").is_some() {
                         let target_session = raw.get("session").and_then(|v| v.as_str()).unwrap_or("");
+                        let target_host = raw.get("host").and_then(|v| v.as_str()).unwrap_or("");
                         let mut forward = serde_json::json!({
                             "type": "chat",
                             "text": text,
@@ -292,13 +356,15 @@ async fn handle_flutter_socket(socket: WebSocket, state: Arc<AppState>) {
                             }
                             info!("Broadcast Flutter message to all sessions: {text}");
                         } else {
-                            state_clone.send_to_session(target_session, forward.to_string()).await;
-                            info!("Routed Flutter message to session {target_session}: {text}");
+                            let key = session_key(target_session, target_host);
+                            state_clone.send_to_session(&key, forward.to_string()).await;
+                            info!("Routed Flutter message to session {key}: {text}");
                         }
                     }
                 }
                 "permission_response" => {
                     let target_session = raw.get("session").and_then(|v| v.as_str()).unwrap_or("");
+                    let target_host = raw.get("host").and_then(|v| v.as_str()).unwrap_or("");
                     let request_id = raw.get("request_id").and_then(|v| v.as_str()).unwrap_or("");
                     let behavior = raw.get("behavior").and_then(|v| v.as_str()).unwrap_or("deny");
                     if target_session.is_empty() || request_id.is_empty() {
@@ -310,8 +376,9 @@ async fn handle_flutter_socket(socket: WebSocket, state: Arc<AppState>) {
                         "request_id": request_id,
                         "behavior": behavior,
                     });
-                    state_clone.send_to_session(target_session, forward.to_string()).await;
-                    info!(session = %target_session, request_id = %request_id, behavior = %behavior, "Permission response routed to session");
+                    let key = session_key(target_session, target_host);
+                    state_clone.send_to_session(&key, forward.to_string()).await;
+                    info!(session = %key, request_id = %request_id, behavior = %behavior, "Permission response routed to session");
                 }
                 _ => {
                     warn!("Flutter sent unknown message type: {msg_type}");
@@ -357,49 +424,71 @@ async fn handle_channel_socket(socket: WebSocket, state: Arc<AppState>) {
         return;
     };
 
-    let ClientMessage::Register { session, task } = register else {
+    let ClientMessage::Register { session, task, host, client_id } = register else {
         warn!("SpaceChannel first message was not a register");
         return;
     };
 
+    let key = session_key(&session, &host);
+
     let channel_session = ChannelSession {
         session_id: session.clone(),
         task: task.clone(),
+        host: host.clone(),
+        client_id: client_id.clone(),
     };
 
     let conn_id = CONN_ID.fetch_add(1, Ordering::Relaxed);
 
+    let same_client = {
+        let sessions = state.sessions.read().await;
+        sessions.get(&key).map(|cs| !cs.client_id.is_empty() && cs.client_id == client_id).unwrap_or(false)
+    };
+
     info!(
         session = %session,
         task = %task,
+        host = %host,
+        client_id = %client_id,
         conn_id = conn_id,
+        same_client = same_client,
         "SpaceChannel registered"
     );
 
     let (cancel_tx, cancel_rx) = watch::channel(());
     let session_tx = {
         let mut sessions = state.sessions.write().await;
-        sessions.insert(session.clone(), channel_session);
+        sessions.insert(key.clone(), channel_session);
         let mut senders = state.session_senders.write().await;
-        let (session_tx, _) = broadcast::channel::<String>(64);
-        senders.insert(session.clone(), session_tx.clone());
+        let session_tx = senders.get(&key).cloned().unwrap_or_else(|| {
+            let (tx, _) = broadcast::channel::<String>(64);
+            tx
+        });
+        senders.insert(key.clone(), session_tx.clone());
         let mut conn_ids = state.session_conn_ids.write().await;
-        conn_ids.insert(session.clone(), conn_id);
+        conn_ids.insert(key.clone(), conn_id);
         let mut cancels = state.session_cancel.write().await;
-        if let Some(old_cancel) = cancels.insert(session.clone(), cancel_tx) {
+        if let Some(old_cancel) = cancels.insert(key.clone(), cancel_tx) {
+            if same_client {
+                info!(session = %session, host = %host, "Silent takeover (same client_id), not broadcasting supersede");
+            } else {
+                info!(session = %session, host = %host, "Cancelled previous connection (different client_id)");
+            }
             let _ = old_cancel.send(());
-            info!(session = %session, "Cancelled previous connection");
         }
         session_tx
     };
 
-    let connect_event = serde_json::json!({
-        "type": "session",
-        "action": "connected",
-        "session": &session,
-        "task": &task,
-    });
-    let _ = state.to_flutter.send(connect_event.to_string());
+    if !same_client {
+        let connect_event = serde_json::json!({
+            "type": "session",
+            "action": "connected",
+            "session": &session,
+            "task": &task,
+            "host": &host,
+        });
+        let _ = state.to_flutter.send(connect_event.to_string());
+    }
 
     let ack = serde_json::json!({ "type": "register_ack" }).to_string();
     if sender.send(Message::Text(ack.into())).await.is_err() {
@@ -455,6 +544,8 @@ async fn handle_channel_socket(socket: WebSocket, state: Arc<AppState>) {
         let state = state.clone();
         let session = session.clone();
         let task = task.clone();
+        let host = host.clone();
+        let key = key.clone();
         let last_pong = last_pong.clone();
         async move {
             while let Some(Ok(msg)) = receiver.next().await {
@@ -479,18 +570,20 @@ async fn handle_channel_socket(socket: WebSocket, state: Arc<AppState>) {
                             "from": "assistant",
                             "session": &session,
                             "task": &task,
+                            "host": &host,
                             "id": id,
                             "text": text,
                             "ts": chrono_ts(),
                         });
                         let msg_str = forward.to_string();
-                        state.push_history(&session, msg_str.clone()).await;
+                        state.push_history(&key, msg_str.clone()).await;
                         let _ = state.to_flutter.send(msg_str);
                     }
                     ClientMessage::Edit { id, text, .. } => {
                         let forward = serde_json::json!({
                             "type": "edit",
                             "session": &session,
+                            "host": &host,
                             "id": id,
                             "text": text,
                         });
@@ -501,18 +594,29 @@ async fn handle_channel_socket(socket: WebSocket, state: Arc<AppState>) {
                             "type": "tool_event",
                             "session": &session,
                             "task": &task,
+                            "host": &host,
                             "tool": tool,
                             "input": input,
                             "hook_event": hook_event.as_deref().unwrap_or("PreToolUse"),
                             "ts": chrono_ts(),
                         });
-                        let _ = state.to_flutter.send(forward.to_string());
+                        let forward_str = forward.to_string();
+                        let _ = state.to_flutter.send(forward_str.clone());
+                        {
+                            let mut activity = state.session_activity.write().await;
+                            activity.insert(key.clone(), SessionActivity {
+                                state: "tool_use".to_string(),
+                                last_tool_event: Some(forward_str),
+                                updated_at: Instant::now(),
+                            });
+                        }
                     }
                     ClientMessage::PermissionRequest { request_id, tool_name, description, input_preview, .. } => {
                         let forward = serde_json::json!({
                             "type": "permission_request",
                             "session": &session,
                             "task": &task,
+                            "host": &host,
                             "request_id": request_id,
                             "tool_name": tool_name,
                             "description": description,
@@ -522,27 +626,25 @@ async fn handle_channel_socket(socket: WebSocket, state: Arc<AppState>) {
                         info!(session = %session, request_id = %request_id, tool = %tool_name, "Permission request forwarded to Flutter");
                     }
                     ClientMessage::Log { line, .. } => {
-                        state.push_log(&session, line).await;
+                        state.push_log(&key, line).await;
                     }
                     ClientMessage::Status { state: status_state, .. } => {
-                        if status_state == "disconnected" {
-                            let mut sessions = state.sessions.write().await;
-                            sessions.remove(&session);
-                            let disconnect_event = serde_json::json!({
-                                "type": "session",
-                                "action": "disconnected",
-                                "session": &session,
+                        let forward = serde_json::json!({
+                            "type": "status",
+                            "session": &session,
+                            "host": &host,
+                            "state": &status_state,
+                        });
+                        let _ = state.to_flutter.send(forward.to_string());
+                        info!(session = %session, state = %status_state, "WS status forwarded to Flutter");
+                        {
+                            let mut activity = state.session_activity.write().await;
+                            let prior_tool = activity.get(&key).and_then(|a| a.last_tool_event.clone());
+                            activity.insert(key.clone(), SessionActivity {
+                                state: status_state,
+                                last_tool_event: prior_tool,
+                                updated_at: Instant::now(),
                             });
-                            let _ = state.to_flutter.send(disconnect_event.to_string());
-                            info!(session = %session, "WS session disconnected via status");
-                        } else {
-                            let forward = serde_json::json!({
-                                "type": "status",
-                                "session": &session,
-                                "state": status_state,
-                            });
-                            let _ = state.to_flutter.send(forward.to_string());
-                            info!(session = %session, state = %status_state, "WS status forwarded to Flutter");
                         }
                     }
                     ClientMessage::Msg { text, id, from, .. } => {
@@ -551,12 +653,13 @@ async fn handle_channel_socket(socket: WebSocket, state: Arc<AppState>) {
                             "from": from,
                             "session": &session,
                             "task": &task,
+                            "host": &host,
                             "id": id,
                             "text": text,
                             "ts": chrono_ts(),
                         });
                         let msg_str = forward.to_string();
-                        state.push_history(&session, msg_str.clone()).await;
+                        state.push_history(&key, msg_str.clone()).await;
                         let _ = state.to_flutter.send(msg_str);
                         info!(session = %session, "WS msg forwarded to Flutter");
                     }
@@ -573,28 +676,31 @@ async fn handle_channel_socket(socket: WebSocket, state: Arc<AppState>) {
 
     let is_current = {
         let conn_ids = state.session_conn_ids.read().await;
-        conn_ids.get(&session).copied() == Some(conn_id)
+        conn_ids.get(&key).copied() == Some(conn_id)
     };
 
     if is_current {
         let mut sessions = state.sessions.write().await;
-        sessions.remove(&session);
+        sessions.remove(&key);
         let mut senders = state.session_senders.write().await;
-        senders.remove(&session);
+        senders.remove(&key);
         let mut conn_ids = state.session_conn_ids.write().await;
-        conn_ids.remove(&session);
+        conn_ids.remove(&key);
         let mut cancels = state.session_cancel.write().await;
-        cancels.remove(&session);
+        cancels.remove(&key);
+        let mut activity = state.session_activity.write().await;
+        activity.remove(&key);
 
         let disconnect_event = serde_json::json!({
             "type": "session",
             "action": "disconnected",
             "session": &session,
+            "host": &host,
         });
         let _ = state.to_flutter.send(disconnect_event.to_string());
     }
 
-    info!(session = %session, conn_id = conn_id, is_current = is_current, "SpaceChannel disconnected");
+    info!(session = %session, host = %host, conn_id = conn_id, is_current = is_current, "SpaceChannel disconnected");
 }
 
 async fn webhook_handler(
@@ -776,13 +882,25 @@ async fn logs_handler(
     axum::extract::Path(session): axum::extract::Path<String>,
 ) -> impl IntoResponse {
     let logs = state.session_logs.read().await;
-    match logs.get(&session) {
-        Some(buf) => {
-            let lines: Vec<&str> = buf.iter().map(|s| s.as_str()).collect();
-            lines.join("\n")
-        }
-        None => format!("No logs for session: {session}"),
+    if let Some(buf) = logs.get(&session) {
+        let lines: Vec<&str> = buf.iter().map(|s| s.as_str()).collect();
+        return lines.join("\n");
     }
+    let prefix = format!("{session}@");
+    let mut matches: Vec<(&String, &VecDeque<String>)> = logs.iter().filter(|(k, _)| k.starts_with(&prefix)).collect();
+    if matches.is_empty() {
+        return format!("No logs for session: {session}");
+    }
+    matches.sort_by(|a, b| a.0.cmp(b.0));
+    let mut out = String::new();
+    for (k, buf) in matches {
+        out.push_str(&format!("=== {k} ===\n"));
+        for line in buf {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    out
 }
 
 fn chrono_ts() -> u64 {
