@@ -6,6 +6,8 @@ const CASE_CONVERSION_POLICY: CaseConversionPolicy = CaseConversionPolicy::None;
 mod call_reducers;
 mod folder_reducers;
 mod note_reducers;
+mod space_channel_reducers;
+mod space_channel_tables;
 
 // =============================================================================
 // Tables

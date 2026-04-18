@@ -43,11 +43,6 @@ echo "Starting MCP server..."
 spacenotes-mcp &
 MCP_PID=$!
 
-# Start SpaceChannelServer in background
-echo "Starting SpaceChannelServer..."
-space-channel-server &
-CHANNEL_PID=$!
-
 # Start the sync daemon (foreground - keeps container running)
 echo "Starting sync daemon..."
 spacenotes \
@@ -57,9 +52,9 @@ spacenotes \
 DAEMON_PID=$!
 
 # Wait for any process to exit
-wait -n $STDB_PID $MCP_PID $CHANNEL_PID $DAEMON_PID
+wait -n $STDB_PID $MCP_PID $DAEMON_PID
 
 # If any process exits, kill the others and exit
 echo "A process exited, shutting down..."
-kill $STDB_PID $MCP_PID $CHANNEL_PID $DAEMON_PID 2>/dev/null
+kill $STDB_PID $MCP_PID $DAEMON_PID 2>/dev/null
 exit 1

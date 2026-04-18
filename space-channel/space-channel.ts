@@ -6,26 +6,30 @@ import {
   CallToolRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import * as z from "zod/v4";
-import { existsSync, readFileSync, writeFileSync, unlinkSync, appendFileSync } from "fs";
-import { hostname } from "os";
+import { appendFileSync, mkdirSync, writeFileSync, readdirSync, statSync, unlinkSync } from "fs";
+import { hostname, homedir } from "os";
+import { join } from "path";
 import { randomUUID } from "crypto";
+import { DbConnection } from "./generated";
+import type { Message, MessageImage, PermissionRequest } from "./generated/types";
 
 const args = parseArgs();
-const HOST = hostname().split(".")[0];
+const HOST = hostname().split(".")[0] ?? "unknown";
 const CLIENT_ID = randomUUID();
-const PARENT_DEATH_POLL_MS = 2000;
+const SESSION_ID = `${args.session}@${HOST}`;
+const HEARTBEAT_MS = 20_000;
+const LOG_FILE = `/tmp/space-channel-${args.session}.log`;
+const INBOX_DIR = join(homedir(), ".claude", "channels", "space-channel", "inbox");
+const INBOX_TTL_MS = 48 * 60 * 60 * 1000;
 
-let ws: WebSocket | null = null;
-let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-let hookServerPort: number | null = null;
-let registered = false;
-let reconnectDelay = 3000;
-const RECONNECT_BASE = 3000;
-const RECONNECT_MAX = 60000;
-const PID_FILE = `/tmp/space-channel-${args.session}.pid`;
+let conn: DbConnection | null = null;
+let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+const pendingPermissions = new Map<string, (behavior: string) => void>();
+const pendingImages = new Map<string, MessageImage>();
+const pendingMessages = new Map<string, Message>();
 
 const mcp = new Server(
-  { name: "space-channel", version: "0.1.0" },
+  { name: "space-channel", version: "0.2.0" },
   {
     capabilities: {
       experimental: { "claude/channel": {}, "claude/channel/permission": {} },
@@ -35,6 +39,7 @@ const mcp = new Server(
       "The user reads the SpaceNotes app, not this terminal session.",
       "Anything you want them to see MUST go through the reply tool — your transcript output never reaches the app.",
       'Messages from the user arrive as <channel source="space-channel" ...>.',
+      "If the tag has a file_path attribute, Read that file — it is an image from the user.",
       "Reply using the reply tool. Use edit_message to update a previous reply by id.",
     ].join(" "),
   }
@@ -69,33 +74,30 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
 }));
 
 mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
+  if (!conn) {
+    return { content: [{ type: "text" as const, text: "FAILED: not connected to SpacetimeDB" }], isError: true };
+  }
+
   if (req.params.name === "reply") {
     const { text } = req.params.arguments as { text: string };
     const id = `reply-${Date.now()}`;
-    const sent = sendToServer({
-      type: "reply",
-      session: args.session,
-      id,
-      text,
-    });
-    if (!sent) {
-      return { content: [{ type: "text" as const, text: "FAILED: WebSocket not connected — message not delivered" }], isError: true };
+    try {
+      await conn.reducers.pushMessage({ id, sessionId: SESSION_ID, role: "assistant", text, source: "mcp" });
+      conn.reducers.pushStatus({ sessionId: SESSION_ID, state: "idle" });
+      return { content: [{ type: "text" as const, text: `sent (id: ${id})` }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: `FAILED: ${e}` }], isError: true };
     }
-    return { content: [{ type: "text" as const, text: `sent (id: ${id})` }] };
   }
 
   if (req.params.name === "edit_message") {
     const { id, text } = req.params.arguments as { id: string; text: string };
-    const sent = sendToServer({
-      type: "edit",
-      session: args.session,
-      id,
-      text,
-    });
-    if (!sent) {
-      return { content: [{ type: "text" as const, text: "FAILED: WebSocket not connected — edit not delivered" }], isError: true };
+    try {
+      await conn.reducers.editMessage({ id, text });
+      return { content: [{ type: "text" as const, text: "edited" }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: `FAILED: ${e}` }], isError: true };
     }
-    return { content: [{ type: "text" as const, text: "edited" }] };
   }
 
   throw new Error(`unknown tool: ${req.params.name}`);
@@ -111,51 +113,39 @@ const PermissionRequestSchema = z.object({
   }).optional(),
 });
 
-mcp.setNotificationHandler(
-  PermissionRequestSchema,
-  async (notification) => {
-    const params = notification.params || {};
-    sendToServer({
-      type: "permission_request",
-      session: args.session,
-      task: args.task,
-      request_id: params.request_id,
-      tool_name: params.tool_name,
-      description: params.description,
-      input_preview: params.input_preview,
+mcp.setNotificationHandler(PermissionRequestSchema, async (notification) => {
+  if (!conn) return;
+  const params = notification.params || {};
+  const requestId = params.request_id || randomUUID();
+  const input = JSON.stringify({
+    description: params.description,
+    input_preview: params.input_preview,
+  });
+
+  try {
+    await conn.reducers.requestPermission({
+      id: requestId,
+      sessionId: SESSION_ID,
+      tool: params.tool_name || "unknown",
+      input,
     });
+  } catch (e) {
+    log(`requestPermission failed: ${e}`);
   }
-);
+});
 
 await mcp.connect(new StdioServerTransport());
 
-killPreviousInstance();
-startParentDeathWatcher();
-connectToServer();
-
-await startHookServer();
-
-function startParentDeathWatcher() {
-  const startingPpid = process.ppid;
-  setInterval(() => {
-    const ppid = process.ppid;
-    if (ppid === 1 && startingPpid !== 1) {
-      log(`Parent died (ppid=1, was ${startingPpid}), exiting cleanly`);
-      try { ws?.close(1000, "parent-died"); } catch {}
-      cleanup();
-      process.exit(0);
-    }
-  }, PARENT_DEATH_POLL_MS).unref();
-}
+sweepInbox();
+connectToStdb();
+startHookServer();
 
 function parseArgs() {
-  const serverUrl =
-    getArg("--server") || process.env.SPACE_CHANNEL_SERVER || "ws://127.0.0.1:5055/ws";
-  const task = getArg("--task") || process.env.SPACE_CHANNEL_TASK || "default";
+  const stdbUri = getArg("--stdb-uri") || process.env.SPACE_CHANNEL_STDB_URI || "ws://127.0.0.1:5050";
+  const stdbDb = getArg("--stdb-db") || process.env.SPACE_CHANNEL_STDB_DB || "spacenotes";
   const session = getArg("--session") || process.env.SPACE_CHANNEL_SESSION || `session-${Date.now()}`;
-  const hookPort = parseInt(getArg("--hook-port") || process.env.SPACE_CHANNEL_HOOK_PORT || "0");
-
-  return { serverUrl, task, session, hookPort };
+  const hookPort = parseInt(getArg("--hook-port") ?? process.env.SPACE_CHANNEL_HOOK_PORT ?? "0", 10);
+  return { stdbUri, stdbDb, session, hookPort };
 }
 
 function getArg(name: string): string | undefined {
@@ -166,135 +156,171 @@ function getArg(name: string): string | undefined {
   return undefined;
 }
 
-function connectToServer() {
-  ws = new WebSocket(args.serverUrl);
+function connectToStdb() {
+  DbConnection.builder()
+    .withUri(args.stdbUri)
+    .withDatabaseName(args.stdbDb)
+    .withCompression("none")
+    .onConnect(async (connection, identity, _token) => {
+      conn = connection;
+      log(`Connected to SpacetimeDB ${args.stdbUri}/${args.stdbDb} as ${identity.toHexString().slice(0, 12)}…`);
 
-  ws.addEventListener("open", () => {
-    registered = false;
-    reconnectDelay = RECONNECT_BASE;
-    sendToServer({
-      type: "register",
-      session: args.session,
-      task: args.task,
-      host: HOST,
-      client_id: CLIENT_ID,
-    });
-    if (reconnectTimer) {
-      clearTimeout(reconnectTimer);
-      reconnectTimer = null;
-    }
-  });
-
-  ws.addEventListener("message", async (event) => {
-    const data = typeof event.data === "string" ? event.data : event.data.toString();
-    let parsed: any;
-    try {
-      parsed = JSON.parse(data);
-    } catch {
-      return;
-    }
-
-    if (parsed.type === "register_ack") {
-      registered = true;
-      log(`Connected and registered to SpaceChannelServer at ${args.serverUrl}`);
-      return;
-    }
-
-    if (parsed.type === "chat") {
-      let content = parsed.text || "";
-
-      if (parsed.image_base64 && parsed.image_mime) {
-        const ext = parsed.image_mime === "image/png" ? "png"
-          : parsed.image_mime === "image/gif" ? "gif"
-          : parsed.image_mime === "image/webp" ? "webp"
-          : "jpg";
-        const imagePath = `/tmp/flutter-image-${Date.now()}.${ext}`;
-        try {
-          const bytes = Buffer.from(parsed.image_base64, "base64");
-          await Bun.write(imagePath, bytes);
-          log(`Saved image to ${imagePath} (${bytes.length} bytes)`);
-          content = content
-            ? `${content}\n\n[Image attached: ${imagePath}]`
-            : `[Image attached: ${imagePath}]`;
-        } catch (e) {
-          log(`Failed to save image: ${e}`);
-        }
+      try {
+        await conn.reducers.registerSession({
+          id: SESSION_ID,
+          baseName: args.session,
+          host: HOST,
+          clientId: CLIENT_ID,
+        });
+        log(`Registered session ${SESSION_ID}`);
+      } catch (e) {
+        log(`registerSession failed: ${e}`);
+        process.exit(1);
       }
 
-      await mcp.notification({
-        method: "notifications/claude/channel",
-        params: {
-          content,
-          meta: {
-            chat_id: parsed.chat_id || "flutter",
-            message_id: parsed.id || `msg-${Date.now()}`,
-            user: "flutter",
-            ts: new Date().toISOString(),
-          },
-        },
-      });
-    } else if (parsed.type === "webhook") {
-      await mcp.notification({
-        method: "notifications/claude/channel",
-        params: {
-          content: parsed.text,
-          meta: {
-            chat_id: "webhook",
-            message_id: `webhook-${Date.now()}`,
-            user: parsed.source || "webhook",
-            ts: new Date().toISOString(),
-            source: parsed.source || "unknown",
-          },
-        },
-      });
-    } else if (parsed.type === "permission_response") {
-      await mcp.notification({
-        method: "notifications/claude/channel/permission",
-        params: {
-          request_id: parsed.request_id,
-          behavior: parsed.behavior,
-        },
-      });
-    }
-  });
+      conn.subscriptionBuilder()
+        .onApplied(() => log("Subscriptions applied"))
+        .onError((_ctx) => log("Subscription error"))
+        .subscribe([
+          `SELECT * FROM permission_request WHERE session_id = '${SESSION_ID}'`,
+          `SELECT * FROM message WHERE session_id = '${SESSION_ID}' AND role = 'user' AND source = 'flutter'`,
+          `SELECT message_image.* FROM message_image JOIN message ON message.id = message_image.message_id WHERE message.session_id = '${SESSION_ID}' AND message.role = 'user' AND message.source = 'flutter'`,
+        ]);
 
-  ws.addEventListener("close", (event) => {
-    registered = false;
-    log(`Disconnected from SpaceChannelServer (code=${event.code} reason=${event.reason || "none"}), reconnecting...`);
-    if (event.code === 4001) {
-      reconnectDelay = RECONNECT_BASE;
-    }
-    scheduleReconnect();
-  });
+      conn.db.permission_request.onUpdate((_ctx, _oldRow, newRow) => {
+        handlePermissionUpdate(newRow);
+      });
 
-  ws.addEventListener("error", (event) => {
-    log(`WebSocket error: ${event.message || event.type || "unknown"}, will reconnect...`);
-    scheduleReconnect();
-  });
+      conn.db.permission_request.onInsert((ctx, row) => {
+        if ((ctx as any).event?.tag === "SubscribeApplied") return;
+        handlePermissionUpdate(row);
+      });
+
+      conn.db.message.onInsert((ctx, row) => {
+        if ((ctx as any).event?.tag === "SubscribeApplied") return;
+        handleIncomingMessage(row);
+      });
+
+      conn.db.message_image.onInsert((ctx, row) => {
+        if ((ctx as any).event?.tag === "SubscribeApplied") return;
+        handleIncomingImage(row);
+      });
+
+      heartbeatTimer = setInterval(async () => {
+        try {
+          await conn?.reducers.heartbeat({ sessionId: SESSION_ID });
+        } catch (e) {
+          log(`heartbeat failed: ${e}`);
+        }
+      }, HEARTBEAT_MS);
+    })
+    .onConnectError((_ctx, err) => {
+      log(`SpacetimeDB connect error: ${err.message}`);
+      process.exit(1);
+    })
+    .onDisconnect((_ctx, err) => {
+      log(`SpacetimeDB disconnected: ${err?.message || "clean"}`);
+      if (heartbeatTimer) clearInterval(heartbeatTimer);
+      process.exit(1);
+    })
+    .build();
 }
 
-function scheduleReconnect() {
-  if (reconnectTimer) return;
-  const delay = reconnectDelay;
-  reconnectDelay = Math.min(reconnectDelay * 2, RECONNECT_MAX);
-  reconnectTimer = setTimeout(() => {
-    reconnectTimer = null;
-    connectToServer();
-  }, delay);
-}
+function handleIncomingMessage(row: Message) {
+  if (row.role !== "user" || row.source !== "flutter") return;
 
-function sendToServer(msg: Record<string, unknown>): boolean {
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify(msg));
-    return true;
+  const image = pendingImages.get(row.id);
+  if (image) {
+    pendingImages.delete(row.id);
+    emitMessage(row, image);
+    return;
   }
-  const type = msg.type || "unknown";
-  process.stderr.write(`[space-channel] sendToServer DROPPED (ws ${ws ? `readyState=${ws.readyState}` : "null"}): type=${type}\n`);
-  try { appendFileSync(LOG_FILE, `[${new Date().toISOString()}] DROPPED message type=${type} (ws ${ws ? `readyState=${ws.readyState}` : "null"})\n`); } catch {}
-  return false;
+
+  pendingMessages.set(row.id, row);
+  setTimeout(() => {
+    const buffered = pendingMessages.get(row.id);
+    if (!buffered) return;
+    pendingMessages.delete(row.id);
+    emitMessage(buffered);
+  }, 500);
 }
 
-async function startHookServer() {
+function handleIncomingImage(row: MessageImage) {
+  const message = pendingMessages.get(row.messageId);
+  if (message) {
+    pendingMessages.delete(row.messageId);
+    emitMessage(message, row);
+    return;
+  }
+  pendingImages.set(row.messageId, row);
+  setTimeout(() => {
+    pendingImages.delete(row.messageId);
+  }, 5000);
+}
+
+function emitMessage(message: Message, image?: MessageImage) {
+  const meta: Record<string, string> = {
+    chat_id: "flutter",
+    message_id: message.id,
+    user: "flutter",
+    ts: new Date().toISOString(),
+  };
+
+  if (image) {
+    try {
+      mkdirSync(INBOX_DIR, { recursive: true });
+      const filePath = join(INBOX_DIR, `${message.id}.png`);
+      writeFileSync(filePath, Buffer.from(image.bytes));
+      meta.file_path = filePath;
+    } catch (e) {
+      log(`inbox write failed for ${message.id}: ${e}`);
+    }
+  }
+
+  const content = message.text.trim().length > 0
+    ? message.text
+    : image
+      ? "(image)"
+      : message.text;
+
+  mcp.notification({
+    method: "notifications/claude/channel",
+    params: { content, meta },
+  }).catch((e) => log(`channel notification failed: ${e}`));
+}
+
+function sweepInbox() {
+  try {
+    const entries = readdirSync(INBOX_DIR);
+    const cutoff = Date.now() - INBOX_TTL_MS;
+    for (const name of entries) {
+      const path = join(INBOX_DIR, name);
+      try {
+        const st = statSync(path);
+        if (st.mtimeMs < cutoff) unlinkSync(path);
+      } catch {}
+    }
+  } catch {}
+}
+
+function handlePermissionUpdate(row: PermissionRequest) {
+  if (row.status === "pending") return;
+  const pending = pendingPermissions.get(row.id);
+  if (pending) {
+    pending(row.status);
+    pendingPermissions.delete(row.id);
+  }
+
+  mcp.notification({
+    method: "notifications/claude/channel/permission",
+    params: {
+      request_id: row.id,
+      behavior: row.status === "approved" ? "allow" : "deny",
+    },
+  }).catch((e) => log(`permission notification failed: ${e}`));
+}
+
+function startHookServer() {
   const server = Bun.serve({
     port: args.hookPort || 0,
     hostname: "127.0.0.1",
@@ -303,91 +329,95 @@ async function startHookServer() {
         return new Response("method not allowed", { status: 405 });
       }
 
-      const body = await req.json().catch(() => null);
+      const body = (await req.json().catch(() => null)) as Record<string, any> | null;
       if (!body) {
         return new Response("invalid json", { status: 400 });
       }
+      if (!conn) {
+        return new Response("not connected", { status: 503 });
+      }
 
-      const hookEvent = body.hook_event_name || body.hook_event || "unknown";
-      log(`Hook received: ${hookEvent} | keys: ${Object.keys(body).join(",")} | body: ${JSON.stringify(body).slice(0, 500)}`);
+      const hookEvent: string = body.hook_event_name || body.hook_event || "unknown";
+      log(`Hook: ${hookEvent}`);
 
-      if (hookEvent === "UserPromptSubmit") {
-        sendToServer({ type: "status", session: args.session, state: "thinking" });
-      } else if (hookEvent === "Stop") {
-        const message = body.last_assistant_message;
-        if (message) {
-          const id = `hook-${Date.now()}`;
-          sendToServer({ type: "msg", session: args.session, text: message, id, from: "assistant" });
+      try {
+        if (hookEvent === "UserPromptSubmit") {
+          await conn.reducers.pushStatus({ sessionId: SESSION_ID, state: "thinking" });
+        } else if (hookEvent === "Stop") {
+          const message: string | undefined = body.last_assistant_message;
+          if (message) {
+            await conn.reducers.pushMessage({
+              id: `hook-${Date.now()}`,
+              sessionId: SESSION_ID,
+              role: "assistant",
+              text: message,
+              source: "hook",
+            });
+          }
+          await conn.reducers.pushStatus({ sessionId: SESSION_ID, state: "idle" });
+        } else if (hookEvent === "PreToolUse") {
+          const toolName: string = body.tool_name ?? "unknown";
+          const detail = JSON.stringify({
+            tool: toolName,
+            input: body.tool_input ?? {},
+          });
+          await conn.reducers.pushToolEvent({
+            id: `tool-${Date.now()}-${randomUUID().slice(0, 8)}`,
+            sessionId: SESSION_ID,
+            tool: toolName,
+            detail,
+          });
+          const isOwnReplyTool =
+            toolName === "mcp__space-channel__reply" ||
+            toolName === "mcp__space-channel__edit_message";
+          if (!isOwnReplyTool) {
+            await conn.reducers.pushStatus({ sessionId: SESSION_ID, state: "tool_use" });
+          }
+        } else if (hookEvent === "PostToolUse" || hookEvent === "PostToolUseFailure") {
+          const toolName: string = body.tool_name ?? "";
+          const isOwnReplyTool =
+            toolName === "mcp__space-channel__reply" ||
+            toolName === "mcp__space-channel__edit_message";
+          await conn.reducers.pushStatus({
+            sessionId: SESSION_ID,
+            state: isOwnReplyTool ? "idle" : "thinking",
+          });
+        } else if (hookEvent === "SessionEnd") {
+          await conn.reducers.endSession({ sessionId: SESSION_ID });
         }
-        sendToServer({ type: "status", session: args.session, state: "idle" });
-      } else if (hookEvent === "PreToolUse" || hookEvent === "PostToolUse" || hookEvent === "PostToolUseFailure") {
-        sendToServer({
-          type: "tool_event",
-          session: args.session,
-          task: args.task,
-          tool: body.tool_name || "unknown",
-          input: body.tool_input || {},
-          hook_event: hookEvent,
-          ts: Date.now(),
-        });
+      } catch (e) {
+        log(`Hook reducer failed (${hookEvent}): ${e}`);
       }
 
       return new Response(null, { status: 200 });
     },
   });
-  hookServerPort = server.port;
-  const portFile = `/tmp/space-channel-${args.session}.port`;
-  await Bun.write(portFile, String(server.port));
   log(`Hook HTTP server listening on http://127.0.0.1:${server.port}`);
 }
 
-function killPreviousInstance() {
-  try {
-    if (!existsSync(PID_FILE)) return;
-    const oldPid = parseInt(readFileSync(PID_FILE, "utf-8").trim(), 10);
-    if (isNaN(oldPid) || oldPid === process.pid) return;
-    try {
-      process.kill(oldPid, 0);
-      process.kill(oldPid, "SIGTERM");
-      log(`Killed previous instance (PID ${oldPid})`);
-    } catch {}
-  } catch {}
-  writePidFile();
-}
+process.on("SIGTERM", () => { log("SIGTERM"); shutdown(); });
+process.on("SIGINT", () => { log("SIGINT"); shutdown(); });
+process.on("uncaughtException", (err) => { log(`Uncaught: ${err.message}\n${err.stack}`); shutdown(1); });
 
-function writePidFile() {
-  try { writeFileSync(PID_FILE, String(process.pid)); } catch {}
-}
-
-function cleanup() {
-  try {
-    const current = readFileSync(PID_FILE, "utf-8").trim();
-    if (current === String(process.pid)) unlinkSync(PID_FILE);
-  } catch {}
-  if (hookServerPort !== null) {
-    const portFile = `/tmp/space-channel-${args.session}.port`;
+let shuttingDown = false;
+async function shutdown(code = 0) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  if (heartbeatTimer) clearInterval(heartbeatTimer);
+  if (conn) {
     try {
-      const current = readFileSync(portFile, "utf-8").trim();
-      if (current === String(hookServerPort)) {
-        unlinkSync(portFile);
-        log(`Cleaned up port file: ${portFile}`);
-      }
-    } catch {}
-    hookServerPort = null;
+      await conn.reducers.endSession({ sessionId: SESSION_ID });
+      log(`Session ended: ${SESSION_ID}`);
+    } catch (e) {
+      log(`endSession on shutdown failed: ${e}`);
+    }
+    try { conn.disconnect(); } catch {}
   }
+  process.exit(code);
 }
-
-process.on("SIGTERM", () => { log("SIGTERM received"); cleanup(); process.exit(0); });
-process.on("SIGINT", () => { log("SIGINT received"); cleanup(); process.exit(0); });
-process.on("exit", (code) => { log(`Exiting with code ${code}`); cleanup(); });
-process.on("uncaughtException", (err) => { log(`Uncaught exception: ${err.message}\n${err.stack}`); cleanup(); process.exit(1); });
-process.on("unhandledRejection", (reason) => { log(`Unhandled rejection: ${reason}`); });
-
-const LOG_FILE = `/tmp/space-channel-${args.session}.log`;
 
 function log(msg: string) {
   const line = `[${new Date().toISOString()}] ${msg}`;
   process.stderr.write(`[space-channel] ${msg}\n`);
   try { appendFileSync(LOG_FILE, line + "\n"); } catch {}
-  if (registered) sendToServer({ type: "log", session: args.session, line });
 }
