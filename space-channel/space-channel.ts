@@ -18,15 +18,24 @@ const HOST = hostname().split(".")[0] ?? "unknown";
 const CLIENT_ID = randomUUID();
 const SESSION_ID = `${args.session}@${HOST}`;
 const HEARTBEAT_MS = 20_000;
+const TOOL_USE_STUCK_MS = 30_000;
 const LOG_FILE = `/tmp/space-channel-${args.session}.log`;
 const INBOX_DIR = join(homedir(), ".claude", "channels", "space-channel", "inbox");
 const INBOX_TTL_MS = 48 * 60 * 60 * 1000;
 
 let conn: DbConnection | null = null;
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+let reconnectAttempt = 0;
+let hasEverConnected = false;
+let shuttingDown = false;
+const RECONNECT_BASE_MS = 1_000;
+const RECONNECT_MAX_MS = 60_000;
 const pendingPermissions = new Map<string, (behavior: string) => void>();
 const pendingImages = new Map<string, MessageImage>();
 const pendingMessages = new Map<string, Message>();
+const openToolCalls = new Map<string, { tool: string; startedAt: number }>();
+let lastKnownState: string = "idle";
 
 const mcp = new Server(
   { name: "space-channel", version: "0.2.0" },
@@ -83,7 +92,8 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
     const id = `reply-${Date.now()}`;
     try {
       await conn.reducers.pushMessage({ id, sessionId: SESSION_ID, role: "assistant", text, source: "mcp" });
-      conn.reducers.pushStatus({ sessionId: SESSION_ID, state: "idle" });
+      lastKnownState = "idle";
+      await conn.reducers.pushStatus({ sessionId: SESSION_ID, state: "idle" });
       return { content: [{ type: "text" as const, text: `sent (id: ${id})` }] };
     } catch (e) {
       return { content: [{ type: "text" as const, text: `FAILED: ${e}` }], isError: true };
@@ -157,12 +167,20 @@ function getArg(name: string): string | undefined {
 }
 
 function connectToStdb() {
+  if (shuttingDown) return;
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+
   DbConnection.builder()
     .withUri(args.stdbUri)
     .withDatabaseName(args.stdbDb)
     .withCompression("none")
     .onConnect(async (connection, identity, _token) => {
       conn = connection;
+      hasEverConnected = true;
+      reconnectAttempt = 0;
       log(`Connected to SpacetimeDB ${args.stdbUri}/${args.stdbDb} as ${identity.toHexString().slice(0, 12)}…`);
 
       try {
@@ -175,7 +193,7 @@ function connectToStdb() {
         log(`Registered session ${SESSION_ID}`);
       } catch (e) {
         log(`registerSession failed: ${e}`);
-        process.exit(1);
+        return;
       }
 
       conn.subscriptionBuilder()
@@ -212,18 +230,35 @@ function connectToStdb() {
         } catch (e) {
           log(`heartbeat failed: ${e}`);
         }
+        await sweepStaleToolCalls();
       }, HEARTBEAT_MS);
     })
     .onConnectError((_ctx, err) => {
       log(`SpacetimeDB connect error: ${err.message}`);
-      process.exit(1);
+      scheduleReconnect();
     })
     .onDisconnect((_ctx, err) => {
       log(`SpacetimeDB disconnected: ${err?.message || "clean"}`);
-      if (heartbeatTimer) clearInterval(heartbeatTimer);
-      process.exit(1);
+      conn = null;
+      if (heartbeatTimer) {
+        clearInterval(heartbeatTimer);
+        heartbeatTimer = null;
+      }
+      scheduleReconnect();
     })
     .build();
+}
+
+function scheduleReconnect() {
+  if (shuttingDown) return;
+  if (reconnectTimer) return;
+  const delay = Math.min(RECONNECT_BASE_MS * 2 ** reconnectAttempt, RECONNECT_MAX_MS);
+  reconnectAttempt++;
+  log(`Reconnecting in ${delay}ms (attempt ${reconnectAttempt}${hasEverConnected ? "" : ", initial"})`);
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    connectToStdb();
+  }, delay);
 }
 
 function handleIncomingMessage(row: Message) {
@@ -289,6 +324,29 @@ function emitMessage(message: Message, image?: MessageImage) {
   }).catch((e) => log(`channel notification failed: ${e}`));
 }
 
+async function sweepStaleToolCalls() {
+  if (!conn) return;
+  if (openToolCalls.size === 0) return;
+  const cutoff = Date.now() - TOOL_USE_STUCK_MS;
+  let sweptAny = false;
+  for (const [id, entry] of openToolCalls) {
+    if (entry.startedAt < cutoff) {
+      log(`Stale PreToolUse swept: ${entry.tool} (age ${Date.now() - entry.startedAt}ms, id ${id})`);
+      openToolCalls.delete(id);
+      sweptAny = true;
+    }
+  }
+  if (sweptAny && openToolCalls.size === 0 && lastKnownState === "tool_use") {
+    try {
+      lastKnownState = "thinking";
+      await conn.reducers.pushStatus({ sessionId: SESSION_ID, state: "thinking" });
+      log("Watchdog cleared stuck tool_use → thinking");
+    } catch (e) {
+      log(`Watchdog state reset failed: ${e}`);
+    }
+  }
+}
+
 function sweepInbox() {
   try {
     const entries = readdirSync(INBOX_DIR);
@@ -342,6 +400,7 @@ function startHookServer() {
 
       try {
         if (hookEvent === "UserPromptSubmit") {
+          lastKnownState = "thinking";
           await conn.reducers.pushStatus({ sessionId: SESSION_ID, state: "thinking" });
         } else if (hookEvent === "Stop") {
           const message: string | undefined = body.last_assistant_message;
@@ -354,15 +413,18 @@ function startHookServer() {
               source: "hook",
             });
           }
+          openToolCalls.clear();
+          lastKnownState = "idle";
           await conn.reducers.pushStatus({ sessionId: SESSION_ID, state: "idle" });
         } else if (hookEvent === "PreToolUse") {
           const toolName: string = body.tool_name ?? "unknown";
+          const toolEventId = `tool-${Date.now()}-${randomUUID().slice(0, 8)}`;
           const detail = JSON.stringify({
             tool: toolName,
             input: body.tool_input ?? {},
           });
           await conn.reducers.pushToolEvent({
-            id: `tool-${Date.now()}-${randomUUID().slice(0, 8)}`,
+            id: toolEventId,
             sessionId: SESSION_ID,
             tool: toolName,
             detail,
@@ -371,6 +433,8 @@ function startHookServer() {
             toolName === "mcp__space-channel__reply" ||
             toolName === "mcp__space-channel__edit_message";
           if (!isOwnReplyTool) {
+            openToolCalls.set(toolEventId, { tool: toolName, startedAt: Date.now() });
+            lastKnownState = "tool_use";
             await conn.reducers.pushStatus({ sessionId: SESSION_ID, state: "tool_use" });
           }
         } else if (hookEvent === "PostToolUse" || hookEvent === "PostToolUseFailure") {
@@ -378,9 +442,19 @@ function startHookServer() {
           const isOwnReplyTool =
             toolName === "mcp__space-channel__reply" ||
             toolName === "mcp__space-channel__edit_message";
+          if (!isOwnReplyTool) {
+            for (const [id, entry] of openToolCalls) {
+              if (entry.tool === toolName) {
+                openToolCalls.delete(id);
+                break;
+              }
+            }
+          }
+          const nextState = isOwnReplyTool ? "idle" : "thinking";
+          lastKnownState = nextState;
           await conn.reducers.pushStatus({
             sessionId: SESSION_ID,
-            state: isOwnReplyTool ? "idle" : "thinking",
+            state: nextState,
           });
         } else if (hookEvent === "SessionEnd") {
           await conn.reducers.endSession({ sessionId: SESSION_ID });
@@ -399,11 +473,11 @@ process.on("SIGTERM", () => { log("SIGTERM"); shutdown(); });
 process.on("SIGINT", () => { log("SIGINT"); shutdown(); });
 process.on("uncaughtException", (err) => { log(`Uncaught: ${err.message}\n${err.stack}`); shutdown(1); });
 
-let shuttingDown = false;
 async function shutdown(code = 0) {
   if (shuttingDown) return;
   shuttingDown = true;
   if (heartbeatTimer) clearInterval(heartbeatTimer);
+  if (reconnectTimer) clearTimeout(reconnectTimer);
   if (conn) {
     try {
       await conn.reducers.endSession({ sessionId: SESSION_ID });
