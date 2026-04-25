@@ -49,59 +49,51 @@ Contributions welcome.
 ┌─────────────────────────────────────────────────────────────────┐
 │  Your Server (Docker)                                           │
 │                                                                 │
-│  ┌──────────────┐  ┌────────────┐  ┌─────────────────────────┐  │
-│  │ SpacetimeDB  │  │ Sync Daemon│  │ SpaceChannel Server     │  │
-│  │ (notes DB)   │◄─┤ (fs↔db)   │  │ (WebSocket relay)       │  │
-│  └──────┬───────┘  └────────────┘  │                         │  │
-│         │                          │  :5054 ← Flutter app    │  │
-│  ┌──────┴───────┐                  │  :5055 ← Claude Code    │  │
-│  │  MCP Server  │                  │  :5056 ← Webhooks       │  │
-│  │  (note CRUD) │                  └──────┬──────────────────┘  │
-│  └──────────────┘                         │                     │
-│                                    ┌──────┴──────────────────┐  │
-│  ┌──────────────┐                  │ Note-Assistant           │  │
-│  │  Web Client  │                  │ (Claude Code in Docker)  │  │
-│  │  (nginx)     │                  └─────────────────────────┘  │
-│  └──────────────┘                                               │
+│  ┌──────────────┐   ┌─────────────┐   ┌──────────────────────┐  │
+│  │ SpacetimeDB  │◄──┤ Sync Daemon │   │ Note-Assistant       │  │
+│  │ notes +      │   │ (fs ↔ db)   │   │ (Claude Code         │  │
+│  │ SpaceChannel │   └─────────────┘   │  in Docker)          │  │
+│  │ tables       │                     │  space-channel       │  │
+│  └──────┬───────┘                     │  MCP → STDB          │  │
+│         │                             └──────────┬───────────┘  │
+│  ┌──────┴───────┐                                │              │
+│  │  MCP Server  │                                │ subscribes   │
+│  │  (note CRUD) │                                ▼              │
+│  └──────────────┘                          (same STDB)          │
 │  ┌──────────────┐                                               │
-│  │  OpenCode    │                                               │
-│  │  (chat API)  │                                               │
+│  │  Web Client  │                                               │
+│  │  (nginx)     │                                               │
 │  └──────────────┘                                               │
 └─────────────────────────────────────────────────────────────────┘
         ▲                                    ▲
-        │ :5050 (notes sync)                 │ :5054 (sessions)
-        │ :5051 (web UI)                     │ :5055 (agents)
+        │ :5050 (STDB — notes + SpaceChannel)│
+        │ :5051 (web UI)                     │
         │ :5052 (MCP)                        │
-        │ :5053 (chat)                       │
         ▼                                    ▼
-┌──────────────────┐              ┌─────────────────────┐
-│  Flutter Client  │              │  Claude Code (local) │
-│  iOS/Android/    │              │  space-channel.ts    │
-│  macOS/Web       │              │  MCP server per      │
-│                  │              │  session              │
-└──────────────────┘              └─────────────────────┘
+┌──────────────────┐              ┌──────────────────────────┐
+│  Flutter Client  │              │  Claude Code (local)     │
+│  iOS/Android/    │              │  space-channel binary    │
+│  macOS/Web       │              │  MCP per session,        │
+│                  │              │  subscribes to STDB      │
+└──────────────────┘              └──────────────────────────┘
 ```
+
+Everything — notes, sessions, status, tool events, permission requests, replies — flows through SpacetimeDB. There is no separate message broker. Each Claude Code session runs an MCP server (`space-channel`) that subscribes to STDB and writes status / replies as table rows. The Flutter app subscribes to the same tables and renders them in real time.
 
 ## Components
 
-- **SpacetimeDB** - Real-time database. Clients connect once and receive instant updates.
+- **SpacetimeDB** - Real-time database. Holds both notes and SpaceChannel state (sessions, status, tool events, replies, permission requests). Clients connect once and receive instant updates.
 - **Filesystem Sync Daemon** - Watches your notes folder and syncs bidirectionally with SpacetimeDB.
 - **MCP Server** - Lets AI assistants (Claude Code, Cursor, etc.) read/write your notes.
-- **SpaceChannel Server** - Rust WebSocket relay that bridges Claude Code sessions and the Flutter app. Handles session registration, message routing, tool event streaming, status updates, heartbeat monitoring, and message history replay.
-- **SpaceChannel MCP Client** (`space-channel.ts`) - Runs as an MCP server inside each Claude Code session. Connects to the SpaceChannel Server via WebSocket and exposes `reply` and `edit_message` tools so Claude can send messages to the Flutter app. Also forwards hook events (thinking, idle, tool use) as status updates.
-- **Note-Assistant** - A headless Claude Code instance running in Docker on your server. Always available from the Flutter app for note-related tasks. Connects to SpaceChannel like any other session.
-- **OpenCode** (optional) - Headless AI chat server. Provides the chat interface in the Flutter client using free or bring-your-own API keys.
-- **[Flutter Client](https://github.com/mikaelwills/spacenotes-client)** - Native apps for iOS, Android, macOS, Windows, Linux, and web. Includes a session dashboard for monitoring all connected Claude Code agents in real-time.
+- **`space-channel` binary** - The Claude Code side of SpaceChannel. One compiled binary with three subcommands: MCP server (subscribes to STDB, exposes `reply`/`edit_message` tools to Claude), `launch` (orchestrates a Claude Code session — generates hook config, finds a free hook port, exec's claude), and `hook-post` (the hook bridge — claude's hooks pipe their JSON into this, it forwards to STDB as `session_activity` updates).
+- **Note-Assistant** - A headless Claude Code instance running in Docker on your server. Always available from the Flutter app for note-related tasks. Subscribes to STDB just like any other Claude Code session.
+- **[Flutter Client](https://github.com/mikaelwills/spacenotes-client)** - Native apps for iOS, Android, macOS, Windows, Linux, and web. Subscribes to the same STDB tables for both notes and live agent activity.
 
 ## Standard Ports
 
-- **5050** - SpacetimeDB (WebSocket/HTTP) - Flutter clients connect here for note sync
+- **5050** - SpacetimeDB (WebSocket/HTTP) - Flutter clients and `space-channel` MCP servers both connect here. Carries notes, sessions, status, tool events, and chat messages.
 - **5051** - Web Client (HTTP) - Flutter web app served via nginx
-- **5052** - MCP Server (HTTP) - AI assistant integration endpoint
-- **5053** - OpenCode (HTTP) - AI chat server for Flutter client
-- **5054** - SpaceChannel (WebSocket) - Flutter app connects here for agent sessions
-- **5055** - SpaceChannel (WebSocket) - Claude Code agents connect here
-- **5056** - SpaceChannel (HTTP) - Webhook endpoint for external integrations
+- **5052** - MCP Server (HTTP) - AI assistant integration endpoint for note CRUD
 
 All ports are configurable via `docker-compose.yml`.
 
@@ -131,20 +123,19 @@ All ports are configurable via `docker-compose.yml`.
 
 ## SpaceChannel
 
-SpaceChannel is a real-time communication bridge between Claude Code sessions and the Flutter app. Each Claude Code session runs a `space-channel.ts` MCP server that connects to the SpaceChannel Server via WebSocket. The Flutter app connects on a separate port and receives all session activity.
+SpaceChannel is the real-time bridge between Claude Code sessions and the Flutter app. There is no separate broker — everything flows through SpacetimeDB tables (`session`, `session_activity`, `tool_event`, `permission_request`, `message`). Each Claude Code session runs a `space-channel` MCP that subscribes to the relevant tables and writes its own activity in. The Flutter app subscribes to the same tables.
 
 **What it enables:**
 - See all active Claude Code sessions in the Flutter app with live status (thinking, idle, tool use)
 - Send messages to any session from your phone and receive replies
 - View tool events as they happen (file edits, bash commands, etc.)
-- Session message history — reconnecting clients get caught up automatically
-- Heartbeat monitoring — dead sessions are detected within 60 seconds and removed
-- Webhook ingestion — external services (Trello, CI, etc.) can push messages into sessions
+- Session message history — clients reconnect and STDB hydrates the full backlog automatically
+- Webhook-style ingestion — anything that can call an STDB reducer can push messages into a session
 
 **Session types:**
-- **Local sessions** — Claude Code running on your machine, connected via `spacechannel-session.sh` launcher
+- **Local sessions** — Claude Code on your machine, started via the `space-channel launch` subcommand
 - **Note-Assistant** — A headless Claude Code container on the server, always available for note tasks
-- **Webhook sessions** — Auto-registered when external webhooks arrive targeting a session name
+- **Reducer-driven sessions** — Auto-registered the first time a row appears in `session` for that name
 
 ## Claude Code Integration
 
@@ -156,27 +147,34 @@ Add the SpaceNotes MCP server so Claude Code can read and write your notes (see 
 
 ### 2. SpaceChannel — Session Bridge
 
-The `space-channel.ts` MCP server runs inside each Claude Code session and connects it to the SpaceChannel Server. It uses Claude Code's hook system to stream status updates and tool events to the Flutter app.
+`space-channel` is a single compiled binary you install on each machine that runs Claude Code. It exposes three subcommands: `space-channel` (no args, runs as the MCP server inside a session), `space-channel launch` (orchestrates Claude Code with hooks + MCP wired in), `space-channel hook-post` (the hook forwarder).
 
-**Setup with the launcher script:**
-
-The `spacechannel-session.sh` script handles everything — it finds a free port for the hook server, writes HTTP hooks into `.claude/settings.local.json`, and launches Claude Code with the space-channel MCP server configured:
+**Install the binary:**
 
 ```bash
-# Usage: spacechannel-session.sh <session-name> <project-name> <skill>
-~/.dotfiles/scripts/spacechannel-session.sh myproject myproject my-workflow-skill
+# One-liner — pulls the right architecture and drops it on $PATH
+curl -fsSL https://your-server/space-channel/install.sh | sh
+```
+
+(Substitute your own host. The reference setup serves the binary from the same Docker host that runs SpacetimeDB.)
+
+**Launch a session:**
+
+```bash
+# Usage: space-channel launch <session-name> <project-name> <skill>
+space-channel launch myproject myproject my-workflow-skill
 ```
 
 Create shell aliases for your projects:
 ```bash
-alias myproject='$HOME/.dotfiles/scripts/spacechannel-session.sh myproject myproject my-skill'
+alias myproject='space-channel launch myproject myproject my-skill'
 ```
 
 **What Claude Code gets:**
-- `reply` tool — send a message to the Flutter app
-- `edit_message` tool — update a previously sent message
-- Automatic status streaming via hooks (thinking indicators, tool events)
-- Session registration and heartbeat with the SpaceChannel Server
+- `reply` tool — write a row into the `message` table; the Flutter app sees it instantly
+- `edit_message` tool — update a previous reply by id
+- Automatic status streaming via hooks (thinking indicators, tool events) — written into `session_activity` and `tool_event`
+- Session registration on launch — a row appears in `session`, the Flutter app picks it up
 
 ## Quick Start
 
@@ -205,11 +203,9 @@ alias myproject='$HOME/.dotfiles/scripts/spacechannel-session.sh myproject mypro
    You should see "Watcher started on /vault" when ready.
 
 5. **Access SpaceNotes:**
-   - **Web Client**: `http://<your-server-ip>:5051` (includes AI chat)
-   - **Mobile App**: Connect to `http://<your-server-ip>:5050` in settings
+   - **Web Client**: `http://<your-server-ip>:5051` (notes + AI chat with the note-assistant)
+   - **Mobile App**: Point it at `http://<your-server-ip>:5050` in settings (this is the SpacetimeDB endpoint — it carries notes, sessions, and SpaceChannel)
    - **MCP Server**: `http://<your-server-ip>:5052/mcp` (for Claude Code, Cursor, etc.)
-   - **OpenCode API**: `http://<your-server-ip>:5053` (powers the chat UI)
-   - **SpaceChannel**: `ws://<your-server-ip>:5054/ws` (Flutter agent dashboard), `ws://<your-server-ip>:5055/ws` (Claude Code sessions)
 
 ## Updating
 
@@ -266,12 +262,9 @@ Environment variables (set in `docker-compose.yml`):
 - `VAULT_PATH` - Path to notes folder inside container (default: `/vault`)
 - `SPACETIME_HOST` - SpacetimeDB URL, internal (default: `http://127.0.0.1:3000`)
 - `SPACETIME_DB` - Database name (default: `spacenotes`)
-- `ANTHROPIC_API_KEY` - Optional, for OpenCode with your own Anthropic key
-- `OPENAI_API_KEY` - Optional, for OpenCode with your own OpenAI key
+- `ANTHROPIC_API_KEY` - Required by the note-assistant container so Claude Code inside it can talk to the API
 
-OpenCode configuration is in `opencode.json`. By default it uses the free `opencode/big-pickle` model. Edit this file to change models or add custom agents.
-
-```
+The chat UI in the Flutter client talks to the note-assistant Claude Code container via SpaceChannel — there is no separate chat backend.
 
 ## License
 
