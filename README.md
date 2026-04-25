@@ -8,7 +8,7 @@
 
 But — notes synced across all your devices in real time. No cost. No Obsidian. No cloud. No storage limits. And you can talk to your Claude Code sessions while you're at the gym.
 
-Your notes live as plain markdown on your own filesystem — portable, no lock-in, no subscription, nothing to migrate off if you ever want to walk away. The AI side is opinionated and tied to Claude Code: SpaceChannel is built around Claude Code's MCP and hook system specifically, and you'll need an Anthropic API key for the assistant. If that's a deal-breaker, this isn't the project for you. If it isn't, you get a self-hosted notes system where AI agents are first-class and the data is always yours.
+Your notes live as plain markdown on your own filesystem — portable, no lock-in, no subscription, nothing to migrate off if you ever want to walk away. The AI side is opinionated and tied to Claude Code: SpaceChannel is built around Claude Code's MCP and hook system specifically. The note-assistant container logs in with your existing Claude Code subscription (Pro / Max) — no separate API key, no per-token billing.
 
 Contributions welcome.
 
@@ -267,9 +267,8 @@ Environment variables (set in `docker-compose.yml`):
 - `VAULT_PATH` - Path to notes folder inside container (default: `/vault`)
 - `SPACETIME_HOST` - SpacetimeDB URL, internal (default: `http://127.0.0.1:3000`)
 - `SPACETIME_DB` - Database name (default: `spacenotes`)
-- `ANTHROPIC_API_KEY` - Required by the note-assistant container so Claude Code inside it can talk to the API
 
-The chat UI in the Flutter client talks to the note-assistant Claude Code container via SpaceChannel — there is no separate chat backend.
+The note-assistant Claude Code container authenticates with your Claude Code subscription (`claude login` once on first run); there's no API-key env var. The chat UI in the Flutter client talks to it via SpaceChannel — no separate chat backend.
 
 ## License
 
