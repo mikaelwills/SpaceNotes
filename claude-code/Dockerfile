@@ -12,7 +12,7 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
 
-RUN npm install -g @anthropic-ai/claude-code bun
+RUN npm install -g @anthropic-ai/claude-code
 
 RUN useradd -m -s /bin/bash claude
 RUN mkdir -p /home/claude/.claude && chown -R claude:claude /home/claude
@@ -25,14 +25,13 @@ RUN chmod +x /entrypoint.sh
 COPY auto-confirm-claude.exp /auto-confirm-claude.exp
 RUN chmod +x /auto-confirm-claude.exp
 
-COPY space-channel/ /home/claude/space-channel/
+COPY space-channel/space-channel-linux-x64 /home/claude/space-channel/space-channel
 COPY settings.json /opt/settings.json
-RUN chown -R claude:claude /home/claude/space-channel /home/claude/.claude
+RUN chmod +x /home/claude/space-channel/space-channel \
+    && chown -R claude:claude /home/claude/space-channel /home/claude/.claude
 
 USER claude
 WORKDIR /home/claude
-
-RUN cd /home/claude/space-channel && bun install
 
 VOLUME /home/claude/.claude
 

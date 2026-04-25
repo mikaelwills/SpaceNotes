@@ -6,12 +6,33 @@ import {
   CallToolRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import * as z from "zod/v4";
-import { appendFileSync, mkdirSync, writeFileSync, readdirSync, statSync, unlinkSync } from "fs";
+import {
+  appendFileSync,
+  mkdirSync,
+  writeFileSync,
+  readdirSync,
+  readFileSync,
+  existsSync,
+  statSync,
+  unlinkSync,
+} from "fs";
 import { hostname, homedir } from "os";
 import { join } from "path";
 import { randomUUID } from "crypto";
+import { spawn, spawnSync } from "child_process";
+import { createServer } from "net";
 import { DbConnection } from "./generated";
 import type { Message, MessageImage, PermissionRequest } from "./generated/types";
+
+const subcommand = process.argv[2];
+if (subcommand === "hook-post") {
+  await runHookPost();
+  process.exit(0);
+}
+if (subcommand === "launch") {
+  await runLaunch(process.argv.slice(3));
+  process.exit(0);
+}
 
 const args = parseArgs();
 const HOST = hostname().split(".")[0] ?? "unknown";
@@ -494,4 +515,194 @@ function log(msg: string) {
   const line = `[${new Date().toISOString()}] ${msg}`;
   process.stderr.write(`[space-channel] ${msg}\n`);
   try { appendFileSync(LOG_FILE, line + "\n"); } catch {}
+}
+
+async function runHookPost() {
+  const argv = process.argv.slice(3);
+  let port: string | undefined;
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === "--port" && i + 1 < argv.length) {
+      port = argv[i + 1];
+      break;
+    }
+  }
+  port ??= process.env.SPACE_CHANNEL_HOOK_PORT;
+  if (!port) return;
+
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) {
+    chunks.push(chunk as Buffer);
+  }
+  const body = Buffer.concat(chunks);
+
+  const url = `http://127.0.0.1:${port}/hook`;
+  const deadline = Date.now() + 3000;
+  let attempt = 0;
+  while (Date.now() < deadline && attempt < 10) {
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body,
+        signal: AbortSignal.timeout(1000),
+      });
+      if (res.ok) return;
+    } catch {}
+    attempt++;
+  }
+}
+
+async function runLaunch(rawArgs: string[]) {
+  if (rawArgs.length < 2) {
+    process.stderr.write("usage: space-channel launch <session> <skill> [args...]\n");
+    process.exit(2);
+  }
+  const session = rawArgs[0]!;
+  const skill = rawArgs[1]!;
+  const rest = rawArgs.slice(2);
+
+  if (!commandExists("claude")) {
+    process.stderr.write("claude CLI not found in PATH\n");
+    process.exit(1);
+  }
+
+  const selfPath: string = process.execPath.endsWith("/bun")
+    ? (process.argv[1] ?? process.execPath)
+    : process.execPath;
+
+  const lockDir = ".claude/.spacechannel-sessions";
+  mkdirSync(lockDir, { recursive: true });
+  const lockFile = join(lockDir, String(process.pid));
+  writeFileSync(lockFile, "");
+
+  const hookPort = await findFreePort();
+  const hookCmd = [selfPath, "hook-post", "--port", String(hookPort)];
+  const hookEntry = [{ hooks: [{ type: "command", command: hookCmd.join(" ") }] }];
+  const hooksObj = {
+    SessionStart: hookEntry,
+    PreToolUse: hookEntry,
+    PostToolUse: hookEntry,
+    PostToolUseFailure: hookEntry,
+    UserPromptSubmit: hookEntry,
+    Stop: hookEntry,
+    SessionEnd: hookEntry,
+    Notification: hookEntry,
+  };
+
+  const settingsFile = ".claude/settings.local.json";
+  mkdirSync(".claude", { recursive: true });
+  let settings: any = {};
+  if (existsSync(settingsFile)) {
+    try {
+      settings = JSON.parse(readFileSync(settingsFile, "utf8"));
+    } catch {
+      settings = {};
+    }
+  }
+  settings.hooks = hooksObj;
+  writeFileSync(settingsFile + ".tmp", JSON.stringify(settings, null, 2));
+  spawnSync("mv", [settingsFile + ".tmp", settingsFile], { stdio: "inherit" });
+
+  const cleanup = () => {
+    try { unlinkSync(lockFile); } catch {}
+    if (countActiveSessions(lockDir) === 0) {
+      if (existsSync(settingsFile)) {
+        try {
+          const s = JSON.parse(readFileSync(settingsFile, "utf8"));
+          delete s.hooks;
+          writeFileSync(settingsFile, JSON.stringify(s, null, 2));
+        } catch {}
+      }
+      spawnSync("claude", ["mcp", "remove", "space-channel", "--scope", "project"], {
+        stdio: "ignore",
+      });
+    }
+  };
+  process.on("exit", cleanup);
+  process.on("SIGTERM", () => { cleanup(); process.exit(143); });
+  process.on("SIGINT", () => { cleanup(); process.exit(130); });
+
+  spawnSync("claude", ["mcp", "remove", "space-channel", "--scope", "project"], {
+    stdio: "ignore",
+  });
+
+  const stdbUri = process.env.SPACE_CHANNEL_STDB_URI || "ws://100.84.184.121:5050";
+  const stdbDb = process.env.SPACE_CHANNEL_STDB_DB || "spacenotes";
+  const mcpAdd = spawnSync(
+    "claude",
+    [
+      "mcp", "add", "space-channel", "--scope", "project",
+      "-e", `SPACE_CHANNEL_SESSION=${session}`,
+      "-e", `SPACE_CHANNEL_PROJECT=${session}`,
+      "-e", `SPACE_CHANNEL_STDB_URI=${stdbUri}`,
+      "-e", `SPACE_CHANNEL_STDB_DB=${stdbDb}`,
+      "-e", `SPACE_CHANNEL_HOOK_PORT=${hookPort}`,
+      "--", selfPath,
+    ],
+    { stdio: "ignore" }
+  );
+  if (mcpAdd.status !== 0) {
+    process.stderr.write("space-channel setup FAILED\n");
+    process.exit(1);
+  }
+  process.stderr.write(`space-channel ready (session: ${session}, hook: ${hookPort})\n`);
+
+  const claude = spawn(
+    "claude",
+    [
+      "--dangerously-load-development-channels", "server:space-channel",
+      "--dangerously-skip-permissions",
+      `/${skill}`,
+      ...rest,
+    ],
+    { stdio: "inherit" }
+  );
+  const code: number = await new Promise((resolve) => {
+    claude.on("exit", (c) => resolve(c ?? 0));
+  });
+  process.exit(code);
+}
+
+function countActiveSessions(lockDir: string): number {
+  let count = 0;
+  try {
+    const entries = readdirSync(lockDir);
+    for (const name of entries) {
+      const file = join(lockDir, name);
+      try {
+        const pid = parseInt(name, 10);
+        if (Number.isFinite(pid)) {
+          try {
+            process.kill(pid, 0);
+            count++;
+          } catch {
+            unlinkSync(file);
+          }
+        }
+      } catch {}
+    }
+  } catch {}
+  return count;
+}
+
+function commandExists(cmd: string): boolean {
+  const r = spawnSync("command", ["-v", cmd], { stdio: "ignore", shell: true });
+  return r.status === 0;
+}
+
+async function findFreePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const srv = createServer();
+    srv.unref();
+    srv.on("error", reject);
+    srv.listen(0, "127.0.0.1", () => {
+      const addr = srv.address();
+      if (addr && typeof addr === "object") {
+        const port = addr.port;
+        srv.close(() => resolve(port));
+      } else {
+        srv.close(() => reject(new Error("no address")));
+      }
+    });
+  });
 }

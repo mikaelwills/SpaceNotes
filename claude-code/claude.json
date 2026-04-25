@@ -5,13 +5,12 @@
       "url": "http://spacenotes:5052/mcp"
     },
     "space-channel": {
-      "command": "bun",
-      "args": [
-        "/home/claude/space-channel/space-channel.ts"
-      ],
+      "command": "/home/claude/space-channel/space-channel",
+      "args": [],
       "env": {
         "SPACE_CHANNEL_SESSION": "note-assistant",
-        "SPACE_CHANNEL_SERVER": "ws://spacenotes:5055/ws",
+        "SPACE_CHANNEL_STDB_URI": "ws://spacenotes:3000",
+        "SPACE_CHANNEL_STDB_DB": "spacenotes",
         "SPACE_CHANNEL_HOOK_PORT": "8788"
       }
     }
