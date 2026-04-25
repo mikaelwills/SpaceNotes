@@ -44,6 +44,10 @@ Contributions welcome.
 - AI integration is Claude-Code-only - SpaceChannel and the note-assistant are built specifically around Claude Code's MCP + hook system; other agents aren't supported
 - Early-stage software - expect rough edges
 
+## Roadmap
+
+Move off Claude-Code-only by adding [Pi.dev](https://pi.dev) as a supported agent runtime, so the AI side stops being single-vendor.
+
 ## Architecture
 
 ```
