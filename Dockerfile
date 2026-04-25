@@ -1,7 +1,7 @@
 # All-in-one SpaceNotes image
 # Includes: SpacetimeDB + Module + Rust Daemon + MCP Server + Web Client
 
-FROM clockworklabs/spacetime:v2.0.5 AS spacetime
+FROM clockworklabs/spacetime:v2.1.0 AS spacetime
 
 # Chef stage - install cargo-chef
 FROM rust:latest AS chef

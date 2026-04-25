@@ -6,6 +6,14 @@ client-web/assets/NOTICES
 space-channel/space-channel
 space-channel/space-channel-linux
 
+# claude-code container: binary fetched fresh by build-and-push.sh, baked into the GHCR image
+claude-code/space-channel/space-channel-linux-x64
+claude-code/space-channel/generated/
+claude-code/space-channel/space-channel.ts
+claude-code/space-channel/bun.lock
+claude-code/space-channel/package.json
+claude-code/space-channel/tsconfig.json
+
 # Personal config (not committed)
 CLAUDE.md
 PLAN.md
