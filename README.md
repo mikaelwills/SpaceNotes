@@ -4,11 +4,11 @@
 
 <h1 align="center">SpaceNotes</h1>
 
-**Self-hosted notes with real-time AI agent integration.**
+**Yet another AI agent management and note-taking system... 🙄**
 
-SpaceNotes is a self-hosted note-taking system with real-time sync and a built-in bridge between your notes and AI coding agents. Your notes live as plain markdown files on your own server. AI assistants like Claude Code can read, write, and discuss them through MCP — and SpaceChannel lets you monitor and interact with multiple Claude Code sessions in real-time from the Flutter app.
+But — notes synced across all your devices in real time. No cost. No Obsidian. No cloud. No storage limits. And you can talk to your Claude Code sessions while you're at the gym.
 
-Your notes are plain markdown on your own filesystem — portable, no lock-in, no subscription, nothing to migrate off if you ever want to walk away. The AI side is opinionated and tied to Claude Code: SpaceChannel is built around Claude Code's MCP and hook system specifically, and you'll need an Anthropic API key for the assistant. If that's a deal-breaker, this isn't the project for you. If it isn't, you get a self-hosted notes system where AI agents are first-class and the data is always yours.
+Your notes live as plain markdown on your own filesystem — portable, no lock-in, no subscription, nothing to migrate off if you ever want to walk away. The AI side is opinionated and tied to Claude Code: SpaceChannel is built around Claude Code's MCP and hook system specifically, and you'll need an Anthropic API key for the assistant. If that's a deal-breaker, this isn't the project for you. If it isn't, you get a self-hosted notes system where AI agents are first-class and the data is always yours.
 
 Contributions welcome.
 
