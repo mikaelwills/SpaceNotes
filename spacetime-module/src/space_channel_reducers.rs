@@ -8,6 +8,29 @@ use crate::space_channel_tables::{
 const MESSAGE_TTL_MICROS: i64 = 48 * 60 * 60 * 1_000_000;
 const IMAGE_MAX_BYTES: usize = 4 * 1024 * 1024;
 
+fn ensure_session_exists(ctx: &ReducerContext, session_id: &str) {
+    if ctx.db.session().id().find(&session_id.to_string()).is_some() {
+        return;
+    }
+    let now = ctx.timestamp;
+    let (base_name, host) = match session_id.find('@') {
+        Some(idx) => (
+            session_id[..idx].to_string(),
+            session_id[idx + 1..].to_string(),
+        ),
+        None => (session_id.to_string(), String::new()),
+    };
+    ctx.db.session().insert(Session {
+        id: session_id.to_string(),
+        base_name,
+        host,
+        client_id: String::new(),
+        created_at: now,
+        last_seen: now,
+    });
+    log::info!("Auto-recreated session row from activity: {}", session_id);
+}
+
 #[spacetimedb::reducer]
 pub fn register_session(
     ctx: &ReducerContext,
@@ -43,8 +66,8 @@ pub fn register_session(
 
 #[spacetimedb::reducer]
 pub fn heartbeat(ctx: &ReducerContext, session_id: String) {
+    ensure_session_exists(ctx, &session_id);
     let Some(existing) = ctx.db.session().id().find(&session_id) else {
-        log::warn!("heartbeat: session not found: {}", session_id);
         return;
     };
     ctx.db.session().id().update(Session {
@@ -62,6 +85,7 @@ pub fn end_session(ctx: &ReducerContext, session_id: String) {
 
 #[spacetimedb::reducer]
 pub fn push_status(ctx: &ReducerContext, session_id: String, state: String) {
+    ensure_session_exists(ctx, &session_id);
     let now = ctx.timestamp;
 
     if let Some(existing) = ctx.db.session_activity().session_id().find(&session_id) {
@@ -96,6 +120,7 @@ pub fn push_tool_event(
     tool: String,
     detail: String,
 ) {
+    ensure_session_exists(ctx, &session_id);
     let now = ctx.timestamp;
 
     ctx.db.tool_event().insert(ToolEvent {
@@ -139,6 +164,7 @@ pub fn push_message(
     text: String,
     source: String,
 ) {
+    ensure_session_exists(ctx, &session_id);
     let now = ctx.timestamp;
 
     ctx.db.message().insert(Message {
@@ -174,6 +200,7 @@ pub fn push_image(
         ));
     }
 
+    ensure_session_exists(ctx, &session_id);
     let now = ctx.timestamp;
 
     ctx.db.message().insert(Message {
@@ -297,5 +324,104 @@ pub fn sweep_old_messages(ctx: &ReducerContext) {
         old_message_ids.len(),
         old_tool_event_ids.len(),
         resolved_permission_ids.len()
+    );
+}
+
+#[spacetimedb::reducer]
+pub fn delete_session(ctx: &ReducerContext, session_id: String) {
+    let message_ids: Vec<String> = ctx
+        .db
+        .message()
+        .iter()
+        .filter(|m| m.session_id == session_id)
+        .map(|m| m.id.clone())
+        .collect();
+
+    for id in &message_ids {
+        ctx.db.message().id().delete(id);
+        ctx.db.message_image().message_id().delete(id);
+    }
+
+    let tool_event_ids: Vec<String> = ctx
+        .db
+        .tool_event()
+        .iter()
+        .filter(|t| t.session_id == session_id)
+        .map(|t| t.id.clone())
+        .collect();
+
+    for id in &tool_event_ids {
+        ctx.db.tool_event().id().delete(id);
+    }
+
+    let permission_ids: Vec<String> = ctx
+        .db
+        .permission_request()
+        .iter()
+        .filter(|p| p.session_id == session_id)
+        .map(|p| p.id.clone())
+        .collect();
+
+    for id in &permission_ids {
+        ctx.db.permission_request().id().delete(id);
+    }
+
+    ctx.db.session_activity().session_id().delete(&session_id);
+    ctx.db.session().id().delete(&session_id);
+
+    log::info!(
+        "delete_session({}): purged {} messages, {} tool_events, {} permissions",
+        session_id,
+        message_ids.len(),
+        tool_event_ids.len(),
+        permission_ids.len()
+    );
+}
+
+#[spacetimedb::reducer]
+pub fn clear_all_sessions(ctx: &ReducerContext) {
+    let message_ids: Vec<String> = ctx.db.message().iter().map(|m| m.id.clone()).collect();
+    for id in &message_ids {
+        ctx.db.message().id().delete(id);
+        ctx.db.message_image().message_id().delete(id);
+    }
+
+    let tool_event_ids: Vec<String> = ctx.db.tool_event().iter().map(|t| t.id.clone()).collect();
+    for id in &tool_event_ids {
+        ctx.db.tool_event().id().delete(id);
+    }
+
+    let permission_ids: Vec<String> = ctx
+        .db
+        .permission_request()
+        .iter()
+        .map(|p| p.id.clone())
+        .collect();
+    for id in &permission_ids {
+        ctx.db.permission_request().id().delete(id);
+    }
+
+    let activity_ids: Vec<String> = ctx
+        .db
+        .session_activity()
+        .iter()
+        .map(|a| a.session_id.clone())
+        .collect();
+    for id in &activity_ids {
+        ctx.db.session_activity().session_id().delete(id);
+    }
+
+    let session_ids: Vec<String> = ctx.db.session().iter().map(|s| s.id.clone()).collect();
+    for id in &session_ids {
+        ctx.db.session().id().delete(id);
+    }
+
+    log::info!(
+        "clear_all_sessions: purged {} sessions, {} activities, {} messages, {} tool_events, {} permissions",
+        session_ids.len(),
+        activity_ids.len(),
+        message_ids.len(),
+        tool_event_ids.len(),
+        permission_ids.len()
     );
 }
