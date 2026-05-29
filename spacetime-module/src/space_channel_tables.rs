@@ -65,3 +65,22 @@ pub struct PermissionRequest {
     pub created_at: Timestamp,
     pub resolved_at: Option<Timestamp>,
 }
+
+#[spacetimedb::table(accessor = question_request, public)]
+pub struct QuestionRequest {
+    #[primary_key]
+    pub id: String,
+    #[index(btree)]
+    pub session_id: String,
+    pub question: String,
+    pub header: String,
+    /// JSON-encoded array of option labels.
+    pub options: String,
+    pub multi_select: bool,
+    /// "pending" until answered, then "answered".
+    pub status: String,
+    /// JSON-encoded selected label(s); None until answered.
+    pub response: Option<String>,
+    pub created_at: Timestamp,
+    pub resolved_at: Option<Timestamp>,
+}

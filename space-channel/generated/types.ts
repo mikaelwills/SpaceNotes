@@ -92,6 +92,20 @@ export const PermissionRequest = __t.object("PermissionRequest", {
 });
 export type PermissionRequest = __Infer<typeof PermissionRequest>;
 
+export const QuestionRequest = __t.object("QuestionRequest", {
+  id: __t.string(),
+  sessionId: __t.string(),
+  question: __t.string(),
+  header: __t.string(),
+  options: __t.string(),
+  multiSelect: __t.bool(),
+  status: __t.string(),
+  response: __t.option(__t.string()),
+  createdAt: __t.timestamp(),
+  resolvedAt: __t.option(__t.timestamp()),
+});
+export type QuestionRequest = __Infer<typeof QuestionRequest>;
+
 export const Session = __t.object("Session", {
   id: __t.string(),
   baseName: __t.string(),

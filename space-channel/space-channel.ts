@@ -22,7 +22,7 @@ import { randomUUID } from "crypto";
 import { spawn, spawnSync } from "child_process";
 import { createServer } from "net";
 import { DbConnection } from "./generated";
-import type { Message, MessageImage, PermissionRequest } from "./generated/types";
+import type { Message, MessageImage, PermissionRequest, QuestionRequest } from "./generated/types";
 
 const subcommand = process.argv[2];
 if (subcommand === "hook-post") {
@@ -57,6 +57,8 @@ let shuttingDown = false;
 const RECONNECT_BASE_MS = 1_000;
 const RECONNECT_MAX_MS = 60_000;
 const pendingPermissions = new Map<string, (behavior: string) => void>();
+const pendingQuestions = new Map<string, (response: string | null) => void>();
+const QUESTION_TIMEOUT_MS = 10 * 60 * 1000;
 const pendingImages = new Map<string, MessageImage>();
 const pendingMessages = new Map<string, Message>();
 const openToolCalls = new Map<string, { tool: string; startedAt: number }>();
@@ -226,6 +228,7 @@ function connectToStdb() {
         .onError((_ctx) => log("Subscription error"))
         .subscribe([
           `SELECT * FROM permission_request WHERE session_id = '${SESSION_ID}'`,
+          `SELECT * FROM question_request WHERE session_id = '${SESSION_ID}'`,
           `SELECT * FROM message WHERE session_id = '${SESSION_ID}' AND role = 'user' AND source = 'flutter'`,
           `SELECT message_image.* FROM message_image JOIN message ON message.id = message_image.message_id WHERE message.session_id = '${SESSION_ID}' AND message.role = 'user' AND message.source = 'flutter'`,
         ]);
@@ -237,6 +240,15 @@ function connectToStdb() {
       conn.db.permission_request.onInsert((ctx, row) => {
         if ((ctx as any).event?.tag === "SubscribeApplied") return;
         handlePermissionUpdate(row);
+      });
+
+      conn.db.question_request.onUpdate((_ctx, _oldRow, newRow) => {
+        handleQuestionUpdate(newRow);
+      });
+
+      conn.db.question_request.onInsert((ctx, row) => {
+        if ((ctx as any).event?.tag === "SubscribeApplied") return;
+        handleQuestionUpdate(row);
       });
 
       conn.db.message.onInsert((ctx, row) => {
@@ -417,6 +429,14 @@ function handlePermissionUpdate(row: PermissionRequest) {
   }).catch((e) => log(`permission notification failed: ${e}`));
 }
 
+function handleQuestionUpdate(row: QuestionRequest) {
+  if (row.status === "pending") return;
+  const pending = pendingQuestions.get(row.id);
+  if (!pending) return;
+  pendingQuestions.delete(row.id);
+  pending(row.response ?? null);
+}
+
 function readContextUsage(
   transcriptPath: unknown,
   model: unknown,
@@ -457,6 +477,86 @@ function readContextUsage(
   return { used, window };
 }
 
+type AskQuestion = {
+  question?: string;
+  header?: string;
+  options?: Array<{ label?: string; description?: string }>;
+  multiSelect?: boolean;
+};
+
+// Surfaces each question as a question_request row, waits for the Flutter answer
+// (or QUESTION_TIMEOUT_MS), and returns the hook stdout payload that injects the
+// answers. On timeout/no-answer, returns {} so Claude Code falls back to its own
+// terminal prompt (no worse than today).
+async function handleAskUserQuestion(
+  toolInput: unknown,
+): Promise<Record<string, unknown>> {
+  const input = (toolInput ?? {}) as { questions?: AskQuestion[] };
+  const questions = Array.isArray(input.questions) ? input.questions : [];
+  if (questions.length === 0 || !conn) return {};
+
+  const answers: Record<string, string> = {};
+  let answeredAny = false;
+
+  for (const q of questions) {
+    const questionText = q.question ?? "";
+    if (!questionText) continue;
+    const labels = (q.options ?? [])
+      .map((o) => o.label)
+      .filter((l): l is string => typeof l === "string" && l.length > 0);
+
+    const id = `question-${Date.now()}-${randomUUID().slice(0, 8)}`;
+    try {
+      await conn.reducers.requestQuestion({
+        id,
+        sessionId: SESSION_ID,
+        question: questionText,
+        header: q.header ?? "",
+        options: JSON.stringify(labels),
+        multiSelect: q.multiSelect === true,
+      });
+    } catch (e) {
+      log(`requestQuestion failed: ${e}`);
+      continue;
+    }
+
+    const response = await new Promise<string | null>((resolve) => {
+      const timer = setTimeout(() => {
+        pendingQuestions.delete(id);
+        log(`Question ${id} timed out after ${QUESTION_TIMEOUT_MS}ms`);
+        resolve(null);
+      }, QUESTION_TIMEOUT_MS);
+      pendingQuestions.set(id, (r) => {
+        clearTimeout(timer);
+        resolve(r);
+      });
+    });
+
+    if (response === null) continue;
+
+    // response is JSON: a string label, or an array of labels for multiSelect.
+    let selected: string;
+    try {
+      const parsed = JSON.parse(response);
+      selected = Array.isArray(parsed) ? parsed.join(", ") : String(parsed);
+    } catch {
+      selected = response;
+    }
+    answers[questionText] = selected;
+    answeredAny = true;
+  }
+
+  if (!answeredAny) return {};
+
+  return {
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      permissionDecision: "allow",
+      updatedToolInput: { questions, answers },
+    },
+  };
+}
+
 function startHookServer() {
   const server = Bun.serve({
     port: args.hookPort || 0,
@@ -476,6 +576,13 @@ function startHookServer() {
 
       const hookEvent: string = body.hook_event_name || body.hook_event || "unknown";
       log(`Hook: ${hookEvent}`);
+
+      // AskUserQuestion: surface the question in Flutter and BLOCK until answered.
+      // The answer is returned to the hook process, which injects it via stdout.
+      if (hookEvent === "PreToolUse" && body.tool_name === "AskUserQuestion") {
+        const out = await handleAskUserQuestion(body.tool_input);
+        return Response.json(out);
+      }
 
       try {
         if (hookEvent === "UserPromptSubmit") {
@@ -604,8 +711,36 @@ async function runHookPost() {
     chunks.push(chunk as Buffer);
   }
   const body = Buffer.concat(chunks);
-
   const url = `http://127.0.0.1:${port}/hook`;
+
+  // AskUserQuestion blocks server-side until the Flutter user answers (or the
+  // 10-min question timeout). Wait for that response and forward its body to
+  // stdout so Claude Code injects the answer. Empty/error → print nothing, which
+  // lets Claude fall back to its own terminal prompt.
+  let parsed: any = null;
+  try {
+    parsed = JSON.parse(body.toString("utf8"));
+  } catch {}
+  const isAskUserQuestion =
+    parsed?.hook_event_name === "PreToolUse" &&
+    parsed?.tool_name === "AskUserQuestion";
+
+  if (isAskUserQuestion) {
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body,
+        signal: AbortSignal.timeout(11 * 60 * 1000),
+      });
+      if (res.ok) {
+        const text = (await res.text()).trim();
+        if (text && text !== "{}") process.stdout.write(text);
+      }
+    } catch {}
+    return;
+  }
+
   const deadline = Date.now() + 3000;
   let attempt = 0;
   while (Date.now() < deadline && attempt < 10) {
