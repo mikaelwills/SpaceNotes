@@ -35,7 +35,11 @@ if (subcommand === "launch") {
 }
 
 const args = parseArgs();
-const HOST = hostname().split(".")[0] ?? "unknown";
+const RAW_HOST = hostname().split(".")[0] ?? "unknown";
+const HOST_ALIASES: Record<string, string> = {
+  "mikael-NUC10i3FNK": "robert",
+};
+const HOST = HOST_ALIASES[RAW_HOST] ?? RAW_HOST;
 const CLIENT_ID = randomUUID();
 const SESSION_ID = `${args.session}@${HOST}`;
 const HEARTBEAT_MS = 20_000;
@@ -236,7 +240,9 @@ function connectToStdb() {
       });
 
       conn.db.message.onInsert((ctx, row) => {
-        if ((ctx as any).event?.tag === "SubscribeApplied") return;
+        const tag = (ctx as any).event?.tag;
+        log(`message.onInsert id=${row.id} session_id=${row.sessionId} role=${row.role} source=${row.source} event_tag=${tag}`);
+        if (tag === "SubscribeApplied") return;
         handleIncomingMessage(row);
       });
 
@@ -245,9 +251,14 @@ function connectToStdb() {
         handleIncomingImage(row);
       });
 
+      let heartbeatCount = 0;
       heartbeatTimer = setInterval(async () => {
         try {
           await conn?.reducers.heartbeat({ sessionId: SESSION_ID });
+          heartbeatCount++;
+          if (heartbeatCount === 1 || heartbeatCount % 15 === 0) {
+            log(`heartbeat ok (count=${heartbeatCount})`);
+          }
         } catch (e) {
           log(`heartbeat failed: ${e}`);
         }
@@ -283,7 +294,11 @@ function scheduleReconnect() {
 }
 
 function handleIncomingMessage(row: Message) {
-  if (row.role !== "user" || row.source !== "flutter") return;
+  log(`handleIncomingMessage entered id=${row.id} role=${row.role} source=${row.source}`);
+  if (row.role !== "user" || row.source !== "flutter") {
+    log(`handleIncomingMessage skipping id=${row.id} (role/source filter)`);
+    return;
+  }
 
   const image = pendingImages.get(row.id);
   if (image) {
@@ -339,10 +354,13 @@ function emitMessage(message: Message, image?: MessageImage) {
       ? "(image)"
       : message.text;
 
+  log(`emitMessage sending mcp notification message_id=${message.id} content_len=${content.length}`);
   mcp.notification({
     method: "notifications/claude/channel",
     params: { content, meta },
-  }).catch((e) => log(`channel notification failed: ${e}`));
+  })
+    .then(() => log(`mcp notification sent ok message_id=${message.id}`))
+    .catch((e) => log(`channel notification failed: ${e}`));
 }
 
 async function sweepStaleToolCalls() {
@@ -399,6 +417,46 @@ function handlePermissionUpdate(row: PermissionRequest) {
   }).catch((e) => log(`permission notification failed: ${e}`));
 }
 
+function readContextUsage(
+  transcriptPath: unknown,
+  model: unknown,
+): { used: number; window: number } | null {
+  if (typeof transcriptPath !== "string" || !transcriptPath) return null;
+  let modelId = "";
+  if (model && typeof model === "object" && "id" in (model as any)) {
+    modelId = String((model as any).id ?? "");
+  } else if (typeof model === "string") {
+    modelId = model;
+  }
+  const window = modelId.endsWith("[1m]") ? 1_000_000 : 200_000;
+  let raw: string;
+  try {
+    raw = readFileSync(transcriptPath, "utf8");
+  } catch (e) {
+    log(`readContextUsage: open failed (${transcriptPath}): ${e}`);
+    return null;
+  }
+  let used = 0;
+  for (const line of raw.split("\n")) {
+    if (!line) continue;
+    let parsed: any;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    const u = parsed?.message?.usage;
+    if (u) {
+      used =
+        (u.input_tokens ?? 0) +
+        (u.cache_read_input_tokens ?? 0) +
+        (u.cache_creation_input_tokens ?? 0);
+    }
+  }
+  if (used <= 0) return null;
+  return { used, window };
+}
+
 function startHookServer() {
   const server = Bun.serve({
     port: args.hookPort || 0,
@@ -433,6 +491,18 @@ function startHookServer() {
               text: message,
               source: "hook",
             });
+          }
+          const usage = readContextUsage(body.transcript_path, body.model);
+          if (usage) {
+            try {
+              await conn.reducers.pushContextUsage({
+                sessionId: SESSION_ID,
+                used: BigInt(usage.used),
+                window: BigInt(usage.window),
+              });
+            } catch (e) {
+              log(`pushContextUsage failed: ${e}`);
+            }
           }
           openToolCalls.clear();
           lastKnownState = "idle";

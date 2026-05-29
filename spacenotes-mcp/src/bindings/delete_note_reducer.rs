@@ -20,8 +20,6 @@ impl __sdk::InModule for DeleteNoteArgs {
     type Module = super::RemoteModule;
 }
 
-pub struct DeleteNoteCallbackId(__sdk::CallbackId);
-
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the reducer `delete_note`.
 ///
@@ -31,71 +29,38 @@ pub trait delete_note {
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
-    ///  and its status can be observed by listening for [`Self::on_delete_note`] callbacks.
-    fn delete_note(&self, id: String) -> __sdk::Result<()>;
-    /// Register a callback to run whenever we are notified of an invocation of the reducer `delete_note`.
+    ///  and this method provides no way to listen for its completion status.
+    /// /// Use [`delete_note:delete_note_then`] to run a callback after the reducer completes.
+    fn delete_note(&self, id: String) -> __sdk::Result<()> {
+        self.delete_note_then(id, |_, _| {})
+    }
+
+    /// Request that the remote module invoke the reducer `delete_note` to run as soon as possible,
+    /// registering `callback` to run when we are notified that the reducer completed.
     ///
-    /// Callbacks should inspect the [`__sdk::ReducerEvent`] contained in the [`super::ReducerEventContext`]
-    /// to determine the reducer's status.
-    ///
-    /// The returned [`DeleteNoteCallbackId`] can be passed to [`Self::remove_on_delete_note`]
-    /// to cancel the callback.
-    fn on_delete_note(
+    /// This method returns immediately, and errors only if we are unable to send the request.
+    /// The reducer will run asynchronously in the future,
+    ///  and its status can be observed with the `callback`.
+    fn delete_note_then(
         &self,
-        callback: impl FnMut(&super::ReducerEventContext, &String) + Send + 'static,
-    ) -> DeleteNoteCallbackId;
-    /// Cancel a callback previously registered by [`Self::on_delete_note`],
-    /// causing it not to run in the future.
-    fn remove_on_delete_note(&self, callback: DeleteNoteCallbackId);
+        id: String,
+
+        callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
+            + Send
+            + 'static,
+    ) -> __sdk::Result<()>;
 }
 
 impl delete_note for super::RemoteReducers {
-    fn delete_note(&self, id: String) -> __sdk::Result<()> {
-        self.imp.call_reducer("delete_note", DeleteNoteArgs { id })
-    }
-    fn on_delete_note(
+    fn delete_note_then(
         &self,
-        mut callback: impl FnMut(&super::ReducerEventContext, &String) + Send + 'static,
-    ) -> DeleteNoteCallbackId {
-        DeleteNoteCallbackId(self.imp.on_reducer(
-            "delete_note",
-            Box::new(move |ctx: &super::ReducerEventContext| {
-                let super::ReducerEventContext {
-                    event:
-                        __sdk::ReducerEvent {
-                            reducer: super::Reducer::DeleteNote { id },
-                            ..
-                        },
-                    ..
-                } = ctx
-                else {
-                    unreachable!()
-                };
-                callback(ctx, id)
-            }),
-        ))
-    }
-    fn remove_on_delete_note(&self, callback: DeleteNoteCallbackId) {
-        self.imp.remove_on_reducer("delete_note", callback.0)
-    }
-}
+        id: String,
 
-#[allow(non_camel_case_types)]
-#[doc(hidden)]
-/// Extension trait for setting the call-flags for the reducer `delete_note`.
-///
-/// Implemented for [`super::SetReducerFlags`].
-///
-/// This type is currently unstable and may be removed without a major version bump.
-pub trait set_flags_for_delete_note {
-    /// Set the call-reducer flags for the reducer `delete_note` to `flags`.
-    ///
-    /// This type is currently unstable and may be removed without a major version bump.
-    fn delete_note(&self, flags: __ws::CallReducerFlags);
-}
-
-impl set_flags_for_delete_note for super::SetReducerFlags {
-    fn delete_note(&self, flags: __ws::CallReducerFlags) {
-        self.imp.set_call_reducer_flags("delete_note", flags);
+        callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
+            + Send
+            + 'static,
+    ) -> __sdk::Result<()> {
+        self.imp
+            .invoke_reducer_with_callback(DeleteNoteArgs { id }, callback)
     }
 }

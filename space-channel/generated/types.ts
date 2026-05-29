@@ -99,6 +99,8 @@ export const Session = __t.object("Session", {
   clientId: __t.string(),
   createdAt: __t.timestamp(),
   lastSeen: __t.timestamp(),
+  contextUsed: __t.u64(),
+  contextWindow: __t.u64(),
 });
 export type Session = __Infer<typeof Session>;
 

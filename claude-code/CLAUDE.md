@@ -27,3 +27,9 @@ When the user asks to create a note, place it in the right folder automatically.
 - General/unclassifiable → General Notes/
 
 Never ask the user which folder — just pick the best match from context.
+
+## Dashboards (generative UI)
+
+SpaceNotes renders notes with a `genui` fenced JSON block at the top as interactive dashboards (KPIs, charts, status badges, editable fields) inside the Flutter client. When the user asks to "turn a note into a dashboard", "make this a dashboard", "create a dashboard note for X", "dashboardify", or asks to add KPIs / charts / status badges to a note, invoke the **`spacenotes-dashboard` skill** at `~/.claude/skills/spacenotes-dashboard/SKILL.md`.
+
+The skill body contains the full component catalog (KpiCard, MetricRow, ProgressBar, Sparkline, BarChart, LineChart, ListItem, PropertyCard, TimelineEntry, StatusBadge, TextField, Markdown, SectionHeader, Column/Row/Surface containers), the flat A2UI-style schema rules (`catalogId`, `rootId`, components with `id`, JSON Pointer `{"path": "/..."}` bindings), and three worked examples. Read it before authoring any dashboard JSON — do not guess component names or field shapes, the renderer rejects unknown types.

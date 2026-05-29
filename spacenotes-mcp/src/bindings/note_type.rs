@@ -23,3 +23,61 @@ pub struct Note {
 impl __sdk::InModule for Note {
     type Module = super::RemoteModule;
 }
+
+/// Column accessor struct for the table `Note`.
+///
+/// Provides typed access to columns for query building.
+pub struct NoteCols {
+    pub id: __sdk::__query_builder::Col<Note, String>,
+    pub path: __sdk::__query_builder::Col<Note, String>,
+    pub name: __sdk::__query_builder::Col<Note, String>,
+    pub content: __sdk::__query_builder::Col<Note, String>,
+    pub folder_path: __sdk::__query_builder::Col<Note, String>,
+    pub depth: __sdk::__query_builder::Col<Note, u32>,
+    pub frontmatter: __sdk::__query_builder::Col<Note, String>,
+    pub size: __sdk::__query_builder::Col<Note, u64>,
+    pub created_time: __sdk::__query_builder::Col<Note, u64>,
+    pub modified_time: __sdk::__query_builder::Col<Note, u64>,
+    pub db_updated_at: __sdk::__query_builder::Col<Note, __sdk::Timestamp>,
+}
+
+impl __sdk::__query_builder::HasCols for Note {
+    type Cols = NoteCols;
+    fn cols(table_name: &'static str) -> Self::Cols {
+        NoteCols {
+            id: __sdk::__query_builder::Col::new(table_name, "id"),
+            path: __sdk::__query_builder::Col::new(table_name, "path"),
+            name: __sdk::__query_builder::Col::new(table_name, "name"),
+            content: __sdk::__query_builder::Col::new(table_name, "content"),
+            folder_path: __sdk::__query_builder::Col::new(table_name, "folder_path"),
+            depth: __sdk::__query_builder::Col::new(table_name, "depth"),
+            frontmatter: __sdk::__query_builder::Col::new(table_name, "frontmatter"),
+            size: __sdk::__query_builder::Col::new(table_name, "size"),
+            created_time: __sdk::__query_builder::Col::new(table_name, "created_time"),
+            modified_time: __sdk::__query_builder::Col::new(table_name, "modified_time"),
+            db_updated_at: __sdk::__query_builder::Col::new(table_name, "db_updated_at"),
+        }
+    }
+}
+
+/// Indexed column accessor struct for the table `Note`.
+///
+/// Provides typed access to indexed columns for query building.
+pub struct NoteIxCols {
+    pub db_updated_at: __sdk::__query_builder::IxCol<Note, __sdk::Timestamp>,
+    pub id: __sdk::__query_builder::IxCol<Note, String>,
+    pub path: __sdk::__query_builder::IxCol<Note, String>,
+}
+
+impl __sdk::__query_builder::HasIxCols for Note {
+    type IxCols = NoteIxCols;
+    fn ix_cols(table_name: &'static str) -> Self::IxCols {
+        NoteIxCols {
+            db_updated_at: __sdk::__query_builder::IxCol::new(table_name, "db_updated_at"),
+            id: __sdk::__query_builder::IxCol::new(table_name, "id"),
+            path: __sdk::__query_builder::IxCol::new(table_name, "path"),
+        }
+    }
+}
+
+impl __sdk::__query_builder::CanBeLookupTable for Note {}

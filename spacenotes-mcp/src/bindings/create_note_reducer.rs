@@ -40,8 +40,6 @@ impl __sdk::InModule for CreateNoteArgs {
     type Module = super::RemoteModule;
 }
 
-pub struct CreateNoteCallbackId(__sdk::CallbackId);
-
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the reducer `create_note`.
 ///
@@ -51,50 +49,8 @@ pub trait create_note {
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
-    ///  and its status can be observed by listening for [`Self::on_create_note`] callbacks.
-    fn create_note(
-        &self,
-        id: String,
-        path: String,
-        name: String,
-        content: String,
-        folder_path: String,
-        depth: u32,
-        frontmatter: String,
-        size: u64,
-        created_time: u64,
-        modified_time: u64,
-    ) -> __sdk::Result<()>;
-    /// Register a callback to run whenever we are notified of an invocation of the reducer `create_note`.
-    ///
-    /// Callbacks should inspect the [`__sdk::ReducerEvent`] contained in the [`super::ReducerEventContext`]
-    /// to determine the reducer's status.
-    ///
-    /// The returned [`CreateNoteCallbackId`] can be passed to [`Self::remove_on_create_note`]
-    /// to cancel the callback.
-    fn on_create_note(
-        &self,
-        callback: impl FnMut(
-                &super::ReducerEventContext,
-                &String,
-                &String,
-                &String,
-                &String,
-                &String,
-                &u32,
-                &String,
-                &u64,
-                &u64,
-                &u64,
-            ) + Send
-            + 'static,
-    ) -> CreateNoteCallbackId;
-    /// Cancel a callback previously registered by [`Self::on_create_note`],
-    /// causing it not to run in the future.
-    fn remove_on_create_note(&self, callback: CreateNoteCallbackId);
-}
-
-impl create_note for super::RemoteReducers {
+    ///  and this method provides no way to listen for its completion status.
+    /// /// Use [`create_note:create_note_then`] to run a callback after the reducer completes.
     fn create_note(
         &self,
         id: String,
@@ -108,8 +64,65 @@ impl create_note for super::RemoteReducers {
         created_time: u64,
         modified_time: u64,
     ) -> __sdk::Result<()> {
-        self.imp.call_reducer(
-            "create_note",
+        self.create_note_then(
+            id,
+            path,
+            name,
+            content,
+            folder_path,
+            depth,
+            frontmatter,
+            size,
+            created_time,
+            modified_time,
+            |_, _| {},
+        )
+    }
+
+    /// Request that the remote module invoke the reducer `create_note` to run as soon as possible,
+    /// registering `callback` to run when we are notified that the reducer completed.
+    ///
+    /// This method returns immediately, and errors only if we are unable to send the request.
+    /// The reducer will run asynchronously in the future,
+    ///  and its status can be observed with the `callback`.
+    fn create_note_then(
+        &self,
+        id: String,
+        path: String,
+        name: String,
+        content: String,
+        folder_path: String,
+        depth: u32,
+        frontmatter: String,
+        size: u64,
+        created_time: u64,
+        modified_time: u64,
+
+        callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
+            + Send
+            + 'static,
+    ) -> __sdk::Result<()>;
+}
+
+impl create_note for super::RemoteReducers {
+    fn create_note_then(
+        &self,
+        id: String,
+        path: String,
+        name: String,
+        content: String,
+        folder_path: String,
+        depth: u32,
+        frontmatter: String,
+        size: u64,
+        created_time: u64,
+        modified_time: u64,
+
+        callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
+            + Send
+            + 'static,
+    ) -> __sdk::Result<()> {
+        self.imp.invoke_reducer_with_callback(
             CreateNoteArgs {
                 id,
                 path,
@@ -122,88 +135,7 @@ impl create_note for super::RemoteReducers {
                 created_time,
                 modified_time,
             },
+            callback,
         )
-    }
-    fn on_create_note(
-        &self,
-        mut callback: impl FnMut(
-                &super::ReducerEventContext,
-                &String,
-                &String,
-                &String,
-                &String,
-                &String,
-                &u32,
-                &String,
-                &u64,
-                &u64,
-                &u64,
-            ) + Send
-            + 'static,
-    ) -> CreateNoteCallbackId {
-        CreateNoteCallbackId(self.imp.on_reducer(
-            "create_note",
-            Box::new(move |ctx: &super::ReducerEventContext| {
-                let super::ReducerEventContext {
-                    event:
-                        __sdk::ReducerEvent {
-                            reducer:
-                                super::Reducer::CreateNote {
-                                    id,
-                                    path,
-                                    name,
-                                    content,
-                                    folder_path,
-                                    depth,
-                                    frontmatter,
-                                    size,
-                                    created_time,
-                                    modified_time,
-                                },
-                            ..
-                        },
-                    ..
-                } = ctx
-                else {
-                    unreachable!()
-                };
-                callback(
-                    ctx,
-                    id,
-                    path,
-                    name,
-                    content,
-                    folder_path,
-                    depth,
-                    frontmatter,
-                    size,
-                    created_time,
-                    modified_time,
-                )
-            }),
-        ))
-    }
-    fn remove_on_create_note(&self, callback: CreateNoteCallbackId) {
-        self.imp.remove_on_reducer("create_note", callback.0)
-    }
-}
-
-#[allow(non_camel_case_types)]
-#[doc(hidden)]
-/// Extension trait for setting the call-flags for the reducer `create_note`.
-///
-/// Implemented for [`super::SetReducerFlags`].
-///
-/// This type is currently unstable and may be removed without a major version bump.
-pub trait set_flags_for_create_note {
-    /// Set the call-reducer flags for the reducer `create_note` to `flags`.
-    ///
-    /// This type is currently unstable and may be removed without a major version bump.
-    fn create_note(&self, flags: __ws::CallReducerFlags);
-}
-
-impl set_flags_for_create_note for super::SetReducerFlags {
-    fn create_note(&self, flags: __ws::CallReducerFlags) {
-        self.imp.set_call_reducer_flags("create_note", flags);
     }
 }

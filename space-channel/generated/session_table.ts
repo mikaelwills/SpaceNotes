@@ -17,4 +17,6 @@ export default __t.row({
   clientId: __t.string().name("client_id"),
   createdAt: __t.timestamp().name("created_at"),
   lastSeen: __t.timestamp().name("last_seen"),
+  contextUsed: __t.u64().name("context_used"),
+  contextWindow: __t.u64().name("context_window"),
 });

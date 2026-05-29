@@ -32,16 +32,26 @@
   <title>SpaceNotes Client</title>
   <link rel="manifest" href="manifest.json">
 </head>
-<body style="margin:0;background:#0a0a0f;display:flex;align-items:center;justify-content:center;height:100vh;overflow:hidden">
-  <div id="loading" style="text-align:center">
-    <div style="width:40px;height:40px;border:3px solid #1a1a2e;border-top:3px solid #8b5cf6;border-radius:50%;animation:spin .8s linear infinite;margin:0 auto"></div>
-    <div style="color:#6b7280;font-family:system-ui;font-size:13px;margin-top:16px">Loading SpaceNotes...</div>
+<body style="margin:0;background:#0D0D0F;display:flex;align-items:center;justify-content:center;height:100vh;overflow:hidden;font-family:ui-monospace,'JetBrains Mono',SFMono-Regular,Menlo,monospace">
+  <div id="loading" style="display:flex;flex-direction:column;align-items:center;gap:18px">
+    <div style="width:28px;height:28px;border:1px solid #26262B;border-top:1px solid #7DD3FC;border-radius:50%;animation:spin 1s linear infinite"></div>
+    <div style="color:#9A9A9A;font-size:10px;letter-spacing:2px;text-transform:uppercase">spacenotes · loading</div>
   </div>
   <style>@keyframes spin{to{transform:rotate(360deg)}}</style>
   <script>
     document.addEventListener('contextmenu', function(e) {
       e.preventDefault();
     });
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.getRegistrations().then(function(rs) {
+        rs.forEach(function(r) { r.unregister(); });
+      });
+      if (window.caches) {
+        caches.keys().then(function(ks) {
+          ks.forEach(function(k) { caches.delete(k); });
+        });
+      }
+    }
   </script>
   <script src="webcodecs_helper.js"></script>
   <script src="flutter_bootstrap.js" async></script>

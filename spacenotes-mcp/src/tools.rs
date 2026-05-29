@@ -262,6 +262,49 @@ pub fn get_tools() -> Vec<Tool> {
                 "required": ["path", "pattern", "replacement"]
             }),
         },
+        Tool {
+            name: "get_outbound_links".to_string(),
+            description: "Get notes this note links to. Recognises markdown links of the form `[text](spacenote:UUID)`. Returns each target's id, name, path, and a `broken` flag (true when the UUID doesn't resolve to an existing note; name and path are empty strings in that case). Skim the names to decide which links are worth following before calling get_note.".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string", "description": "Note UUID (optional if path provided)"},
+                    "path": {"type": "string", "description": "Note path (optional if id provided)"}
+                }
+            }),
+        },
+        Tool {
+            name: "get_backlinks".to_string(),
+            description: "Get notes that link to this note via `[text](spacenote:UUID)` references. Returns id, name, path, and broken for each source. Use to follow the link graph backwards (\"what else mentions this?\") and decide which sources are worth fetching.".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string", "description": "Note UUID (optional if path provided)"},
+                    "path": {"type": "string", "description": "Note path (optional if id provided)"}
+                }
+            }),
+        },
+        Tool {
+            name: "list_sessions".to_string(),
+            description: "List all SpaceChannel Claude sessions registered in SpacetimeDB. Returns id (e.g. `note-assistant@robert`), base_name, host, last_seen_us (microseconds since Unix epoch), state (idle/thinking/tool_use, or null if no activity recorded), and activity_updated_at_us. Sorted by last_seen descending. Use to verify which sessions are alive (compare last_seen / activity_updated_at to current time — heartbeats land every 20s, so stale > ~60s means dead).".to_string(),
+            input_schema: json!({"type": "object", "properties": {}}),
+        },
+        Tool {
+            name: "delete_session".to_string(),
+            description: "Delete a single SpaceChannel session row by id (e.g. `note-assistant@some-dead-host`). Removes the session and its cascaded SpaceChannel state. Use to clean up stale ghost rows after a binary crashed without firing endSession.".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "session_id": {"type": "string", "description": "Full session id like 'note-assistant@robert'"}
+                },
+                "required": ["session_id"]
+            }),
+        },
+        Tool {
+            name: "clear_all_sessions".to_string(),
+            description: "Wipe all SpaceChannel session state (sessions, activity, messages, tool events, permissions). Equivalent to the top-right X button in the Flutter app. Live binaries re-register themselves within seconds via registerSession, so this is only destructive to dead/ghost rows. Use to nuke stale state and let live sessions self-heal.".to_string(),
+            input_schema: json!({"type": "object", "properties": {}}),
+        },
     ]
 }
 
@@ -655,6 +698,65 @@ pub async fn execute_tool(
 
             Ok(json!({"content": [{"type": "text", "text": format!("Replaced {} matches in {}\n\n---\n\n{}", match_count, path, new_content)}]}))
         }
+        "get_outbound_links" => {
+            let id = resolve_note_id(client, &params.arguments)?;
+            let links = client.get_outbound_links(&id).map_err(|e| e.to_string())?;
+            Ok(json!({
+                "content": [{
+                    "type": "text",
+                    "text": serde_json::to_string_pretty(&json!({"links": links}))
+                        .unwrap_or_else(|_| "{\"links\":[]}".to_string())
+                }]
+            }))
+        }
+        "get_backlinks" => {
+            let id = resolve_note_id(client, &params.arguments)?;
+            let links = client.get_backlinks(&id).map_err(|e| e.to_string())?;
+            Ok(json!({
+                "content": [{
+                    "type": "text",
+                    "text": serde_json::to_string_pretty(&json!({"links": links}))
+                        .unwrap_or_else(|_| "{\"links\":[]}".to_string())
+                }]
+            }))
+        }
+        "list_sessions" => {
+            let sessions = client.list_sessions().map_err(|e| e.to_string())?;
+            Ok(json!({
+                "content": [{
+                    "type": "text",
+                    "text": serde_json::to_string_pretty(&json!({"sessions": sessions}))
+                        .unwrap_or_else(|_| "{\"sessions\":[]}".to_string())
+                }]
+            }))
+        }
+        "delete_session" => {
+            let session_id: String = serde_json::from_value(params.arguments["session_id"].clone())
+                .map_err(|e| e.to_string())?;
+            client.delete_session(session_id.clone()).map_err(|e| e.to_string())?;
+            Ok(json!({"content": [{"type": "text", "text": format!("Deleted session: {}", session_id)}]}))
+        }
+        "clear_all_sessions" => {
+            client.clear_all_sessions().map_err(|e| e.to_string())?;
+            Ok(json!({"content": [{"type": "text", "text": "Cleared all sessions. Live binaries will re-register within seconds."}]}))
+        }
         _ => Err(format!("Unknown tool: {}", params.name)),
     }
+}
+
+fn resolve_note_id(
+    client: &crate::spacetime_client::SpacetimeClient,
+    args: &Value,
+) -> Result<String, String> {
+    if let Some(id) = args.get("id").and_then(|v| v.as_str()) {
+        return Ok(id.to_string());
+    }
+    if let Some(path) = args.get("path").and_then(|v| v.as_str()) {
+        let note = client
+            .get_note_by_path(path)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("Note not found: {}", path))?;
+        return Ok(note.id);
+    }
+    Err("Must provide either 'id' or 'path'".to_string())
 }

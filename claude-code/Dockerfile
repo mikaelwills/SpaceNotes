@@ -19,6 +19,7 @@ RUN mkdir -p /home/claude/.claude && chown -R claude:claude /home/claude
 
 COPY claude.json /opt/claude.json
 COPY CLAUDE.md /opt/CLAUDE.md
+COPY skills /opt/skills
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 

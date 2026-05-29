@@ -10,7 +10,7 @@ echo "const String appVersion = '$VERSION';" > "$FLUTTER_REPO/lib/version.dart"
 
 echo "Building Flutter web client..."
 cd "$FLUTTER_REPO"
-flutter build web --release
+flutter build web --wasm --release
 
 echo "Copying build to $CLIENT_DIR..."
 cd - > /dev/null

@@ -37,10 +37,12 @@ import {
 import AcceptCallReducer from "./accept_call_reducer";
 import AppendToNoteReducer from "./append_to_note_reducer";
 import ClearAllReducer from "./clear_all_reducer";
+import ClearAllSessionsReducer from "./clear_all_sessions_reducer";
 import CreateFolderReducer from "./create_folder_reducer";
 import CreateNoteReducer from "./create_note_reducer";
 import DeleteFolderReducer from "./delete_folder_reducer";
 import DeleteNoteReducer from "./delete_note_reducer";
+import DeleteSessionReducer from "./delete_session_reducer";
 import EditMessageReducer from "./edit_message_reducer";
 import EndCallReducer from "./end_call_reducer";
 import EndSessionReducer from "./end_session_reducer";
@@ -50,6 +52,7 @@ import HeartbeatReducer from "./heartbeat_reducer";
 import MoveFolderReducer from "./move_folder_reducer";
 import MoveNoteReducer from "./move_note_reducer";
 import PrependToNoteReducer from "./prepend_to_note_reducer";
+import PushContextUsageReducer from "./push_context_usage_reducer";
 import PushImageReducer from "./push_image_reducer";
 import PushMessageReducer from "./push_message_reducer";
 import PushStatusReducer from "./push_status_reducer";
@@ -252,10 +255,12 @@ const reducersSchema = __reducers(
   __reducerSchema("accept_call", AcceptCallReducer),
   __reducerSchema("append_to_note", AppendToNoteReducer),
   __reducerSchema("clear_all", ClearAllReducer),
+  __reducerSchema("clear_all_sessions", ClearAllSessionsReducer),
   __reducerSchema("create_folder", CreateFolderReducer),
   __reducerSchema("create_note", CreateNoteReducer),
   __reducerSchema("delete_folder", DeleteFolderReducer),
   __reducerSchema("delete_note", DeleteNoteReducer),
+  __reducerSchema("delete_session", DeleteSessionReducer),
   __reducerSchema("edit_message", EditMessageReducer),
   __reducerSchema("end_call", EndCallReducer),
   __reducerSchema("end_session", EndSessionReducer),
@@ -265,6 +270,7 @@ const reducersSchema = __reducers(
   __reducerSchema("move_folder", MoveFolderReducer),
   __reducerSchema("move_note", MoveNoteReducer),
   __reducerSchema("prepend_to_note", PrependToNoteReducer),
+  __reducerSchema("push_context_usage", PushContextUsageReducer),
   __reducerSchema("push_image", PushImageReducer),
   __reducerSchema("push_message", PushMessageReducer),
   __reducerSchema("push_status", PushStatusReducer),

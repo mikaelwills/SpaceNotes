@@ -9,6 +9,8 @@ pub struct Session {
     pub client_id: String,
     pub created_at: Timestamp,
     pub last_seen: Timestamp,
+    pub context_used: u64,
+    pub context_window: u64,
 }
 
 #[spacetimedb::table(accessor = session_activity, public)]

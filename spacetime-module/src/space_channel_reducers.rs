@@ -27,6 +27,8 @@ fn ensure_session_exists(ctx: &ReducerContext, session_id: &str) {
         client_id: String::new(),
         created_at: now,
         last_seen: now,
+        context_used: 0,
+        context_window: 0,
     });
     log::info!("Auto-recreated session row from activity: {}", session_id);
 }
@@ -49,6 +51,8 @@ pub fn register_session(
             client_id,
             created_at: existing.created_at,
             last_seen: now,
+            context_used: existing.context_used,
+            context_window: existing.context_window,
         });
         log::info!("Session re-registered: {}", id);
     } else {
@@ -59,6 +63,8 @@ pub fn register_session(
             client_id,
             created_at: now,
             last_seen: now,
+            context_used: 0,
+            context_window: 0,
         });
         log::info!("Session registered: {}", id);
     }
@@ -110,6 +116,25 @@ pub fn push_status(ctx: &ReducerContext, session_id: String, state: String) {
             ..existing
         });
     }
+}
+
+#[spacetimedb::reducer]
+pub fn push_context_usage(
+    ctx: &ReducerContext,
+    session_id: String,
+    used: u64,
+    window: u64,
+) {
+    ensure_session_exists(ctx, &session_id);
+    let Some(existing) = ctx.db.session().id().find(&session_id) else {
+        return;
+    };
+    ctx.db.session().id().update(Session {
+        last_seen: ctx.timestamp,
+        context_used: used,
+        context_window: window,
+        ..existing
+    });
 }
 
 #[spacetimedb::reducer]

@@ -1,20 +1,34 @@
 use anyhow::Result;
+use regex::Regex;
 use serde::Serialize;
 use spacetimedb_sdk::{DbContext, Table, TableWithPrimaryKey};
-use std::sync::{Arc, Mutex};
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex, OnceLock};
+
+fn spacenote_link_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"\[([^\]]+)\]\(spacenote:([0-9a-f-]{36})\)")
+            .expect("valid spacenote link regex")
+    })
+}
 
 use crate::bindings::{
     append_to_note_reducer::append_to_note,
+    clear_all_sessions_reducer::clear_all_sessions,
     create_folder_reducer::create_folder,
     create_note_reducer::create_note,
     delete_folder_reducer::delete_folder,
     delete_note_reducer::delete_note,
+    delete_session_reducer::delete_session as delete_session_reducer_fn,
     find_replace_in_note_reducer::find_replace_in_note,
     move_folder_reducer::move_folder,
     move_note_reducer::move_note,
     note_table::NoteTableAccess,
     prepend_to_note_reducer::prepend_to_note,
     rename_note_reducer::rename_note,
+    session_activity_table::SessionActivityTableAccess,
+    session_table::SessionTableAccess,
     update_note_content_reducer::update_note_content,
     DbConnection,
 };
@@ -32,7 +46,7 @@ impl SpacetimeClient {
 
         let conn = DbConnection::builder()
             .with_uri(host)
-            .with_module_name(db_name)
+            .with_database_name(db_name)
             .build()?;
 
         // Start the background thread
@@ -49,7 +63,12 @@ impl SpacetimeClient {
             .on_error(|_ctx, err| {
                 tracing::error!("SpacetimeDB subscription error: {:?}", err);
             })
-            .subscribe(vec!["SELECT * FROM note", "SELECT * FROM folder"]);
+            .subscribe(vec![
+                "SELECT * FROM note",
+                "SELECT * FROM folder",
+                "SELECT * FROM session",
+                "SELECT * FROM session_activity",
+            ]);
 
         tracing::info!("SpacetimeDB connection established");
 
@@ -379,6 +398,156 @@ impl SpacetimeClient {
 
         Ok(notes)
     }
+
+    pub fn get_outbound_links(&self, id: &str) -> Result<Vec<Link>> {
+        tracing::info!("Getting outbound links for note {}", id);
+
+        let Some(note) = self
+            .conn
+            .db()
+            .note()
+            .id()
+            .find(&id.to_string())
+        else {
+            return Ok(Vec::new());
+        };
+
+        let id_to_meta: HashMap<String, (String, String)> = self
+            .conn
+            .db()
+            .note()
+            .iter()
+            .map(|n| (n.id.clone(), (n.name.clone(), n.path.clone())))
+            .collect();
+
+        let mut seen = HashSet::new();
+        let mut links = Vec::new();
+        for cap in spacenote_link_re().captures_iter(&note.content) {
+            let target_id = cap.get(2).unwrap().as_str().to_string();
+            if !seen.insert(target_id.clone()) {
+                continue;
+            }
+            let (name, path, broken) = match id_to_meta.get(&target_id) {
+                Some((n, p)) => (n.clone(), p.clone(), false),
+                None => (String::new(), String::new(), true),
+            };
+            links.push(Link {
+                id: target_id,
+                name,
+                path,
+                broken,
+            });
+        }
+
+        tracing::info!("Found {} outbound links for {}", links.len(), id);
+        Ok(links)
+    }
+
+    pub fn get_backlinks(&self, id: &str) -> Result<Vec<Link>> {
+        tracing::info!("Getting backlinks for note {}", id);
+
+        let target_exists = self
+            .conn
+            .db()
+            .note()
+            .id()
+            .find(&id.to_string())
+            .is_some();
+
+        let mut seen = HashSet::new();
+        let mut links = Vec::new();
+        for note in self.conn.db().note().iter() {
+            if note.id == id {
+                continue;
+            }
+            let mut references_target = false;
+            for cap in spacenote_link_re().captures_iter(&note.content) {
+                if cap.get(2).unwrap().as_str() == id {
+                    references_target = true;
+                    break;
+                }
+            }
+            if references_target && seen.insert(note.id.clone()) {
+                links.push(Link {
+                    id: note.id.clone(),
+                    name: note.name.clone(),
+                    path: note.path.clone(),
+                    broken: !target_exists,
+                });
+            }
+        }
+
+        tracing::info!("Found {} backlinks for {}", links.len(), id);
+        Ok(links)
+    }
+
+    pub fn list_sessions(&self) -> Result<Vec<SessionInfo>> {
+        tracing::info!("Listing all SpaceChannel sessions");
+
+        let activity: HashMap<String, (String, i64)> = self
+            .conn
+            .db()
+            .session_activity()
+            .iter()
+            .map(|a| {
+                (
+                    a.session_id.clone(),
+                    (a.state.clone(), a.updated_at.to_micros_since_unix_epoch()),
+                )
+            })
+            .collect();
+
+        let mut sessions: Vec<SessionInfo> = self
+            .conn
+            .db()
+            .session()
+            .iter()
+            .map(|s| {
+                let act = activity.get(&s.id);
+                SessionInfo {
+                    id: s.id.clone(),
+                    base_name: s.base_name.clone(),
+                    host: s.host.clone(),
+                    last_seen_us: s.last_seen.to_micros_since_unix_epoch(),
+                    state: act.map(|(state, _)| state.clone()),
+                    activity_updated_at_us: act.map(|(_, ts)| *ts),
+                }
+            })
+            .collect();
+
+        sessions.sort_by(|a, b| b.last_seen_us.cmp(&a.last_seen_us));
+        Ok(sessions)
+    }
+
+    pub fn delete_session(&self, session_id: String) -> Result<()> {
+        tracing::info!("Deleting session {}", session_id);
+        self.conn.reducers().delete_session(session_id)?;
+        Ok(())
+    }
+
+    pub fn clear_all_sessions(&self) -> Result<()> {
+        tracing::info!("Clearing all SpaceChannel sessions");
+        self.conn.reducers().clear_all_sessions()?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SessionInfo {
+    pub id: String,
+    pub base_name: String,
+    pub host: String,
+    pub last_seen_us: i64,
+    pub state: Option<String>,
+    pub activity_updated_at_us: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Link {
+    pub id: String,
+    pub name: String,
+    pub path: String,
+    pub broken: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]

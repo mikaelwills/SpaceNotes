@@ -40,8 +40,6 @@ impl __sdk::InModule for UpsertNoteArgs {
     type Module = super::RemoteModule;
 }
 
-pub struct UpsertNoteCallbackId(__sdk::CallbackId);
-
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the reducer `upsert_note`.
 ///
@@ -51,50 +49,8 @@ pub trait upsert_note {
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
-    ///  and its status can be observed by listening for [`Self::on_upsert_note`] callbacks.
-    fn upsert_note(
-        &self,
-        id: String,
-        path: String,
-        name: String,
-        content: String,
-        folder_path: String,
-        depth: u32,
-        frontmatter: String,
-        size: u64,
-        created_time: u64,
-        modified_time: u64,
-    ) -> __sdk::Result<()>;
-    /// Register a callback to run whenever we are notified of an invocation of the reducer `upsert_note`.
-    ///
-    /// Callbacks should inspect the [`__sdk::ReducerEvent`] contained in the [`super::ReducerEventContext`]
-    /// to determine the reducer's status.
-    ///
-    /// The returned [`UpsertNoteCallbackId`] can be passed to [`Self::remove_on_upsert_note`]
-    /// to cancel the callback.
-    fn on_upsert_note(
-        &self,
-        callback: impl FnMut(
-                &super::ReducerEventContext,
-                &String,
-                &String,
-                &String,
-                &String,
-                &String,
-                &u32,
-                &String,
-                &u64,
-                &u64,
-                &u64,
-            ) + Send
-            + 'static,
-    ) -> UpsertNoteCallbackId;
-    /// Cancel a callback previously registered by [`Self::on_upsert_note`],
-    /// causing it not to run in the future.
-    fn remove_on_upsert_note(&self, callback: UpsertNoteCallbackId);
-}
-
-impl upsert_note for super::RemoteReducers {
+    ///  and this method provides no way to listen for its completion status.
+    /// /// Use [`upsert_note:upsert_note_then`] to run a callback after the reducer completes.
     fn upsert_note(
         &self,
         id: String,
@@ -108,8 +64,65 @@ impl upsert_note for super::RemoteReducers {
         created_time: u64,
         modified_time: u64,
     ) -> __sdk::Result<()> {
-        self.imp.call_reducer(
-            "upsert_note",
+        self.upsert_note_then(
+            id,
+            path,
+            name,
+            content,
+            folder_path,
+            depth,
+            frontmatter,
+            size,
+            created_time,
+            modified_time,
+            |_, _| {},
+        )
+    }
+
+    /// Request that the remote module invoke the reducer `upsert_note` to run as soon as possible,
+    /// registering `callback` to run when we are notified that the reducer completed.
+    ///
+    /// This method returns immediately, and errors only if we are unable to send the request.
+    /// The reducer will run asynchronously in the future,
+    ///  and its status can be observed with the `callback`.
+    fn upsert_note_then(
+        &self,
+        id: String,
+        path: String,
+        name: String,
+        content: String,
+        folder_path: String,
+        depth: u32,
+        frontmatter: String,
+        size: u64,
+        created_time: u64,
+        modified_time: u64,
+
+        callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
+            + Send
+            + 'static,
+    ) -> __sdk::Result<()>;
+}
+
+impl upsert_note for super::RemoteReducers {
+    fn upsert_note_then(
+        &self,
+        id: String,
+        path: String,
+        name: String,
+        content: String,
+        folder_path: String,
+        depth: u32,
+        frontmatter: String,
+        size: u64,
+        created_time: u64,
+        modified_time: u64,
+
+        callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
+            + Send
+            + 'static,
+    ) -> __sdk::Result<()> {
+        self.imp.invoke_reducer_with_callback(
             UpsertNoteArgs {
                 id,
                 path,
@@ -122,88 +135,7 @@ impl upsert_note for super::RemoteReducers {
                 created_time,
                 modified_time,
             },
+            callback,
         )
-    }
-    fn on_upsert_note(
-        &self,
-        mut callback: impl FnMut(
-                &super::ReducerEventContext,
-                &String,
-                &String,
-                &String,
-                &String,
-                &String,
-                &u32,
-                &String,
-                &u64,
-                &u64,
-                &u64,
-            ) + Send
-            + 'static,
-    ) -> UpsertNoteCallbackId {
-        UpsertNoteCallbackId(self.imp.on_reducer(
-            "upsert_note",
-            Box::new(move |ctx: &super::ReducerEventContext| {
-                let super::ReducerEventContext {
-                    event:
-                        __sdk::ReducerEvent {
-                            reducer:
-                                super::Reducer::UpsertNote {
-                                    id,
-                                    path,
-                                    name,
-                                    content,
-                                    folder_path,
-                                    depth,
-                                    frontmatter,
-                                    size,
-                                    created_time,
-                                    modified_time,
-                                },
-                            ..
-                        },
-                    ..
-                } = ctx
-                else {
-                    unreachable!()
-                };
-                callback(
-                    ctx,
-                    id,
-                    path,
-                    name,
-                    content,
-                    folder_path,
-                    depth,
-                    frontmatter,
-                    size,
-                    created_time,
-                    modified_time,
-                )
-            }),
-        ))
-    }
-    fn remove_on_upsert_note(&self, callback: UpsertNoteCallbackId) {
-        self.imp.remove_on_reducer("upsert_note", callback.0)
-    }
-}
-
-#[allow(non_camel_case_types)]
-#[doc(hidden)]
-/// Extension trait for setting the call-flags for the reducer `upsert_note`.
-///
-/// Implemented for [`super::SetReducerFlags`].
-///
-/// This type is currently unstable and may be removed without a major version bump.
-pub trait set_flags_for_upsert_note {
-    /// Set the call-reducer flags for the reducer `upsert_note` to `flags`.
-    ///
-    /// This type is currently unstable and may be removed without a major version bump.
-    fn upsert_note(&self, flags: __ws::CallReducerFlags);
-}
-
-impl set_flags_for_upsert_note for super::SetReducerFlags {
-    fn upsert_note(&self, flags: __ws::CallReducerFlags) {
-        self.imp.set_call_reducer_flags("upsert_note", flags);
     }
 }
