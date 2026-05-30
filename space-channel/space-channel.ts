@@ -63,6 +63,16 @@ const pendingImages = new Map<string, MessageImage>();
 const pendingMessages = new Map<string, Message>();
 const openToolCalls = new Map<string, { tool: string; startedAt: number }>();
 let lastKnownState: string = "idle";
+const IDLE_WRAPUP_MS = 20 * 60 * 1000;
+let lastActivityAt = Date.now();
+let wrapUpFired = false;
+let userHasEngaged = false;
+
+function markActivity(fromUser = false) {
+  lastActivityAt = Date.now();
+  wrapUpFired = false;
+  if (fromUser) userHasEngaged = true;
+}
 
 const mcp = new Server(
   { name: "space-channel", version: "0.2.0" },
@@ -119,6 +129,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
     const id = `reply-${Date.now()}`;
     try {
       await conn.reducers.pushMessage({ id, sessionId: SESSION_ID, role: "assistant", text, source: "mcp" });
+      markActivity();
       lastKnownState = "idle";
       await conn.reducers.pushStatus({ sessionId: SESSION_ID, state: "idle" });
       return { content: [{ type: "text" as const, text: `sent (id: ${id})` }] };
@@ -243,11 +254,14 @@ function connectToStdb() {
       });
 
       conn.db.question_request.onUpdate((_ctx, _oldRow, newRow) => {
+        log(`question_request.onUpdate id=${newRow.id} status=${newRow.status}`);
         handleQuestionUpdate(newRow);
       });
 
       conn.db.question_request.onInsert((ctx, row) => {
-        if ((ctx as any).event?.tag === "SubscribeApplied") return;
+        const tag = (ctx as any).event?.tag;
+        log(`question_request.onInsert id=${row.id} status=${row.status} event_tag=${tag}`);
+        if (tag === "SubscribeApplied") return;
         handleQuestionUpdate(row);
       });
 
@@ -275,6 +289,7 @@ function connectToStdb() {
           log(`heartbeat failed: ${e}`);
         }
         await sweepStaleToolCalls();
+        checkIdleWrapUp();
       }, HEARTBEAT_MS);
     })
     .onConnectError((_ctx, err) => {
@@ -342,6 +357,7 @@ function handleIncomingImage(row: MessageImage) {
 }
 
 function emitMessage(message: Message, image?: MessageImage) {
+  markActivity(true);
   const meta: Record<string, string> = {
     chat_id: "flutter",
     message_id: message.id,
@@ -373,6 +389,22 @@ function emitMessage(message: Message, image?: MessageImage) {
   })
     .then(() => log(`mcp notification sent ok message_id=${message.id}`))
     .catch((e) => log(`channel notification failed: ${e}`));
+}
+
+function checkIdleWrapUp() {
+  if (!userHasEngaged) return;
+  if (wrapUpFired) return;
+  if (Date.now() - lastActivityAt < IDLE_WRAPUP_MS) return;
+  if (lastKnownState !== "idle" && lastKnownState !== "thinking") return;
+  wrapUpFired = true;
+  const content = "Auto wrap up, follow the wrap up procedures in ~/Productivity/workflows/workflow-agent/execution-flow.md (section \"On Session End\")";
+  log(`Idle wrap-up firing after ${Math.round((Date.now() - lastActivityAt) / 60000)}min`);
+  mcp.notification({
+    method: "notifications/claude/channel",
+    params: { content, meta: { chat_id: "flutter", user: "system", ts: new Date().toISOString() } },
+  })
+    .then(() => log("Idle wrap-up notification sent ok"))
+    .catch((e) => log(`Idle wrap-up notification failed: ${e}`));
 }
 
 async function sweepStaleToolCalls() {
@@ -430,10 +462,18 @@ function handlePermissionUpdate(row: PermissionRequest) {
 }
 
 function handleQuestionUpdate(row: QuestionRequest) {
-  if (row.status === "pending") return;
+  log(`handleQuestionUpdate id=${row.id} status=${row.status} response=${row.response ?? "<null>"} pendingKeys=[${[...pendingQuestions.keys()].join(",")}]`);
+  if (row.status === "pending") {
+    log(`handleQuestionUpdate id=${row.id} ignored: still pending`);
+    return;
+  }
   const pending = pendingQuestions.get(row.id);
-  if (!pending) return;
+  if (!pending) {
+    log(`handleQuestionUpdate id=${row.id} no pending promise registered`);
+    return;
+  }
   pendingQuestions.delete(row.id);
+  log(`handleQuestionUpdate id=${row.id} resolving with response`);
   pending(row.response ?? null);
 }
 
@@ -493,6 +533,7 @@ async function handleAskUserQuestion(
 ): Promise<Record<string, unknown>> {
   const input = (toolInput ?? {}) as { questions?: AskQuestion[] };
   const questions = Array.isArray(input.questions) ? input.questions : [];
+  log(`handleAskUserQuestion entered questions=${questions.length} conn=${conn ? "yes" : "no"}`);
   if (questions.length === 0 || !conn) return {};
 
   const answers: Record<string, string> = {};
@@ -515,6 +556,7 @@ async function handleAskUserQuestion(
         options: JSON.stringify(labels),
         multiSelect: q.multiSelect === true,
       });
+      log(`requestQuestion inserted id=${id} session=${SESSION_ID}`);
     } catch (e) {
       log(`requestQuestion failed: ${e}`);
       continue;
@@ -552,7 +594,7 @@ async function handleAskUserQuestion(
     hookSpecificOutput: {
       hookEventName: "PreToolUse",
       permissionDecision: "allow",
-      updatedToolInput: { questions, answers },
+      updatedInput: { questions, answers },
     },
   };
 }
