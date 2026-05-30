@@ -1,8 +1,9 @@
 use spacetimedb::{ReducerContext, Table};
 
 use crate::space_channel_tables::{
-    message, message_image, permission_request, session, session_activity, tool_event, Message,
-    MessageImage, PermissionRequest, Session, SessionActivity, ToolEvent,
+    message, message_image, permission_request, question_request, session, session_activity,
+    tool_event, Message, MessageImage, PermissionRequest, QuestionRequest, Session,
+    SessionActivity, ToolEvent,
 };
 
 const MESSAGE_TTL_MICROS: i64 = 48 * 60 * 60 * 1_000_000;
@@ -294,6 +295,44 @@ pub fn resolve_permission(ctx: &ReducerContext, id: String, status: String) {
 }
 
 #[spacetimedb::reducer]
+pub fn request_question(
+    ctx: &ReducerContext,
+    id: String,
+    session_id: String,
+    question: String,
+    header: String,
+    options: String,
+    multi_select: bool,
+) {
+    ctx.db.question_request().insert(QuestionRequest {
+        id,
+        session_id,
+        question,
+        header,
+        options,
+        multi_select,
+        status: "pending".to_string(),
+        response: None,
+        created_at: ctx.timestamp,
+        resolved_at: None,
+    });
+}
+
+#[spacetimedb::reducer]
+pub fn respond_to_question(ctx: &ReducerContext, id: String, response: String) {
+    let Some(existing) = ctx.db.question_request().id().find(&id) else {
+        log::warn!("respond_to_question: not found: {}", id);
+        return;
+    };
+    ctx.db.question_request().id().update(QuestionRequest {
+        status: "answered".to_string(),
+        response: Some(response),
+        resolved_at: Some(ctx.timestamp),
+        ..existing
+    });
+}
+
+#[spacetimedb::reducer]
 pub fn sweep_old_messages(ctx: &ReducerContext) {
     let cutoff_micros = ctx
         .timestamp
@@ -344,11 +383,31 @@ pub fn sweep_old_messages(ctx: &ReducerContext) {
         ctx.db.permission_request().id().delete(id);
     }
 
+    let answered_question_ids: Vec<String> = ctx
+        .db
+        .question_request()
+        .iter()
+        .filter(|q| {
+            q.status != "pending"
+                && q.resolved_at
+                    .map(|t: spacetimedb::Timestamp| {
+                        t.to_micros_since_unix_epoch() < cutoff_micros
+                    })
+                    .unwrap_or(false)
+        })
+        .map(|q| q.id.clone())
+        .collect();
+
+    for id in &answered_question_ids {
+        ctx.db.question_request().id().delete(id);
+    }
+
     log::info!(
-        "sweep_old_messages: purged {} messages, {} tool_events, {} permissions",
+        "sweep_old_messages: purged {} messages, {} tool_events, {} permissions, {} questions",
         old_message_ids.len(),
         old_tool_event_ids.len(),
-        resolved_permission_ids.len()
+        resolved_permission_ids.len(),
+        answered_question_ids.len()
     );
 }
 
@@ -391,15 +450,28 @@ pub fn delete_session(ctx: &ReducerContext, session_id: String) {
         ctx.db.permission_request().id().delete(id);
     }
 
+    let question_ids: Vec<String> = ctx
+        .db
+        .question_request()
+        .iter()
+        .filter(|q| q.session_id == session_id)
+        .map(|q| q.id.clone())
+        .collect();
+
+    for id in &question_ids {
+        ctx.db.question_request().id().delete(id);
+    }
+
     ctx.db.session_activity().session_id().delete(&session_id);
     ctx.db.session().id().delete(&session_id);
 
     log::info!(
-        "delete_session({}): purged {} messages, {} tool_events, {} permissions",
+        "delete_session({}): purged {} messages, {} tool_events, {} permissions, {} questions",
         session_id,
         message_ids.len(),
         tool_event_ids.len(),
-        permission_ids.len()
+        permission_ids.len(),
+        question_ids.len()
     );
 }
 
@@ -426,6 +498,16 @@ pub fn clear_all_sessions(ctx: &ReducerContext) {
         ctx.db.permission_request().id().delete(id);
     }
 
+    let question_ids: Vec<String> = ctx
+        .db
+        .question_request()
+        .iter()
+        .map(|q| q.id.clone())
+        .collect();
+    for id in &question_ids {
+        ctx.db.question_request().id().delete(id);
+    }
+
     let activity_ids: Vec<String> = ctx
         .db
         .session_activity()
@@ -442,11 +524,12 @@ pub fn clear_all_sessions(ctx: &ReducerContext) {
     }
 
     log::info!(
-        "clear_all_sessions: purged {} sessions, {} activities, {} messages, {} tool_events, {} permissions",
+        "clear_all_sessions: purged {} sessions, {} activities, {} messages, {} tool_events, {} permissions, {} questions",
         session_ids.len(),
         activity_ids.len(),
         message_ids.len(),
         tool_event_ids.len(),
-        permission_ids.len()
+        permission_ids.len(),
+        question_ids.len()
     );
 }
