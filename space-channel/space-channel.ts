@@ -63,7 +63,9 @@ const pendingImages = new Map<string, MessageImage>();
 const pendingMessages = new Map<string, Message>();
 const openToolCalls = new Map<string, { tool: string; startedAt: number }>();
 let lastKnownState: string = "idle";
-const IDLE_WRAPUP_MS = 20 * 60 * 1000;
+let lastInputSource: "terminal" | "flutter" = "terminal";
+const pendingFlutterPrompts: string[] = [];
+const IDLE_WRAPUP_MS = 6 * 60 * 60 * 1000;
 let lastActivityAt = Date.now();
 let wrapUpFired = false;
 let userHasEngaged = false;
@@ -327,6 +329,12 @@ function handleIncomingMessage(row: Message) {
     return;
   }
 
+  lastInputSource = "flutter";
+  if (row.text) {
+    pendingFlutterPrompts.push(row.text.trim());
+    if (pendingFlutterPrompts.length > 20) pendingFlutterPrompts.shift();
+  }
+
   const image = pendingImages.get(row.id);
   if (image) {
     pendingImages.delete(row.id);
@@ -533,8 +541,8 @@ async function handleAskUserQuestion(
 ): Promise<Record<string, unknown>> {
   const input = (toolInput ?? {}) as { questions?: AskQuestion[] };
   const questions = Array.isArray(input.questions) ? input.questions : [];
-  log(`handleAskUserQuestion entered questions=${questions.length} conn=${conn ? "yes" : "no"}`);
-  if (questions.length === 0 || !conn) return {};
+  log(`handleAskUserQuestion entered questions=${questions.length} conn=${conn ? "yes" : "no"} lastInputSource=${lastInputSource}`);
+  if (questions.length === 0 || !conn || lastInputSource !== "flutter") return {};
 
   const answers: Record<string, string> = {};
   let answeredAny = false;
@@ -628,6 +636,17 @@ function startHookServer() {
 
       try {
         if (hookEvent === "UserPromptSubmit") {
+          const prompt: string = (body.prompt || "").trim();
+          log(`UserPromptSubmit prompt=${JSON.stringify(prompt)} pending=${JSON.stringify(pendingFlutterPrompts)}`);
+          const echoIdx = prompt
+            ? pendingFlutterPrompts.findIndex((p) => p.length > 0 && prompt.includes(p))
+            : -1;
+          if (echoIdx !== -1) {
+            pendingFlutterPrompts.splice(echoIdx, 1);
+            log(`UserPromptSubmit matched forwarded flutter prompt, keeping lastInputSource=flutter`);
+          } else {
+            lastInputSource = "terminal";
+          }
           lastKnownState = "thinking";
           await conn.reducers.pushStatus({ sessionId: SESSION_ID, state: "thinking" });
         } else if (hookEvent === "Stop") {
