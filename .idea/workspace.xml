@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="ChangeListManager">
+    <list default="true" id="bf546cef-ddbb-4e24-924b-9e4a631e6e2f" name="Changes" comment="">
+      <change beforePath="$PROJECT_DIR$/client-web/assets/shaders/ink_sparkle.frag" beforeDir="false" afterPath="$PROJECT_DIR$/client-web/assets/shaders/ink_sparkle.frag" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/client-web/assets/shaders/stretch_effect.frag" beforeDir="false" afterPath="$PROJECT_DIR$/client-web/assets/shaders/stretch_effect.frag" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/client-web/canvaskit/canvaskit.js" beforeDir="false" afterPath="$PROJECT_DIR$/client-web/canvaskit/canvaskit.js" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/client-web/canvaskit/canvaskit.js.symbols" beforeDir="false" afterPath="$PROJECT_DIR$/client-web/canvaskit/canvaskit.js.symbols" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/client-web/canvaskit/canvaskit.wasm" beforeDir="false" afterPath="$PROJECT_DIR$/client-web/canvaskit/canvaskit.wasm" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/client-web/canvaskit/chromium/canvaskit.js" beforeDir="false" afterPath="$PROJECT_DIR$/client-web/canvaskit/chromium/canvaskit.js" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/client-web/canvaskit/chromium/canvaskit.js.symbols" beforeDir="false" afterPath="$PROJECT_DIR$/client-web/canvaskit/chromium/canvaskit.js.symbols" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/client-web/canvaskit/chromium/canvaskit.wasm" beforeDir="false" afterPath="$PROJECT_DIR$/client-web/canvaskit/chromium/canvaskit.wasm" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/client-web/canvaskit/skwasm.js" beforeDir="false" afterPath="$PROJECT_DIR$/client-web/canvaskit/skwasm.js" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/client-web/canvaskit/skwasm.js.symbols" beforeDir="false" afterPath="$PROJECT_DIR$/client-web/canvaskit/skwasm.js.symbols" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/client-web/canvaskit/skwasm.wasm" beforeDir="false" afterPath="$PROJECT_DIR$/client-web/canvaskit/skwasm.wasm" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/client-web/canvaskit/skwasm_heavy.js" beforeDir="false" afterPath="$PROJECT_DIR$/client-web/canvaskit/skwasm_heavy.js" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/client-web/canvaskit/skwasm_heavy.js.symbols" beforeDir="false" afterPath="$PROJECT_DIR$/client-web/canvaskit/skwasm_heavy.js.symbols" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/client-web/canvaskit/skwasm_heavy.wasm" beforeDir="false" afterPath="$PROJECT_DIR$/client-web/canvaskit/skwasm_heavy.wasm" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/client-web/canvaskit/wimp.js" beforeDir="false" afterPath="$PROJECT_DIR$/client-web/canvaskit/wimp.js" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/client-web/canvaskit/wimp.js.symbols" beforeDir="false" afterPath="$PROJECT_DIR$/client-web/canvaskit/wimp.js.symbols" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/client-web/canvaskit/wimp.wasm" beforeDir="false" afterPath="$PROJECT_DIR$/client-web/canvaskit/wimp.wasm" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/client-web/flutter_bootstrap.js" beforeDir="false" afterPath="$PROJECT_DIR$/client-web/flutter_bootstrap.js" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/client-web/main.dart.js" beforeDir="false" afterPath="$PROJECT_DIR$/client-web/main.dart.js" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/client-web/main.dart.mjs" beforeDir="false" afterPath="$PROJECT_DIR$/client-web/main.dart.mjs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/client-web/main.dart.wasm" beforeDir="false" afterPath="$PROJECT_DIR$/client-web/main.dart.wasm" afterDir="false" />
+    </list>
+    <option name="SHOW_DIALOG" value="false" />
+    <option name="HIGHLIGHT_CONFLICTS" value="true" />
+    <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
+    <option name="LAST_RESOLUTION" value="IGNORE" />
+  </component>
+  <component name="Git.Settings">
+    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
+  </component>
+  <component name="KubernetesApiPersistence"><![CDATA[{}]]></component>
+  <component name="KubernetesApiProvider"><![CDATA[{
+  "isMigrated": true
+}]]></component>
+  <component name="ProjectColorInfo"><![CDATA[{
+  "associatedIndex": 3,
+  "fromUser": false
+}]]></component>
+  <component name="ProjectId" id="3FGpRo7qxyfVSBzkxIjOVez73uW" />
+  <component name="ProjectViewState">
+    <option name="hideEmptyMiddlePackages" value="true" />
+    <option name="showLibraryContents" value="true" />
+  </component>
+  <component name="PropertiesComponent"><![CDATA[{
+  "keyToString": {
+    "ModuleVcsDetector.initialDetectionPerformed": "true",
+    "RunOnceActivity.ShowReadmeOnStart": "true",
+    "RunOnceActivity.git.unshallow": "true",
+    "RunOnceActivity.typescript.service.memoryLimit.init": "true",
+    "codeWithMe.voiceChat.enabledByDefault": "false",
+    "git-widget-placeholder": "fix/askuserquestion-routing",
+    "nodejs_package_manager_path": "bun",
+    "vue.rearranger.settings.migration": "true"
+  }
+}]]></component>
+  <component name="SharedIndexes">
+    <attachedChunks>
+      <set>
+        <option value="bundled-jdk-30f59d01ecdd-37e91769500f-intellij.indexing.shared.core-IU-261.25134.95" />
+        <option value="bundled-js-predefined-d6986cc7102b-31caf2ab9e3c-JavaScript-IU-261.25134.95" />
+      </set>
+    </attachedChunks>
+  </component>
+  <component name="TaskManager">
+    <task active="true" id="Default" summary="Default task">
+      <changelist id="bf546cef-ddbb-4e24-924b-9e4a631e6e2f" name="Changes" comment="" />
+      <created>1781711255911</created>
+      <option name="number" value="Default" />
+      <option name="presentableId" value="Default" />
+      <updated>1781711255911</updated>
+      <workItem from="1781711267794" duration="124000" />
+    </task>
+    <servers />
+  </component>
+</project>

@@ -8,7 +8,7 @@
 
 But — notes synced across all your devices in real time. No cost. No Obsidian. No cloud. No storage limits. And you can talk to your Claude Code sessions while you're at the gym.
 
-Your notes live as plain markdown on your own filesystem — portable, no lock-in, no subscription, nothing to migrate off if you ever want to walk away. The AI side is opinionated and tied to Claude Code: SpaceChannel is built around Claude Code's MCP and hook system specifically. The note-assistant container logs in with your existing Claude Code subscription (Pro / Max) — no separate API key, no per-token billing.
+Your notes live as plain markdown on your own filesystem — portable, no lock-in, no subscription, nothing to migrate off if you ever want to walk away. The AI side is opinionated and tied to Claude Code: SpaceChannel is built around Claude Code's MCP and hook system specifically. The Claude Code agent container logs in with your existing Claude Code subscription (Pro / Max) — no separate API key, no per-token billing.
 
 Contributions welcome.
 
@@ -41,7 +41,7 @@ Contributions welcome.
 - No hosted option - you must run your own server
 - No E2E encryption - security comes from self-hosting on a private network
 - No multi-user collaboration yet
-- AI integration is Claude-Code-only - SpaceChannel and the note-assistant are built specifically around Claude Code's MCP + hook system; other agents aren't supported
+- AI integration is Claude-Code-only - SpaceChannel and the agent are built specifically around Claude Code's MCP + hook system; other agents aren't supported
 - Early-stage software - expect rough edges
 
 ## Roadmap
@@ -208,7 +208,7 @@ alias myproject='space-channel launch myproject myproject my-skill'
    You should see "Watcher started on /vault" when ready.
 
 5. **Access SpaceNotes:**
-   - **Web Client**: `http://<your-server-ip>:5051` (notes + AI chat with the note-assistant)
+   - **Web Client**: `http://<your-server-ip>:5051` (notes + AI chat with the Claude Code agent)
    - **Mobile App**: Point it at `http://<your-server-ip>:5050` in settings (this is the SpacetimeDB endpoint — it carries notes, sessions, and SpaceChannel)
    - **MCP Server**: `http://<your-server-ip>:5052/mcp` (for Claude Code, Cursor, etc.)
 
@@ -268,7 +268,7 @@ Environment variables (set in `docker-compose.yml`):
 - `SPACETIME_HOST` - SpacetimeDB URL, internal (default: `http://127.0.0.1:3000`)
 - `SPACETIME_DB` - Database name (default: `spacenotes`)
 
-The note-assistant Claude Code container authenticates with your Claude Code subscription (`claude login` once on first run); there's no API-key env var. The chat UI in the Flutter client talks to it via SpaceChannel — no separate chat backend.
+The Claude Code agent container authenticates with your Claude Code subscription (`claude login` once on first run); there's no API-key env var. The chat UI in the Flutter client talks to it via SpaceChannel — no separate chat backend.
 
 ## License
 
