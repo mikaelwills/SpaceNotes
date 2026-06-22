@@ -717,6 +717,33 @@ function startHookServer() {
           });
         } else if (hookEvent === "SessionEnd") {
           await conn.reducers.endSession({ sessionId: SESSION_ID });
+        } else if (hookEvent === "Notification") {
+          const text: string = (body.message || "").trim();
+          if (text) {
+            await conn.reducers.pushMessage({
+              id: `notice-${Date.now()}`,
+              sessionId: SESSION_ID,
+              role: "assistant",
+              text,
+              source: "notice",
+            });
+          }
+        } else if (hookEvent === "StopFailure") {
+          const detail: string =
+            (body.error_details ||
+              body.last_assistant_message ||
+              body.error ||
+              "turn failed").toString().trim();
+          await conn.reducers.pushMessage({
+            id: `error-${Date.now()}`,
+            sessionId: SESSION_ID,
+            role: "assistant",
+            text: `⚠️ ${detail}`,
+            source: "error",
+          });
+          openToolCalls.clear();
+          lastKnownState = "idle";
+          await conn.reducers.pushStatus({ sessionId: SESSION_ID, state: "idle" });
         }
       } catch (e) {
         log(`Hook reducer failed (${hookEvent}): ${e}`);
@@ -851,6 +878,7 @@ async function runLaunch(rawArgs: string[]) {
     PostToolUseFailure: hookEntry,
     UserPromptSubmit: hookEntry,
     Stop: hookEntry,
+    StopFailure: hookEntry,
     SessionEnd: hookEntry,
     Notification: hookEntry,
   };
