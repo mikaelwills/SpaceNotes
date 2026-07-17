@@ -634,7 +634,14 @@ function startHookServer() {
         return Response.json(out);
       }
 
-      try {
+      // Ack the hook client immediately, then do the reducer work in the
+      // background. The client (`runHookPost`) has a 1s POST timeout and retries
+      // on anything that isn't 200; if we awaited the STDB write before
+      // responding and it took >1s, the client would time out and re-POST an
+      // already-committed hook, producing duplicate rows (the 3x-in-chat bug).
+      // AskUserQuestion is the one event that must block (handled above).
+      void (async () => {
+       try {
         if (hookEvent === "UserPromptSubmit") {
           const prompt: string = (body.prompt || "").trim();
           log(`UserPromptSubmit prompt=${JSON.stringify(prompt)} pending=${JSON.stringify(pendingFlutterPrompts)}`);
@@ -650,16 +657,6 @@ function startHookServer() {
           lastKnownState = "thinking";
           await conn.reducers.pushStatus({ sessionId: SESSION_ID, state: "thinking" });
         } else if (hookEvent === "Stop") {
-          const message: string | undefined = body.last_assistant_message;
-          if (message) {
-            await conn.reducers.pushMessage({
-              id: `hook-${Date.now()}`,
-              sessionId: SESSION_ID,
-              role: "assistant",
-              text: message,
-              source: "hook",
-            });
-          }
           const usage = readContextUsage(body.transcript_path, body.model);
           if (usage) {
             try {
@@ -745,9 +742,10 @@ function startHookServer() {
           lastKnownState = "idle";
           await conn.reducers.pushStatus({ sessionId: SESSION_ID, state: "idle" });
         }
-      } catch (e) {
+       } catch (e) {
         log(`Hook reducer failed (${hookEvent}): ${e}`);
-      }
+       }
+      })();
 
       return new Response(null, { status: 200 });
     },
