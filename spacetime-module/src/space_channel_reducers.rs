@@ -193,14 +193,16 @@ pub fn push_message(
     ensure_session_exists(ctx, &session_id);
     let now = ctx.timestamp;
 
-    ctx.db.message().insert(Message {
-        id,
-        session_id: session_id.clone(),
-        role,
-        text,
-        source,
-        created_at: now,
-    });
+    if ctx.db.message().id().find(&id).is_none() {
+        ctx.db.message().insert(Message {
+            id,
+            session_id: session_id.clone(),
+            role,
+            text,
+            source,
+            created_at: now,
+        });
+    }
 
     if let Some(existing) = ctx.db.session().id().find(&session_id) {
         ctx.db.session().id().update(Session {
@@ -229,19 +231,21 @@ pub fn push_image(
     ensure_session_exists(ctx, &session_id);
     let now = ctx.timestamp;
 
-    ctx.db.message().insert(Message {
-        id: id.clone(),
-        session_id: session_id.clone(),
-        role: "user".to_string(),
-        text: caption,
-        source: "flutter".to_string(),
-        created_at: now,
-    });
+    if ctx.db.message().id().find(&id).is_none() {
+        ctx.db.message().insert(Message {
+            id: id.clone(),
+            session_id: session_id.clone(),
+            role: "user".to_string(),
+            text: caption,
+            source: "flutter".to_string(),
+            created_at: now,
+        });
 
-    ctx.db.message_image().insert(MessageImage {
-        message_id: id,
-        bytes,
-    });
+        ctx.db.message_image().insert(MessageImage {
+            message_id: id,
+            bytes,
+        });
+    }
 
     if let Some(existing) = ctx.db.session().id().find(&session_id) {
         ctx.db.session().id().update(Session {
