@@ -12,6 +12,30 @@ use crate::sanitize::sanitize_path;
 use crate::scanner::{read_note_at, scan_for_note_by_id};
 use crate::tracker::ContentTracker;
 
+fn ancestor_folder_paths(note_path: &str) -> Vec<String> {
+    let Some(dir) = note_path.rsplit_once('/').map(|(dir, _)| dir) else {
+        return Vec::new();
+    };
+
+    let mut prefixes = Vec::new();
+    let mut acc = String::new();
+    for segment in dir.split('/') {
+        if !acc.is_empty() {
+            acc.push('/');
+        }
+        acc.push_str(segment);
+        prefixes.push(acc.clone());
+    }
+    prefixes
+}
+
+fn backfill_ancestor_folders(client: &SpacetimeClient, note_path: &str) {
+    for ancestor in ancestor_folder_paths(note_path) {
+        let folder = Folder::new(ancestor);
+        client.upsert_folder(&folder);
+    }
+}
+
 pub async fn start_watcher(
     vault_path: PathBuf,
     client: Arc<SpacetimeClient>,
@@ -90,6 +114,7 @@ pub async fn start_watcher(
 
                                     // UPSERT (Only if tracker says content changed)
                                     if tracker.is_modified(&note.id, &note.content) {
+                                        backfill_ancestor_folders(&client, &note.path);
                                         client.upsert_note(&note);
                                         tracker.update(&note.id, &note.content);
                                         tracing::debug!("Synced: {} (ID: {})", note.name, note.id);
@@ -181,4 +206,35 @@ pub async fn start_watcher(
     std::future::pending::<()>().await;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn root_note_has_no_ancestors() {
+        assert_eq!(ancestor_folder_paths("note.md"), Vec::<String>::new());
+    }
+
+    #[test]
+    fn single_level_yields_one_ancestor() {
+        assert_eq!(ancestor_folder_paths("Homelab/note.md"), vec!["Homelab"]);
+    }
+
+    #[test]
+    fn two_levels_yield_two_bare_ancestors() {
+        assert_eq!(
+            ancestor_folder_paths("Homelab/Solar/x.md"),
+            vec!["Homelab", "Homelab/Solar"]
+        );
+    }
+
+    #[test]
+    fn three_levels_yield_all_ancestors_no_trailing_slash() {
+        assert_eq!(
+            ancestor_folder_paths("A/B/C/x.md"),
+            vec!["A", "A/B", "A/B/C"]
+        );
+    }
 }
