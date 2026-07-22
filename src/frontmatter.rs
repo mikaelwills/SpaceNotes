@@ -62,7 +62,11 @@ pub fn extract_spacetime_id(content: &str) -> Option<String> {
     // STRATEGY 2: Loose Regex Fallback (The Safety Net)
     // If YAML fails (e.g. user added a tab), check raw text so we don't double-inject.
     // Scan first 1KB only.
-    let head = if content.len() > 1024 { &content[..1024] } else { content };
+    let mut head_end = content.len().min(1024);
+    while !content.is_char_boundary(head_end) {
+        head_end -= 1;
+    }
+    let head = &content[..head_end];
     if let Some(caps) = SPACETIME_ID_REGEX.captures(head) {
         let id = caps.get(1).unwrap().as_str().trim().to_string();
         tracing::warn!("Extracted ID via Regex (YAML malformed): {}", id);
@@ -70,6 +74,68 @@ pub fn extract_spacetime_id(content: &str) -> Option<String> {
     }
 
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn straddling_content() -> String {
+        let prefix = "---\ntitle: Migration Note\ntags: [a, b]\n---\n\n";
+        let em_dash = "—";
+        let em_dash_start = 1022;
+        let pad_before = em_dash_start - prefix.len();
+        let mut content = String::new();
+        content.push_str(prefix);
+        content.push_str(&"x".repeat(pad_before));
+        content.push_str(em_dash);
+        content.push_str(&"y".repeat(500));
+        assert_eq!(content.as_bytes()[em_dash_start], 0xE2);
+        assert!(!content.is_char_boundary(1024));
+        assert!(content.len() > 1024);
+        content
+    }
+
+    #[test]
+    fn multibyte_straddling_1024_returns_none_not_panic() {
+        let content = straddling_content();
+        assert_eq!(extract_spacetime_id(&content), None);
+    }
+
+    #[test]
+    fn strategy_1_yaml_spacetime_id_extracted() {
+        let id = "abc123-def456";
+        let prefix = format!("---\nspacetime_id: {}\ntitle: Note\n---\n\n", id);
+        let content = format!("{}{}—{}", prefix, "x".repeat(1200), "y".repeat(200));
+        assert!(content.len() > 1024);
+        assert_eq!(extract_spacetime_id(&content), Some(id.to_string()));
+    }
+
+    #[test]
+    fn straddle_does_not_widen_scan_to_body_id() {
+        let prefix = "---\n\ttitle: bad tab\n---\n\n";
+        let em_dash = "—";
+        let em_dash_start = 1022;
+        let pad_before = em_dash_start - prefix.len();
+        let mut content = String::new();
+        content.push_str(prefix);
+        content.push_str(&"x".repeat(pad_before));
+        content.push_str(em_dash);
+        content.push_str("\nlater in the body someone wrote:\nspacetime_id: deadbeef\n");
+        assert!(!content.is_char_boundary(1024));
+        assert!(content.len() > 1024);
+        assert_eq!(extract_spacetime_id(&content), None);
+    }
+
+    #[test]
+    fn strategy_2_regex_fallback_extracted() {
+        let id = "0a1b2c3d-4e5f";
+        let content = format!(
+            "---\n\ttitle: bad tab indent\nspacetime_id: {}\n---\n\nbody text here",
+            id
+        );
+        assert_eq!(extract_spacetime_id(&content), Some(id.to_string()));
+    }
 }
 
 /// Injects or updates spacetime_id in the frontmatter
