@@ -1,6 +1,7 @@
 mod client;
 mod folder;
 mod frontmatter;
+mod isolation;
 mod note;
 mod reconcile;
 mod sanitize;

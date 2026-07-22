@@ -8,6 +8,7 @@ use uuid::Uuid;
 use crate::client::SpacetimeClient;
 use crate::folder::Folder;
 use crate::frontmatter::inject_spacetime_id;
+use crate::isolation::run_isolated;
 use crate::sanitize::sanitize_path;
 use crate::scanner::{read_note_at, scan_for_note_by_id};
 use crate::tracker::ContentTracker;
@@ -49,13 +50,16 @@ pub async fn start_watcher(
             match res {
                 Ok(events) => {
                     for event in events {
-                        let path = &event.path;
+                    let path = event.path.clone();
+                    let path = &path;
+                    let context = format!("watcher event (path {:?})", path);
+                    run_isolated(context, || {
 
                         // Skip hidden files/directories and Synology system folders
                         if path.iter().any(|name| {
                             name.to_str().map_or(false, |s| s.starts_with('.') || s == "@eaDir")
                         }) {
-                            continue;
+                            return;
                         }
 
                         // Handle markdown files
@@ -68,7 +72,7 @@ pub async fn start_watcher(
                                         let has_changed = tracker.has_changed(&note.id, &note.content);
                                         if !has_changed {
                                             tracing::debug!("Watcher ignoring echo: {}", note.path);
-                                            continue;
+                                            return;
                                         }
                                     }
 
@@ -82,7 +86,7 @@ pub async fn start_watcher(
                                                 "Safety Stop: Note {} has no UUID on disk, but DB knows it as {}. Skipping injection to prevent split-brain.",
                                                 note.path, existing.id
                                             );
-                                            continue;
+                                            return;
                                         }
 
                                         // SAFETY BRAKE: double check raw text before injecting
@@ -92,7 +96,7 @@ pub async fn start_watcher(
                                                     "CRITICAL: spacetime_id found in text but parsing failed. Skipping injection for safety: {}",
                                                     note.path
                                                 );
-                                                continue;
+                                                return;
                                             }
 
                                             // New file without UUID - inject one
@@ -102,13 +106,13 @@ pub async fn start_watcher(
                                             let new_content = inject_spacetime_id(&raw_content, &new_id);
                                             if let Err(e) = std::fs::write(path, &new_content) {
                                                 tracing::error!("Failed to inject UUID into {}: {}", note.path, e);
-                                                continue;
+                                                return;
                                             }
                                             // Update note object with new ID
                                             note.id = new_id;
                                         } else {
                                             tracing::error!("Failed to read {} for UUID injection", note.path);
-                                            continue;
+                                            return;
                                         }
                                     }
 
@@ -189,6 +193,7 @@ pub async fn start_watcher(
                                 tracing::info!("Deleted folder: {}", old_folder_path);
                             }
                         }
+                    });
                     }
                 }
                 Err(e) => tracing::error!("Watch error: {:?}", e),

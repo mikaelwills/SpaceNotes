@@ -3,10 +3,62 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use crate::client::SpacetimeClient;
+use crate::isolation::run_isolated;
 use crate::note::Note;
 use crate::scanner::scan_notes;
 use crate::tracker::ContentTracker;
 use crate::writer::write_note_to_disk;
+
+enum Outcome {
+    Downloaded,
+    Uploaded,
+    Unchanged,
+    Skipped,
+}
+
+fn reconcile_one(
+    vault_path: &Path,
+    client: &SpacetimeClient,
+    tracker: &ContentTracker,
+    local_map: &HashMap<String, Note>,
+    server_map: &HashMap<String, Note>,
+    id: &str,
+) -> Result<Outcome> {
+    match (local_map.get(id), server_map.get(id)) {
+        (Some(local), Some(server)) => {
+            if server.modified_time > local.modified_time {
+                write_note_to_disk(vault_path, server)?;
+                tracker.update(&server.id, &server.content);
+                tracing::debug!("Downloaded newer: {} (ID: {})", server.path, id);
+                Ok(Outcome::Downloaded)
+            } else if local.modified_time > server.modified_time {
+                client.upsert_note(local);
+                tracker.update(&local.id, &local.content);
+                tracing::debug!("Uploaded newer: {} (ID: {})", local.path, id);
+                Ok(Outcome::Uploaded)
+            } else {
+                tracker.update(&local.id, &local.content);
+                Ok(Outcome::Unchanged)
+            }
+        }
+
+        (None, Some(server)) => {
+            write_note_to_disk(vault_path, server)?;
+            tracker.update(&server.id, &server.content);
+            tracing::debug!("Downloaded new: {} (ID: {})", server.path, id);
+            Ok(Outcome::Downloaded)
+        }
+
+        (Some(local), None) => {
+            client.upsert_note(local);
+            tracker.update(&local.id, &local.content);
+            tracing::debug!("Uploaded new: {} (ID: {})", local.path, id);
+            Ok(Outcome::Uploaded)
+        }
+
+        (None, None) => unreachable!(),
+    }
+}
 
 /// Reconcile local vault with SpacetimeDB on startup
 /// Uses last-write-wins based on timestamps
@@ -40,45 +92,18 @@ pub fn reconcile_on_startup(
     let mut unchanged = 0;
 
     for id in all_ids {
-        match (local_map.get(id), server_map.get(id)) {
-            // Both exist - compare timestamps
-            (Some(local), Some(server)) => {
-                if server.modified_time > local.modified_time {
-                    // Server is newer - download to disk
-                    tracker.update(&server.id, &server.content);
-                    write_note_to_disk(vault_path, server)?;
-                    tracing::debug!("Downloaded newer: {} (ID: {})", server.path, id);
-                    downloaded += 1;
-                } else if local.modified_time > server.modified_time {
-                    // Local is newer - push to server
-                    tracker.update(&local.id, &local.content);
-                    client.upsert_note(local);
-                    tracing::debug!("Uploaded newer: {} (ID: {})", local.path, id);
-                    uploaded += 1;
-                } else {
-                    // Equal timestamps - just update tracker
-                    tracker.update(&local.id, &local.content);
-                    unchanged += 1;
-                }
-            }
+        let mut outcome: Result<Outcome> = Ok(Outcome::Skipped);
 
-            // Only on server - download
-            (None, Some(server)) => {
-                tracker.update(&server.id, &server.content);
-                write_note_to_disk(vault_path, server)?;
-                tracing::debug!("Downloaded new: {} (ID: {})", server.path, id);
-                downloaded += 1;
-            }
+        let context = format!("reconcile note (ID: {})", id);
+        run_isolated(context, || {
+            outcome = reconcile_one(vault_path, client, tracker, &local_map, &server_map, id);
+        });
 
-            // Only local - upload (WARNING: resurrects deleted files)
-            (Some(local), None) => {
-                tracker.update(&local.id, &local.content);
-                client.upsert_note(local);
-                tracing::debug!("Uploaded new: {} (ID: {})", local.path, id);
-                uploaded += 1;
-            }
-
-            (None, None) => unreachable!(),
+        match outcome? {
+            Outcome::Downloaded => downloaded += 1,
+            Outcome::Uploaded => uploaded += 1,
+            Outcome::Unchanged => unchanged += 1,
+            Outcome::Skipped => {}
         }
     }
 

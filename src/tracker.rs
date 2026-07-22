@@ -25,14 +25,14 @@ impl ContentTracker {
     /// Update the tracker with new content (e.g., after downloading from Server)
     pub fn update(&self, id: &str, content: &str) {
         let hash = Self::hash(content);
-        let mut map = self.hashes.lock().unwrap();
+        let mut map = self.hashes.lock().unwrap_or_else(|e| e.into_inner());
         map.insert(id.to_string(), hash);
     }
 
     /// Check if content has changed WITHOUT updating the tracker (read-only)
     pub fn has_changed(&self, id: &str, current_content: &str) -> bool {
         let new_hash = Self::hash(current_content);
-        let map = self.hashes.lock().unwrap();
+        let map = self.hashes.lock().unwrap_or_else(|e| e.into_inner());
 
         match map.get(id) {
             Some(old_hash) => *old_hash != new_hash,
@@ -44,7 +44,7 @@ impl ContentTracker {
     /// Updates the tracker with the new hash as a side effect
     pub fn is_modified(&self, id: &str, current_content: &str) -> bool {
         let new_hash = Self::hash(current_content);
-        let mut map = self.hashes.lock().unwrap();
+        let mut map = self.hashes.lock().unwrap_or_else(|e| e.into_inner());
 
         match map.get(id) {
             Some(old_hash) if *old_hash == new_hash => {
@@ -61,7 +61,34 @@ impl ContentTracker {
 
     /// Remove an ID from the tracker (e.g., when file is deleted)
     pub fn remove(&self, id: &str) {
-        let mut map = self.hashes.lock().unwrap();
+        let mut map = self.hashes.lock().unwrap_or_else(|e| e.into_inner());
         map.remove(id);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn poison_tracker(tracker: &ContentTracker) {
+        let hashes = tracker.hashes.clone();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = hashes.lock().unwrap_or_else(|e| e.into_inner());
+            panic!("panic while holding tracker lock");
+        }));
+        assert!(result.is_err(), "expected the guarded closure to panic");
+    }
+
+    #[test]
+    fn cascade_poison_recovers_on_subsequent_ops() {
+        let tracker = ContentTracker::new();
+        tracker.update("id-a", "content-a");
+
+        poison_tracker(&tracker);
+
+        tracker.update("id-b", "content-b");
+        assert!(tracker.has_changed("id-c", "new"));
+        assert!(!tracker.is_modified("id-b", "content-b"));
+        tracker.remove("id-b");
     }
 }

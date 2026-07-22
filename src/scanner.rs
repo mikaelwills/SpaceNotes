@@ -5,6 +5,7 @@ use walkdir::WalkDir;
 
 use crate::folder::Folder;
 use crate::frontmatter::{extract_spacetime_id, parse_frontmatter};
+use crate::isolation::run_isolated;
 use crate::note::Note;
 use crate::sanitize::sanitize_path;
 
@@ -95,59 +96,62 @@ pub fn scan_notes(vault_path: &Path) -> Result<Vec<Note>> {
             continue;
         }
 
-        // Get relative path - sanitize to prevent URI encoding issues
-        let rel_path = match path.strip_prefix(vault_path) {
-            Ok(p) => sanitize_path(&p.to_string_lossy().to_string()),
-            Err(e) => {
-                tracing::warn!("Failed to get relative path for {:?}: {}", path, e);
-                continue;
-            }
-        };
+        let context = format!("scan note {:?}", path);
+        run_isolated(context, || {
+            // Get relative path - sanitize to prevent URI encoding issues
+            let rel_path = match path.strip_prefix(vault_path) {
+                Ok(p) => sanitize_path(&p.to_string_lossy().to_string()),
+                Err(e) => {
+                    tracing::warn!("Failed to get relative path for {:?}: {}", path, e);
+                    return;
+                }
+            };
 
-        // Read file content
-        let content = match std::fs::read_to_string(path) {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::warn!("Failed to read {:?}: {}", path, e);
-                continue;
-            }
-        };
+            // Read file content
+            let content = match std::fs::read_to_string(path) {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::warn!("Failed to read {:?}: {}", path, e);
+                    return;
+                }
+            };
 
-        // Extract UUID (READ-ONLY - do not inject here)
-        // Notes without UUIDs will be skipped during initial scan
-        let Some(id) = extract_spacetime_id(&content) else {
-            tracing::debug!("Skipping note without UUID: {}", rel_path);
-            continue;
-        };
+            // Extract UUID (READ-ONLY - do not inject here)
+            // Notes without UUIDs will be skipped during initial scan
+            let Some(id) = extract_spacetime_id(&content) else {
+                tracing::debug!("Skipping note without UUID: {}", rel_path);
+                return;
+            };
 
-        // Get metadata
-        let metadata = match std::fs::metadata(path) {
-            Ok(m) => m,
-            Err(e) => {
-                tracing::warn!("Failed to get metadata for {:?}: {}", path, e);
-                continue;
-            }
-        };
+            // Get metadata
+            let metadata = match std::fs::metadata(path) {
+                Ok(m) => m,
+                Err(e) => {
+                    tracing::warn!("Failed to get metadata for {:?}: {}", path, e);
+                    return;
+                }
+            };
 
-        let size = metadata.len();
-        let modified = metadata
-            .modified()
-            .ok()
-            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0);
-        let created = metadata
-            .created()
-            .ok()
-            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(modified);
+            let size = metadata.len();
+            let modified = metadata
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+            let created = metadata
+                .created()
+                .ok()
+                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(modified);
 
-        // Parse frontmatter
-        let (body, frontmatter) = parse_frontmatter(&content);
+            // Parse frontmatter
+            let (body, frontmatter) = parse_frontmatter(&content);
 
-        let note = Note::new(id, rel_path, body, frontmatter, size, created, modified);
-        notes.push(note);
+            let note = Note::new(id, rel_path, body, frontmatter, size, created, modified);
+            notes.push(note);
+        });
     }
 
     Ok(notes)
@@ -177,4 +181,33 @@ pub fn scan_folders(vault_path: &Path) -> Result<Vec<Folder>> {
     }
 
     Ok(folders)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_vault(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("spacenotes-scan-{}-{}", name, std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn write_note(vault: &Path, file: &str, id: &str) {
+        let content = format!("---\nspacetime_id: {}\n---\nbody of {}\n", id, file);
+        std::fs::write(vault.join(file), content).unwrap();
+    }
+
+    #[test]
+    fn scan_returns_all_valid_notes() {
+        let vault = temp_vault("valid");
+        write_note(&vault, "a.md", "11111111-1111-1111-1111-111111111111");
+        write_note(&vault, "b.md", "22222222-2222-2222-2222-222222222222");
+
+        let notes = scan_notes(&vault).unwrap();
+        assert_eq!(notes.len(), 2);
+
+        let _ = std::fs::remove_dir_all(&vault);
+    }
 }
