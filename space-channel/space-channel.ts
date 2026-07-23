@@ -844,13 +844,13 @@ async function runHookPost() {
 }
 
 async function runLaunch(rawArgs: string[]) {
-  if (rawArgs.length < 2) {
-    process.stderr.write("usage: space-channel launch <session> <skill> [args...]\n");
+  if (rawArgs.length < 1) {
+    process.stderr.write("usage: space-channel launch <workflow> [args...]\n");
     process.exit(2);
   }
   const session = rawArgs[0]!;
-  const skill = rawArgs[1]!;
-  const rest = rawArgs.slice(2);
+  const skill = session;
+  const rest = rawArgs.slice(1);
 
   if (!commandExists("claude")) {
     process.stderr.write("claude CLI not found in PATH\n");
@@ -947,7 +947,7 @@ async function runLaunch(rawArgs: string[]) {
       `/${skill}`,
       ...rest,
     ],
-    { stdio: "inherit" }
+    { stdio: "inherit", env: { ...process.env, WORKFLOW_NAME: session } }
   );
   const code: number = await new Promise((resolve) => {
     claude.on("exit", (c) => resolve(c ?? 0));
