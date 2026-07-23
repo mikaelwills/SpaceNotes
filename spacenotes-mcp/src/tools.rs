@@ -133,6 +133,17 @@ pub fn get_tools() -> Vec<Tool> {
             }),
         },
         Tool {
+            name: "get_latest_session".to_string(),
+            description: "Get the latest workflow session log, full content. Use this to find where you left off.".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "workflow": {"type": "string", "description": "Bare workflow name, e.g. 'workflow-agent' — the folder is Workflows/<workflow>/status/sessions/"}
+                },
+                "required": ["workflow"]
+            }),
+        },
+        Tool {
             name: "delete_note".to_string(),
             description: "Delete a note by ID".to_string(),
             input_schema: json!({
@@ -527,6 +538,52 @@ pub async fn execute_tool(
             if !bumped.is_empty() {
                 text.push_str(&format!("\nRotated {} existing: {:?}", bumped.len(), bumped));
             }
+            Ok(json!({"content": [{"type": "text", "text": text}]}))
+        }
+        "get_latest_session" => {
+            let workflow: String = serde_json::from_value(params.arguments["workflow"].clone())
+                .map_err(|e| e.to_string())?;
+
+            let folder = format!("Workflows/{}/status/sessions/", workflow);
+            let notes = client
+                .list_notes_in_folder(&folder)
+                .map_err(|e| e.to_string())?;
+
+            // Filename is `<YYYY-MM-DD>-<N>-<slug>` (name has no .md). Newest =
+            // max date, then lowest N within that date (create_session always
+            // makes the new file `-1-` and bumps older ones up).
+            let latest = notes
+                .iter()
+                .filter_map(|n| {
+                    let date = n.name.get(0..10)?;
+                    let after = n.name.get(11..)?;
+                    let (num_str, _) = after.split_once('-')?;
+                    let num: u32 = num_str.parse().ok()?;
+                    Some((date.to_string(), num, n))
+                })
+                .min_by(|a, b| a.0.cmp(&b.0).reverse().then(a.1.cmp(&b.1)));
+
+            let Some((_, _, n)) = latest else {
+                return Ok(json!({"content": [{"type": "text", "text": format!("No sessions found in {}", folder)}]}));
+            };
+
+            let note = client
+                .get_note_by_id(&n.id)
+                .map_err(|e| e.to_string())?;
+            let Some(note) = note else {
+                return Ok(json!({"content": [{"type": "text", "text": "Latest session note vanished between list and fetch"}]}));
+            };
+
+            let numbered_content: String = note.content.lines()
+                .enumerate()
+                .map(|(i, line)| format!("{:>4}| {}", i + 1, line))
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            let text = format!(
+                "id: {}\npath: {}\nname: {}\nfolder_path: {}\nfrontmatter: {}\n\n{}",
+                note.id, note.path, note.name, note.folder_path, note.frontmatter, numbered_content
+            );
             Ok(json!({"content": [{"type": "text", "text": text}]}))
         }
         "delete_note" => {
