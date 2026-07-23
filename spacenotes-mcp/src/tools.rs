@@ -119,6 +119,20 @@ pub fn get_tools() -> Vec<Tool> {
             }),
         },
         Tool {
+            name: "create_session".to_string(),
+            description: "Write a workflow session log. Auto-rotates: new file is `<date>-1-<slug>.md`, existing same-day `<date>-N-*` bump +1 (lower N = newer). Owns the numbering — don't hand-pick. Returns the path.".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "workflow": {"type": "string", "description": "Bare workflow name, e.g. 'workflow-agent' — the folder is Workflows/<workflow>/status/sessions/"},
+                    "slug": {"type": "string", "description": "Kebab-case session topic, e.g. 'session-start-cutover' (no date, no number, no .md)"},
+                    "content": {"type": "string", "description": "Full markdown body of the session log"},
+                    "date": {"type": "string", "description": "Session date YYYY-MM-DD"}
+                },
+                "required": ["workflow", "slug", "content", "date"]
+            }),
+        },
+        Tool {
             name: "delete_note".to_string(),
             description: "Delete a note by ID".to_string(),
             input_schema: json!({
@@ -459,6 +473,61 @@ pub async fn execute_tool(
             Ok(
                 json!({"content": [{"type": "text", "text": format!("Created note: {} (id: {})", path, id)}]}),
             )
+        }
+        "create_session" => {
+            let workflow: String = serde_json::from_value(params.arguments["workflow"].clone())
+                .map_err(|e| e.to_string())?;
+            let slug: String = serde_json::from_value(params.arguments["slug"].clone())
+                .map_err(|e| e.to_string())?;
+            let content: String = serde_json::from_value(params.arguments["content"].clone())
+                .map_err(|e| e.to_string())?;
+            let date: String = serde_json::from_value(params.arguments["date"].clone())
+                .map_err(|e| e.to_string())?;
+
+            let folder = format!("Workflows/{}/status/sessions/", workflow);
+            let notes = client
+                .list_notes_in_folder(&folder)
+                .map_err(|e| e.to_string())?;
+
+            // Existing files for this day: name is `<date>-<N>-<rest>` (no .md in name).
+            // Parse N, sort DESCENDING so we bump the highest first and never clobber.
+            let prefix = format!("{}-", date);
+            let mut todays: Vec<(u32, String)> = notes
+                .iter()
+                .filter_map(|n| {
+                    let after = n.name.strip_prefix(&prefix)?;
+                    let (num_str, _) = after.split_once('-')?;
+                    let num: u32 = num_str.parse().ok()?;
+                    Some((num, n.name.clone()))
+                })
+                .collect();
+            todays.sort_by(|a, b| b.0.cmp(&a.0));
+
+            let mut bumped = Vec::new();
+            for (num, name) in &todays {
+                let rest = name
+                    .strip_prefix(&format!("{}-{}-", date, num))
+                    .unwrap_or("");
+                let old_path = format!("{}{}.md", folder, name);
+                let new_path = format!("{}{}-{}-{}.md", folder, date, num + 1, rest);
+                client
+                    .move_note(old_path.clone(), new_path.clone())
+                    .map_err(|e| e.to_string())?;
+                bumped.push(format!("{} -> {}-{}-{}", name, date, num + 1, rest));
+            }
+
+            let new_name = format!("{}-1-{}", date, slug);
+            let new_path = format!("{}{}.md", folder, new_name);
+            let new_id = uuid::Uuid::new_v4().to_string();
+            client
+                .create_note(new_id.clone(), new_path.clone(), new_name, content, folder)
+                .map_err(|e| e.to_string())?;
+
+            let mut text = format!("Created session: {} (id: {})", new_path, new_id);
+            if !bumped.is_empty() {
+                text.push_str(&format!("\nRotated {} existing: {:?}", bumped.len(), bumped));
+            }
+            Ok(json!({"content": [{"type": "text", "text": text}]}))
         }
         "delete_note" => {
             let id: String = serde_json::from_value(params.arguments["id"].clone())
