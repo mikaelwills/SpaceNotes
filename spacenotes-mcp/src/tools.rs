@@ -10,6 +10,54 @@ fn normalize_for_matching(s: &str) -> String {
         .join("\n")
 }
 
+fn numbered(content: &str) -> String {
+    content
+        .lines()
+        .enumerate()
+        .map(|(i, line)| format!("{:>4}| {}", i + 1, line))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn format_note(n: &crate::spacetime_client::FullNote) -> String {
+    format!(
+        "id: {}\npath: {}\nname: {}\nfolder_path: {}\nfrontmatter: {}\n\n{}",
+        n.id, n.path, n.name, n.folder_path, n.frontmatter, numbered(&n.content)
+    )
+}
+
+// The latest session note for a workflow, formatted, or a "no sessions" line.
+// Newest = max date, then lowest N within that date (create_session makes the
+// new file `-1-` and bumps older ones up).
+fn latest_session_block(
+    client: &crate::spacetime_client::SpacetimeClient,
+    workflow: &str,
+) -> Result<String, String> {
+    let folder = format!("Workflows/{}/status/sessions/", workflow);
+    let entries = client.list_folder(&folder).map_err(|e| e.to_string())?;
+
+    let latest = entries
+        .iter()
+        .filter(|e| e.entry_type == "note")
+        .filter_map(|n| {
+            let date = n.name.get(0..10)?;
+            let after = n.name.get(11..)?;
+            let (num_str, _) = after.split_once('-')?;
+            let num: u32 = num_str.parse().ok()?;
+            let id = n.id.as_ref()?;
+            Some((date.to_string(), num, id))
+        })
+        .min_by(|a, b| a.0.cmp(&b.0).reverse().then(a.1.cmp(&b.1)));
+
+    let Some((_, _, id)) = latest else {
+        return Ok(format!("No sessions found in {}", folder));
+    };
+    match client.get_note_by_id(id).map_err(|e| e.to_string())? {
+        Some(note) => Ok(format_note(&note)),
+        None => Ok("Latest session note vanished between list and fetch".to_string()),
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Tool {
     pub name: String,
@@ -63,14 +111,14 @@ pub fn get_tools() -> Vec<Tool> {
             }),
         },
         Tool {
-            name: "list_notes_in_folder".to_string(),
-            description: "List all notes in a specific folder".to_string(),
+            name: "list_folder".to_string(),
+            description: "List the immediate contents of a folder — both subfolders and notes, each tagged with a 'type' field ('folder' or 'note'). Only direct children, not recursive.".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
                     "folder_path": {
                         "type": "string",
-                        "description": "Folder path (e.g., 'Development/')"
+                        "description": "Folder path (e.g., 'Development/'). Empty string lists the root."
                     }
                 },
                 "required": ["folder_path"]
@@ -78,12 +126,13 @@ pub fn get_tools() -> Vec<Tool> {
         },
         Tool {
             name: "get_note".to_string(),
-            description: "Get a note's full content by ID or path".to_string(),
+            description: "Get a note's full content by ID or path. Pass raw:true to skip line numbers when you only need to read (not edit).".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
                     "id": {"type": "string", "description": "Note UUID (optional if path provided)"},
-                    "path": {"type": "string", "description": "Note path (optional if id provided)"}
+                    "path": {"type": "string", "description": "Note path (optional if id provided)"},
+                    "raw": {"type": "boolean", "description": "Omit line-number prefixes (default false)"}
                 }
             }),
         },
@@ -139,6 +188,17 @@ pub fn get_tools() -> Vec<Tool> {
                 "type": "object",
                 "properties": {
                     "workflow": {"type": "string", "description": "Bare workflow name, e.g. 'workflow-agent' — the folder is Workflows/<workflow>/status/sessions/"}
+                },
+                "required": ["workflow"]
+            }),
+        },
+        Tool {
+            name: "get_workflow_onload".to_string(),
+            description: "Workflow on-load in one call: README + latest session + knowledge index. Call this first when a workflow session starts.".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "workflow": {"type": "string", "description": "Bare workflow name, e.g. 'workflow-agent'"}
                 },
                 "required": ["workflow"]
             }),
@@ -289,7 +349,7 @@ pub fn get_tools() -> Vec<Tool> {
         },
         Tool {
             name: "get_outbound_links".to_string(),
-            description: "Get notes this note links to. Recognises markdown links of the form `[text](spacenote:UUID)`. Returns each target's id, name, path, and a `broken` flag (true when the UUID doesn't resolve to an existing note; name and path are empty strings in that case). Skim the names to decide which links are worth following before calling get_note.".to_string(),
+            description: "Get notes this note links to (via `[text](spacenote:UUID)`). Returns id/name/path + `broken` flag per target.".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -300,7 +360,7 @@ pub fn get_tools() -> Vec<Tool> {
         },
         Tool {
             name: "get_backlinks".to_string(),
-            description: "Get notes that link to this note via `[text](spacenote:UUID)` references. Returns id, name, path, and broken for each source. Use to follow the link graph backwards (\"what else mentions this?\") and decide which sources are worth fetching.".to_string(),
+            description: "Get notes that link TO this note (via `[text](spacenote:UUID)`). Returns id/name/path + `broken` per source. The link graph, backwards.".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -311,12 +371,12 @@ pub fn get_tools() -> Vec<Tool> {
         },
         Tool {
             name: "list_sessions".to_string(),
-            description: "List all SpaceChannel Claude sessions registered in SpacetimeDB. Returns id (e.g. `note-assistant@robert`), base_name, host, last_seen_us (microseconds since Unix epoch), state (idle/thinking/tool_use, or null if no activity recorded), and activity_updated_at_us. Sorted by last_seen descending. Use to verify which sessions are alive (compare last_seen / activity_updated_at to current time — heartbeats land every 20s, so stale > ~60s means dead).".to_string(),
+            description: "List registered SpaceChannel Claude sessions (id, base_name, host, state, last_seen_us). Heartbeats every ~20s → last_seen stale >60s means dead.".to_string(),
             input_schema: json!({"type": "object", "properties": {}}),
         },
         Tool {
             name: "delete_session".to_string(),
-            description: "Delete a single SpaceChannel session row by id (e.g. `note-assistant@some-dead-host`). Removes the session and its cascaded SpaceChannel state. Use to clean up stale ghost rows after a binary crashed without firing endSession.".to_string(),
+            description: "Delete one SpaceChannel session row by id (+cascaded state). For cleaning up stale ghost rows.".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -327,7 +387,7 @@ pub fn get_tools() -> Vec<Tool> {
         },
         Tool {
             name: "clear_all_sessions".to_string(),
-            description: "Wipe all SpaceChannel session state (sessions, activity, messages, tool events, permissions). Equivalent to the top-right X button in the Flutter app. Live binaries re-register themselves within seconds via registerSession, so this is only destructive to dead/ghost rows. Use to nuke stale state and let live sessions self-heal.".to_string(),
+            description: "Wipe ALL SpaceChannel session state. Live binaries re-register within seconds, so only ghost rows are destroyed.".to_string(),
             input_schema: json!({"type": "object", "properties": {}}),
         },
     ]
@@ -373,19 +433,19 @@ pub async fn execute_tool(
                 }]
             }))
         }
-        "list_notes_in_folder" => {
+        "list_folder" => {
             let folder_path: String =
                 serde_json::from_value(params.arguments["folder_path"].clone())
                     .map_err(|e| e.to_string())?;
 
-            let notes = client
-                .list_notes_in_folder(&folder_path)
+            let entries = client
+                .list_folder(&folder_path)
                 .map_err(|e| e.to_string())?;
 
             Ok(json!({
                 "content": [{
                     "type": "text",
-                    "text": serde_json::to_string_pretty(&notes).unwrap_or_else(|_| "[]".to_string())
+                    "text": serde_json::to_string_pretty(&entries).unwrap_or_else(|_| "[]".to_string())
                 }]
             }))
         }
@@ -398,17 +458,13 @@ pub async fn execute_tool(
                 return Err("Must provide either 'id' or 'path'".to_string());
             };
 
+            let raw = params.arguments.get("raw").and_then(|v| v.as_bool()).unwrap_or(false);
             match note {
                 Some(n) => {
-                    let numbered_content: String = n.content.lines()
-                        .enumerate()
-                        .map(|(i, line)| format!("{:>4}| {}", i + 1, line))
-                        .collect::<Vec<_>>()
-                        .join("\n");
-
+                    let body = if raw { n.content.clone() } else { numbered(&n.content) };
                     let text = format!(
                         "id: {}\npath: {}\nname: {}\nfolder_path: {}\nfrontmatter: {}\n\n{}",
-                        n.id, n.path, n.name, n.folder_path, n.frontmatter, numbered_content
+                        n.id, n.path, n.name, n.folder_path, n.frontmatter, body
                     );
                     Ok(json!({"content": [{"type": "text", "text": text}]}))
                 },
@@ -496,15 +552,16 @@ pub async fn execute_tool(
                 .map_err(|e| e.to_string())?;
 
             let folder = format!("Workflows/{}/status/sessions/", workflow);
-            let notes = client
-                .list_notes_in_folder(&folder)
+            let entries = client
+                .list_folder(&folder)
                 .map_err(|e| e.to_string())?;
 
             // Existing files for this day: name is `<date>-<N>-<rest>` (no .md in name).
             // Parse N, sort DESCENDING so we bump the highest first and never clobber.
             let prefix = format!("{}-", date);
-            let mut todays: Vec<(u32, String)> = notes
+            let mut todays: Vec<(u32, String)> = entries
                 .iter()
+                .filter(|e| e.entry_type == "note")
                 .filter_map(|n| {
                     let after = n.name.strip_prefix(&prefix)?;
                     let (num_str, _) = after.split_once('-')?;
@@ -543,47 +600,28 @@ pub async fn execute_tool(
         "get_latest_session" => {
             let workflow: String = serde_json::from_value(params.arguments["workflow"].clone())
                 .map_err(|e| e.to_string())?;
-
-            let folder = format!("Workflows/{}/status/sessions/", workflow);
-            let notes = client
-                .list_notes_in_folder(&folder)
+            let text = latest_session_block(client, &workflow)?;
+            Ok(json!({"content": [{"type": "text", "text": text}]}))
+        }
+        "get_workflow_onload" => {
+            let workflow: String = serde_json::from_value(params.arguments["workflow"].clone())
                 .map_err(|e| e.to_string())?;
 
-            // Filename is `<YYYY-MM-DD>-<N>-<slug>` (name has no .md). Newest =
-            // max date, then lowest N within that date (create_session always
-            // makes the new file `-1-` and bumps older ones up).
-            let latest = notes
-                .iter()
-                .filter_map(|n| {
-                    let date = n.name.get(0..10)?;
-                    let after = n.name.get(11..)?;
-                    let (num_str, _) = after.split_once('-')?;
-                    let num: u32 = num_str.parse().ok()?;
-                    Some((date.to_string(), num, n))
-                })
-                .min_by(|a, b| a.0.cmp(&b.0).reverse().then(a.1.cmp(&b.1)));
-
-            let Some((_, _, n)) = latest else {
-                return Ok(json!({"content": [{"type": "text", "text": format!("No sessions found in {}", folder)}]}));
+            let section = |title: &str, path: &str| -> String {
+                match client.get_note_by_path(path) {
+                    Ok(Some(n)) => format!("## {}\n\n{}", title, format_note(&n)),
+                    Ok(None) => format!("## {}\n\n(not found: {})", title, path),
+                    Err(e) => format!("## {}\n\n(error: {})", title, e),
+                }
             };
 
-            let note = client
-                .get_note_by_id(&n.id)
-                .map_err(|e| e.to_string())?;
-            let Some(note) = note else {
-                return Ok(json!({"content": [{"type": "text", "text": "Latest session note vanished between list and fetch"}]}));
-            };
-
-            let numbered_content: String = note.content.lines()
-                .enumerate()
-                .map(|(i, line)| format!("{:>4}| {}", i + 1, line))
-                .collect::<Vec<_>>()
-                .join("\n");
-
-            let text = format!(
-                "id: {}\npath: {}\nname: {}\nfolder_path: {}\nfrontmatter: {}\n\n{}",
-                note.id, note.path, note.name, note.folder_path, note.frontmatter, numbered_content
+            let readme = section("README", &format!("Workflows/{}/README.md", workflow));
+            let latest = format!("## Latest session\n\n{}", latest_session_block(client, &workflow)?);
+            let knowledge = section(
+                "Knowledge index",
+                &format!("Workflows/{}/knowledge/README.md", workflow),
             );
+            let text = format!("{}\n\n{}\n\n{}", readme, latest, knowledge);
             Ok(json!({"content": [{"type": "text", "text": text}]}))
         }
         "delete_note" => {

@@ -4,7 +4,7 @@
 FROM clockworklabs/spacetime:v2.1.0 AS spacetime
 
 # Chef stage - install cargo-chef
-FROM rust:latest AS chef
+FROM rust:1.94.0 AS chef
 RUN cargo install cargo-chef
 WORKDIR /build
 

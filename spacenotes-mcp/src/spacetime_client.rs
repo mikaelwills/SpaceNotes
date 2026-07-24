@@ -22,6 +22,7 @@ use crate::bindings::{
     delete_note_reducer::delete_note,
     delete_session_reducer::delete_session as delete_session_reducer_fn,
     find_replace_in_note_reducer::find_replace_in_note,
+    folder_table::FolderTableAccess,
     move_folder_reducer::move_folder,
     move_note_reducer::move_note,
     note_table::NoteTableAccess,
@@ -102,26 +103,55 @@ impl SpacetimeClient {
         Ok(())
     }
 
-    pub fn list_notes_in_folder(&self, folder_path: &str) -> Result<Vec<NoteInfo>> {
-        tracing::info!("Listing notes in folder: {}", folder_path);
+    pub fn list_folder(&self, folder_path: &str) -> Result<Vec<FolderEntry>> {
+        tracing::info!("Listing folder: {}", folder_path);
 
-        // Query from the local note table cache
-        let notes: Vec<NoteInfo> = self
+        // Folder paths are stored WITHOUT a trailing slash; note.folder_path is
+        // stored WITH one. Normalize the input to match each.
+        let parent = folder_path.trim_end_matches('/');
+        let note_folder = if parent.is_empty() {
+            String::new()
+        } else {
+            format!("{}/", parent)
+        };
+
+        let mut entries: Vec<FolderEntry> = self
             .conn
             .db()
-            .note()
+            .folder()
             .iter()
-            .filter(|note| note.folder_path == folder_path)
-            .map(|note| NoteInfo {
-                id: note.id.clone(),
-                path: note.path.clone(),
-                name: note.name.clone(),
+            .filter(|f| f.path.rsplit_once('/').map(|(p, _)| p).unwrap_or("") == parent)
+            .map(|f| FolderEntry {
+                entry_type: "folder".to_string(),
+                name: f.name.clone(),
+                path: f.path.clone(),
+                id: None,
             })
             .collect();
 
-        tracing::info!("Found {} notes in folder {}", notes.len(), folder_path);
+        entries.extend(
+            self.conn
+                .db()
+                .note()
+                .iter()
+                .filter(|note| note.folder_path == note_folder)
+                .map(|note| FolderEntry {
+                    entry_type: "note".to_string(),
+                    name: note.name.clone(),
+                    path: note.path.clone(),
+                    id: Some(note.id.clone()),
+                }),
+        );
 
-        Ok(notes)
+        entries.sort_by(|a, b| {
+            a.entry_type
+                .cmp(&b.entry_type)
+                .then_with(|| a.name.cmp(&b.name))
+        });
+
+        tracing::info!("Found {} entries in folder {}", entries.len(), parent);
+
+        Ok(entries)
     }
 
     pub fn get_note_by_id(&self, id: &str) -> Result<Option<FullNote>> {
@@ -551,10 +581,13 @@ pub struct Link {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct NoteInfo {
-    pub id: String,
-    pub path: String,
+pub struct FolderEntry {
+    #[serde(rename = "type")]
+    pub entry_type: String,
     pub name: String,
+    pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
