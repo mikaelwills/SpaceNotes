@@ -59,8 +59,16 @@ async fn handle_request(
             })
         }
         "tools/call" => {
-            let params: tools::ToolCallParams =
-                serde_json::from_value(request.params).unwrap();
+            let params: tools::ToolCallParams = match serde_json::from_value(request.params) {
+                Ok(params) => params,
+                Err(err) => {
+                    return json!({
+                        "jsonrpc": "2.0",
+                        "id": request.id,
+                        "error": {"code": -32602, "message": format!("Invalid params: {}", err)}
+                    })
+                }
+            };
 
             match tools::execute_tool(client, params).await {
                 Ok(result) => json!({"jsonrpc": "2.0", "id": request.id, "result": result}),

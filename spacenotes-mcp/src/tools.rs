@@ -2,12 +2,124 @@ use regex::RegexBuilder;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-fn normalize_for_matching(s: &str) -> String {
+fn relaxed(s: &str) -> String {
     s.replace("\r\n", "\n")
         .lines()
-        .map(|line| line.trim_end())
+        .map(|line| line.trim())
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn escape_invisibles(s: &str) -> String {
+    s.replace('\t', "→")
+        .replace('\r', "\\r")
+        .replace('\u{00A0}', "<NBSP>")
+        .replace('\u{202F}', "<NNBSP>")
+        .lines()
+        .map(|line| {
+            let trimmed = line.trim_end();
+            if trimmed.len() == line.len() {
+                line.to_string()
+            } else {
+                let dots = line[trimmed.len()..].chars().count();
+                format!("{}{}", trimmed, "·".repeat(dots))
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn edit_no_match_error(path: &str, old_string: &str, content: &str) -> String {
+    let mut msg = format!("old_string not found in '{}'.\n", path);
+
+    let needle_first = old_string.lines().next().unwrap_or("").trim();
+    let candidate = if needle_first.is_empty() {
+        None
+    } else {
+        content.lines().enumerate().find(|(_, l)| l.trim() == needle_first).or_else(|| {
+            content
+                .lines()
+                .enumerate()
+                .find(|(_, l)| l.trim().eq_ignore_ascii_case(needle_first))
+        })
+    };
+
+    match candidate {
+        Some((idx, _)) => {
+            let needle_lines = old_string.lines().count();
+            let actual: Vec<&str> = content.lines().skip(idx).take(needle_lines).collect();
+            let actual_block = actual.join("\n");
+            msg.push_str(&format!(
+                "\nClosest match at lines {}-{}:\n",
+                idx + 1,
+                idx + needle_lines
+            ));
+            msg.push_str(&format!("  actual:    {}\n", escape_invisibles(&actual_block)));
+            msg.push_str(&format!("  you sent:  {}\n", escape_invisibles(old_string)));
+
+            // lines() strips \r, so a CRLF note renders `actual` identical to what the caller
+            // sent — telling them to copy it would loop forever.
+            if content.contains("\r\n") && !old_string.contains('\r') {
+                msg.push_str(
+                    "\nThis note uses CRLF line endings. old_string must use \\r\\n between lines.\n",
+                );
+            } else if relaxed(&actual_block) == relaxed(old_string) {
+                msg.push_str("\nWhitespace differs (· space, → tab). Copy `actual`.\n");
+            } else if actual_block.to_lowercase() == old_string.to_lowercase() {
+                msg.push_str("\nCase differs.\n");
+            } else {
+                msg.push_str("\nCopy `actual`, or re-read with get_note raw:true.\n");
+            }
+        }
+        None => {
+            msg.push_str("\nNo similar line found. Re-read with get_note raw:true.\n");
+        }
+    }
+
+    truncate_on_char_boundary(&mut msg, 2048);
+    msg
+}
+
+// String::truncate panics unless the index is a char boundary.
+fn truncate_on_char_boundary(s: &mut String, max_bytes: usize) {
+    if s.len() <= max_bytes {
+        return;
+    }
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    s.truncate(end);
+}
+
+// Must stay identical to the module's name_from_path (file_reducers.rs), or a note gets one
+// name when created here and a different one after any move.
+fn name_from_path(path: &str) -> String {
+    let base = path.rsplit('/').next().unwrap_or(path);
+    match base.rsplit_once('.') {
+        Some((stem, _)) if !stem.is_empty() => stem.to_string(),
+        _ => base.to_string(),
+    }
+}
+
+fn folder_path_of(path: &str) -> String {
+    match path.rfind('/') {
+        Some(idx) => format!("{}/", &path[..idx]),
+        None => String::new(),
+    }
+}
+
+fn validate_note_path(path: &str) -> Result<(), String> {
+    if path.trim().is_empty() {
+        return Err("path must not be empty".to_string());
+    }
+    if path.ends_with('/') {
+        return Err(format!("path must be a file, not a folder: '{}'", path));
+    }
+    if name_from_path(path).is_empty() {
+        return Err(format!("path has no filename: '{}'", path));
+    }
+    Ok(())
 }
 
 fn numbered(content: &str) -> String {
@@ -69,6 +181,7 @@ pub struct Tool {
 #[derive(Debug, Deserialize)]
 pub struct ToolCallParams {
     pub name: String,
+    #[serde(default)]
     pub arguments: Value,
 }
 
@@ -266,7 +379,7 @@ pub fn get_tools() -> Vec<Tool> {
         },
         Tool {
             name: "delete_folder".to_string(),
-            description: "Delete an empty folder".to_string(),
+            description: "Delete a folder and everything inside it, recursively.".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -301,16 +414,16 @@ pub fn get_tools() -> Vec<Tool> {
         },
         Tool {
             name: "edit_note".to_string(),
-            description: "Edit a note by finding and replacing text. More efficient than update_note_content for small changes.".to_string(),
+            description: "Edit a note by finding and replacing text.".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
                     "path": {"type": "string", "description": "Note path (e.g., 'Development/My Note.md')"},
-                    "old_string": {"type": "string", "description": "Text to find (whitespace differences are handled automatically)"},
-                    "new_string": {"type": "string", "description": "Text to replace with (empty to delete)"},
-                    "replace_all": {"type": "boolean", "description": "Replace all occurrences (default: false, replaces first only)"}
+                    "old_string": {"type": "string", "description": "Exact text to find, including whitespace and case. Must be unique unless replace_all is set."},
+                    "new_string": {"type": "string", "description": "Replacement text. Pass \"\" to delete."},
+                    "replace_all": {"type": "boolean", "description": "Replace every occurrence (default false)"}
                 },
-                "required": ["path", "old_string"]
+                "required": ["path", "old_string", "new_string"]
             }),
         },
         Tool {
@@ -514,23 +627,17 @@ pub async fn execute_tool(
             let content: String = serde_json::from_value(params.arguments["content"].clone())
                 .map_err(|e| e.to_string())?;
 
-            // Extract name from path
-            let name = path
-                .trim_end_matches(".md")
-                .split('/')
-                .next_back()
-                .unwrap_or(&path)
-                .to_string();
+            validate_note_path(&path)?;
 
-            // Extract folder path
-            let folder_path = if path.contains('/') {
-                let parts: Vec<&str> = path.rsplitn(2, '/').collect();
-                format!("{}/", parts.get(1).unwrap_or(&""))
-            } else {
-                String::new()
-            };
+            if let Some(existing) = client.get_file_by_path(&path).map_err(|e| e.to_string())? {
+                return Err(format!(
+                    "Note already exists at '{}' (id: {}). Use edit_note or append_to_note.",
+                    path, existing.id
+                ));
+            }
 
-            // Generate UUID
+            let name = name_from_path(&path);
+            let folder_path = folder_path_of(&path);
             let id = uuid::Uuid::new_v4().to_string();
 
             client
@@ -744,7 +851,9 @@ pub async fn execute_tool(
                 .or_else(|| params.arguments.get("newString"))
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string())
-                .unwrap_or_default();
+                .ok_or_else(|| {
+                    "new_string is required (pass \"\" to delete the matched text)".to_string()
+                })?;
             let replace_all: bool = params.arguments.get("replace_all")
                 .or_else(|| params.arguments.get("replaceAll"))
                 .and_then(|v| v.as_bool())
@@ -754,41 +863,30 @@ pub async fn execute_tool(
                 .map_err(|e| e.to_string())?
                 .ok_or_else(|| format!("Note not found: {}", path))?;
 
-            if file.content.contains(&old_string) {
-                client.find_replace_in_file(path.clone(), old_string, new_string, replace_all)
-                    .map_err(|e| e.to_string())?;
-                Ok(json!({"content": [{"type": "text", "text": format!("Edited note: {}", path)}]}))
-            } else {
-                let norm_content = normalize_for_matching(&file.content);
-                let norm_old = normalize_for_matching(&old_string);
-
-                if norm_content.contains(&norm_old) {
-                    let new_content = if replace_all {
-                        norm_content.replace(&norm_old, &new_string)
-                    } else {
-                        norm_content.replacen(&norm_old, &new_string, 1)
-                    };
-
-                    client
-                        .update_file_content(file.id, new_content)
-                        .map_err(|e| e.to_string())?;
-
-                    tracing::info!("edit_note used normalized fallback for path={}", path);
-
-                    Ok(json!({"content": [{"type": "text", "text": format!("Edited note: {}", path)}]}))
-                } else {
-                    let old_preview: String = old_string.chars().take(80).collect();
-                    let content_preview: String = file.content.chars().take(200).collect();
-                    tracing::warn!(
-                        "EDIT_NOTE FAILED: old_string not found even after normalization. old_preview={:?}, content_preview={:?}",
-                        old_preview, content_preview
-                    );
-                    Err(format!(
-                        "Edit failed: The text to replace was not found in '{}'. The old_string does not match any content even after whitespace normalization. Try reading the note again and using the exact content.",
-                        path
-                    ))
-                }
+            if old_string.is_empty() {
+                return Err("old_string must not be empty".to_string());
             }
+
+            let occurrences = file.content.matches(&old_string).count();
+            if occurrences == 0 {
+                return Err(edit_no_match_error(&path, &old_string, &file.content));
+            }
+            if occurrences > 1 && !replace_all {
+                return Err(format!(
+                    "old_string appears {} times in '{}'. Add surrounding context to make it \
+                     unique, or pass replace_all: true.",
+                    occurrences, path
+                ));
+            }
+
+            client.find_replace_in_file(path.clone(), old_string, new_string, replace_all)
+                .map_err(|e| e.to_string())?;
+            let summary = if replace_all && occurrences > 1 {
+                format!("Edited note: {} ({} occurrences submitted)", path, occurrences)
+            } else {
+                format!("Edited note: {}", path)
+            };
+            Ok(json!({"content": [{"type": "text", "text": summary}]}))
         }
         "move_notes_to_folder" => {
             let paths: Vec<String> = serde_json::from_value(params.arguments["paths"].clone())
@@ -923,4 +1021,166 @@ fn resolve_file_id(
         return Ok(file.id);
     }
     Err("Must provide either 'id' or 'path'".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn name_strips_exactly_one_extension() {
+        assert_eq!(name_from_path("A/notes.md"), "notes");
+        assert_eq!(name_from_path("notes.md"), "notes");
+        assert_eq!(name_from_path("A/config.yaml"), "config");
+    }
+
+    #[test]
+    fn name_strips_one_extension_not_repeats() {
+        assert_eq!(name_from_path("A/notes.md.md"), "notes.md");
+    }
+
+    #[test]
+    fn name_keeps_dotless_and_leading_dot_names() {
+        assert_eq!(name_from_path("A/README"), "README");
+        assert_eq!(name_from_path("A/.gitignore"), ".gitignore");
+    }
+
+    #[test]
+    fn folder_path_keeps_trailing_slash_and_is_empty_at_root() {
+        assert_eq!(folder_path_of("A/B/note.md"), "A/B/");
+        assert_eq!(folder_path_of("note.md"), "");
+    }
+
+    #[test]
+    fn validate_rejects_empty_folder_and_nameless_paths() {
+        assert!(validate_note_path("A/note.md").is_ok());
+        assert!(validate_note_path("").is_err());
+        assert!(validate_note_path("   ").is_err());
+        assert!(validate_note_path("A/B/").is_err());
+    }
+
+    #[test]
+    fn relaxed_ignores_indentation_and_line_endings() {
+        assert_eq!(relaxed("  a\r\n\tb  "), relaxed("a\nb"));
+    }
+
+    #[test]
+    fn escape_invisibles_marks_trailing_space_tab_and_nbsp() {
+        assert_eq!(escape_invisibles("a  "), "a··");
+        assert_eq!(escape_invisibles("\ta"), "→a");
+        assert_eq!(escape_invisibles("a\u{00A0}b"), "a<NBSP>b");
+    }
+
+    #[test]
+    fn escape_invisibles_leaves_clean_text_alone() {
+        assert_eq!(escape_invisibles("plain text"), "plain text");
+    }
+
+    #[test]
+    fn no_match_error_flags_whitespace_only_difference() {
+        let err = edit_no_match_error("N.md", "hello", "  hello  \nworld\n");
+        assert!(err.contains("Whitespace differs"), "got: {}", err);
+        assert!(err.contains("Closest match at lines 1-1"), "got: {}", err);
+    }
+
+    #[test]
+    fn no_match_error_names_crlf_instead_of_showing_identical_blocks() {
+        // lines() strips \r, so `actual` and `you sent` render identically here. Advising
+        // "copy actual" would loop the caller forever.
+        let err = edit_no_match_error("N.md", "line one\nline two", "line one\r\nline two\r\n");
+        assert!(err.contains("CRLF"), "got: {}", err);
+        assert!(!err.contains("Copy `actual`"), "sent caller on a loop: {}", err);
+    }
+
+    #[test]
+    fn escape_invisibles_counts_multibyte_trailing_space_once() {
+        assert_eq!(escape_invisibles("abc\u{2003}"), "abc·");
+    }
+
+    #[test]
+    fn no_match_error_flags_case_only_difference() {
+        let err = edit_no_match_error("N.md", "Hello World", "hello world\n");
+        assert!(err.contains("Case differs"), "got: {}", err);
+    }
+
+    #[test]
+    fn no_match_error_reports_absence_when_nothing_is_similar() {
+        let err = edit_no_match_error("N.md", "zebra", "alpha\nbeta\n");
+        assert!(err.contains("No similar line found"), "got: {}", err);
+    }
+
+    #[test]
+    fn no_match_error_is_capped_when_it_quotes_a_long_candidate() {
+        // Must take the candidate-found branch, or truncation is never exercised.
+        let long = "x".repeat(50_000);
+        let content = format!("  {}  \n", long);
+        let err = edit_no_match_error("N.md", &long, &content);
+        assert!(err.contains("Closest match"), "wrong branch: {}", &err[..80.min(err.len())]);
+        assert!(err.len() <= 2048);
+    }
+
+    #[test]
+    fn empty_old_string_is_not_treated_as_a_match() {
+        // "abc".matches("") counts 4, and replace_all would splice between every char.
+        assert_eq!("abc".matches("").count(), 4);
+    }
+
+    #[test]
+    fn no_match_error_does_not_split_multibyte_chars() {
+        // A naive String::truncate panics when the cap lands inside an em dash.
+        let needle = "—".repeat(4_000);
+        let content = format!("{}\nother\n", needle);
+        let err = edit_no_match_error("N.md", &needle, &content);
+        assert!(err.len() <= 2048);
+        assert!(err.is_char_boundary(err.len()));
+    }
+
+    #[test]
+    fn truncate_on_char_boundary_never_splits_a_char() {
+        for cap in 0..12 {
+            let mut s = "a—b—c".to_string();
+            truncate_on_char_boundary(&mut s, cap);
+            assert!(s.len() <= cap);
+        }
+    }
+
+    #[test]
+    fn truncate_on_char_boundary_leaves_short_strings_alone() {
+        let mut s = "short".to_string();
+        truncate_on_char_boundary(&mut s, 2048);
+        assert_eq!(s, "short");
+    }
+
+    #[test]
+    fn tool_call_params_tolerate_missing_arguments() {
+        let params: ToolCallParams = serde_json::from_value(json!({"name": "get_note"})).unwrap();
+        assert_eq!(params.name, "get_note");
+        assert!(params.arguments.is_null());
+    }
+
+    #[test]
+    fn tool_call_params_reject_missing_name() {
+        assert!(serde_json::from_value::<ToolCallParams>(json!({"arguments": {}})).is_err());
+    }
+
+    #[test]
+    fn edit_note_schema_requires_new_string() {
+        let edit = get_tools().into_iter().find(|t| t.name == "edit_note").unwrap();
+        let required = edit.input_schema["required"].as_array().unwrap().clone();
+        assert!(required.contains(&json!("new_string")));
+    }
+
+    #[test]
+    fn every_tool_name_is_still_the_external_contract() {
+        // Tool names are bound by string in skills, hooks, allowlists and python callers.
+        // Renaming one silently breaks callers, so pin the *_note surface.
+        let names: Vec<String> = get_tools().into_iter().map(|t| t.name).collect();
+        for expected in [
+            "get_note", "get_notes", "create_note", "edit_note", "delete_note", "delete_notes",
+            "move_note", "move_notes_to_folder", "append_to_note", "prepend_to_note",
+            "search_notes", "search_notes_content", "list_folder",
+        ] {
+            assert!(names.contains(&expected.to_string()), "missing tool: {}", expected);
+        }
+    }
 }
