@@ -1,3 +1,4 @@
+use crate::matcher;
 use regex::RegexBuilder;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -419,9 +420,12 @@ pub fn get_tools() -> Vec<Tool> {
                 "type": "object",
                 "properties": {
                     "path": {"type": "string", "description": "Note path (e.g., 'Development/My Note.md')"},
-                    "old_string": {"type": "string", "description": "Exact text to find, including whitespace and case. Must be unique unless replace_all is set."},
+                    "old_string": {"type": "string", "description": "Text to find. Whitespace and indentation differences are tolerated; case is not. Must be unique unless replace_all or occurrence is set."},
                     "new_string": {"type": "string", "description": "Replacement text. Pass \"\" to delete."},
-                    "replace_all": {"type": "boolean", "description": "Replace every occurrence (default false)"}
+                    "replace_all": {"type": "boolean", "description": "Replace every occurrence (default false)"},
+                    "occurrence": {"type": "integer", "description": "Replace only the Nth match (1-based)"},
+                    "dry_run": {"type": "boolean", "description": "Report what would change without writing"},
+                    "allow_fuzzy": {"type": "boolean", "description": "Permit an ambiguous whitespace-folded match"}
                 },
                 "required": ["path", "old_string", "new_string"]
             }),
@@ -870,35 +874,107 @@ pub async fn execute_tool(
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
 
-            let file = client.get_file_by_path(&path)
-                .map_err(|e| e.to_string())?
-                .ok_or_else(|| format!("Note not found: {}", path))?;
+            let occurrence: Option<usize> = params
+                .arguments
+                .get("occurrence")
+                .and_then(|v| v.as_u64())
+                .map(|n| n as usize);
+            let dry_run: bool = params
+                .arguments
+                .get("dry_run")
+                .or_else(|| params.arguments.get("dryRun"))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let allow_fuzzy: bool = params
+                .arguments
+                .get("allow_fuzzy")
+                .or_else(|| params.arguments.get("allowFuzzy"))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
 
             if old_string.is_empty() {
                 return Err("old_string must not be empty".to_string());
             }
 
-            let occurrences = file.content.matches(&old_string).count();
-            if occurrences == 0 {
-                return Err(edit_no_match_error(&path, &old_string, &file.content));
-            }
-            if occurrences > 1 && !replace_all {
+            let file = client
+                .get_file_by_path(&path)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| format!("Note not found: {}", path))?;
+
+            let found = matcher::find(&file.content, &old_string)
+                .ok_or_else(|| edit_no_match_error(&path, &old_string, &file.content))?;
+            let count = found.matches.len();
+
+            // A fuzzy tier can match text the caller did not mean, so it needs either an
+            // unambiguous match or an explicit opt-in.
+            if found.tier.needs_opt_in() && count > 1 && !allow_fuzzy {
                 return Err(format!(
-                    "old_string appears {} times in '{}'. Add surrounding context to make it \
-                     unique, or pass replace_all: true.",
-                    occurrences, path
+                    "old_string only matched '{}' at the {} tier, in {} places. \
+                     Add exact context, or pass allow_fuzzy: true.",
+                    path,
+                    found.tier.label(),
+                    count
                 ));
             }
 
+            let targets: Vec<usize> = match (occurrence, replace_all) {
+                (Some(n), _) => {
+                    if n == 0 || n > count {
+                        return Err(format!(
+                            "occurrence {} is out of range: {} match(es) in '{}'.",
+                            n, count, path
+                        ));
+                    }
+                    vec![n - 1]
+                }
+                (None, true) => (0..count).collect(),
+                (None, false) => {
+                    if count > 1 {
+                        let places: Vec<String> = found
+                            .matches
+                            .iter()
+                            .map(|m| format!("lines {}-{}", m.first_line, m.last_line))
+                            .collect();
+                        return Err(format!(
+                            "old_string appears {} times in '{}' ({}). Add context to make it \
+                             unique, pass replace_all: true, or target one with occurrence: N.",
+                            count,
+                            path,
+                            places.join("; ")
+                        ));
+                    }
+                    vec![0]
+                }
+            };
+
+            let updated = matcher::apply(&file.content, &old_string, &new_string, &found, &targets);
+
+            if dry_run {
+                let places: Vec<String> = targets
+                    .iter()
+                    .map(|&i| {
+                        let m = &found.matches[i];
+                        format!("lines {}-{}", m.first_line, m.last_line)
+                    })
+                    .collect();
+                return Ok(json!({"content": [{"type": "text", "text": format!(
+                    "dry run: would edit {} at {} ({} tier, {} of {} match(es)). No changes written.",
+                    path, places.join("; "), found.tier.label(), targets.len(), count
+                )}]}));
+            }
+
             client
-                .find_replace_in_file(path.clone(), old_string, new_string, replace_all)
+                .update_file_content(file.id, updated)
                 .await
                 .map_err(|e| e.to_string())?;
-            let summary = if replace_all && occurrences > 1 {
-                format!("Edited note: {} ({} occurrences submitted)", path, occurrences)
-            } else {
-                format!("Edited note: {}", path)
-            };
+
+            let summary = format!(
+                "Edited note: {} ({} of {} match(es), {} tier)",
+                path,
+                targets.len(),
+                count,
+                found.tier.label()
+            );
             Ok(json!({"content": [{"type": "text", "text": summary}]}))
         }
         "move_notes_to_folder" => {

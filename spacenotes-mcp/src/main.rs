@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 mod bindings;
 mod http;
+mod matcher;
 mod mcp;
 mod spacetime_client;
 mod tools;
