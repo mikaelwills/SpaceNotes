@@ -54,13 +54,16 @@ const REDUCER_TIMEOUT: Duration = Duration::from_secs(10);
 pub struct SpacetimeClient {
     conn: DbConnection,
     ready: watch::Sender<bool>,
+    // watch::Sender::send is a no-op once every Receiver is dropped, which would leave the
+    // gate permanently closed. Holding one keeps the channel live.
+    _ready_keepalive: watch::Receiver<bool>,
 }
 
 impl SpacetimeClient {
     pub fn connect(host: &str, db_name: &str) -> Result<Self> {
         tracing::info!("Connecting to SpacetimeDB at {} (db: {})", host, db_name);
 
-        let (ready, _) = watch::channel(false);
+        let (ready, ready_keepalive) = watch::channel(false);
 
         let conn = DbConnection::builder()
             .with_uri(host)
@@ -89,7 +92,11 @@ impl SpacetimeClient {
 
         tracing::info!("SpacetimeDB connection established");
 
-        Ok(Self { conn, ready })
+        Ok(Self {
+            conn,
+            ready,
+            _ready_keepalive: ready_keepalive,
+        })
     }
 
     // Reducers are submitted asynchronously: the socket accepting a call says nothing about
