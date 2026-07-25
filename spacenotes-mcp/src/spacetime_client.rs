@@ -75,9 +75,14 @@ impl SpacetimeClient {
 
         let (ready, ready_keepalive) = watch::channel(false);
 
+        let disconnected = ready.clone();
         let conn = DbConnection::builder()
             .with_uri(host)
             .with_database_name(db_name)
+            .on_disconnect(move |_ctx, err| {
+                let _ = disconnected.send(false);
+                tracing::error!("SpacetimeDB connection lost: {:?}", err);
+            })
             .build()?;
 
         conn.run_threaded();
@@ -506,6 +511,32 @@ impl SpacetimeClient {
         Ok(())
     }
 
+    pub fn folder_exists(&self, folder_path: &str) -> bool {
+        let trimmed = folder_path.trim_end_matches('/');
+        if trimmed.is_empty() {
+            return true;
+        }
+        self.conn
+            .db()
+            .folder()
+            .path()
+            .find(&trimmed.to_string())
+            .is_some()
+    }
+
+    pub fn nearest_existing_ancestor(&self, folder_path: &str) -> String {
+        let existing: HashSet<String> =
+            self.conn.db().folder().iter().map(|f| f.path.clone()).collect();
+        let mut candidate = folder_path.trim_end_matches('/').to_string();
+        while let Some(idx) = candidate.rfind('/') {
+            candidate.truncate(idx);
+            if existing.contains(&candidate) {
+                return format!("{}/", candidate);
+            }
+        }
+        "(root)".to_string()
+    }
+
     pub fn files_in_scope(
         &self,
         folder: Option<&str>,
@@ -562,8 +593,11 @@ impl SpacetimeClient {
             .split_whitespace()
             .map(|s| s.to_string())
             .collect();
+        if tokens.is_empty() {
+            return Ok(Vec::new());
+        }
 
-        let mut files: Vec<(usize, SearchResult)> = self
+        let mut files: Vec<SearchResult> = self
             .conn
             .db()
             .space_file()
@@ -573,16 +607,12 @@ impl SpacetimeClient {
                 let path_lower = file.path.to_lowercase();
                 let content_lower = file.content.to_lowercase();
 
-                let match_count = tokens
-                    .iter()
-                    .filter(|token| {
-                        name_lower.contains(*token)
-                            || path_lower.contains(*token)
-                            || content_lower.contains(*token)
-                    })
-                    .count();
-
-                if match_count == 0 {
+                let matches_all = tokens.iter().all(|token| {
+                    name_lower.contains(token)
+                        || path_lower.contains(token)
+                        || content_lower.contains(token)
+                });
+                if !matches_all {
                     return None;
                 }
 
@@ -634,21 +664,16 @@ impl SpacetimeClient {
                     out
                 });
 
-                Some((
-                    match_count,
-                    SearchResult {
-                        id: file.id.clone(),
-                        path: file.path.clone(),
-                        name: file.name.clone(),
-                        excerpts,
-                    },
-                ))
+                Some(SearchResult {
+                    id: file.id.clone(),
+                    path: file.path.clone(),
+                    name: file.name.clone(),
+                    excerpts,
+                })
             })
             .collect();
 
-        files.sort_by(|a, b| b.0.cmp(&a.0));
-
-        let files: Vec<SearchResult> = files.into_iter().map(|(_, file)| file).collect();
+        files.sort_by(|a, b| a.path.cmp(&b.path));
 
         tracing::info!("Found {} notes matching '{}'", files.len(), query);
 

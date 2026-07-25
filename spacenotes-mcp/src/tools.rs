@@ -322,7 +322,16 @@ fn latest_session_block(
         return Ok(format!("No sessions found in {}", folder));
     };
     match client.get_file_by_id(id).map_err(|e| e.to_string())? {
-        Some(file) => Ok(format_file(&file)),
+        Some(file) => {
+            let mut text = format_file(&file);
+            if unparsed > 0 {
+                text.push_str(&format!(
+                    "\n\n({} file(s) in {} ignored: name does not match <date>-<N>-)",
+                    unparsed, folder
+                ));
+            }
+            Ok(text)
+        }
         None => Ok("Latest session note vanished between list and fetch".to_string()),
     }
 }
@@ -399,13 +408,13 @@ pub fn get_tools() -> Vec<Tool> {
         },
         Tool {
             name: "get_note".to_string(),
-            description: "Get a note's full content by ID or path. Pass raw:true to skip line numbers when you only need to read (not edit).".to_string(),
+            description: "Get a note's full content by ID or path. Line numbers are for locating text only; pass raw:true to get the exact bytes when building an old_string for edit_note.".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
                     "id": {"type": "string", "description": "Note UUID (optional if path provided)"},
                     "path": {"type": "string", "description": "Note path (optional if id provided)"},
-                    "raw": {"type": "boolean", "description": "Omit line-number prefixes (default false)"},
+                    "raw": {"type": "boolean", "description": "Omit line-number prefixes (default false). Use before constructing edit_note old_string"},
                     "line_start": {"type": "integer", "description": "First line to return (1-based)"},
                     "line_end": {"type": "integer", "description": "Last line to return (inclusive)"},
                     "heading": {"type": "string", "description": "Return only this markdown section"}
@@ -577,9 +586,10 @@ pub fn get_tools() -> Vec<Tool> {
                 "type": "object",
                 "properties": {
                     "path": {"type": "string", "description": "Note path (e.g., 'Development/My Note.md')"},
+                    "id": {"type": "string", "description": "Note UUID, if you don't have the path"},
                     "content": {"type": "string", "description": "Content to append"}
                 },
-                "required": ["path", "content"]
+                "required": ["content"]
             }),
         },
         Tool {
@@ -589,9 +599,10 @@ pub fn get_tools() -> Vec<Tool> {
                 "type": "object",
                 "properties": {
                     "path": {"type": "string", "description": "Note path (e.g., 'Development/My Note.md')"},
+                    "id": {"type": "string", "description": "Note UUID, if you don't have the path"},
                     "content": {"type": "string", "description": "Content to prepend"}
                 },
-                "required": ["path", "content"]
+                "required": ["content"]
             }),
         },
         Tool {
@@ -601,6 +612,7 @@ pub fn get_tools() -> Vec<Tool> {
                 "type": "object",
                 "properties": {
                     "path": {"type": "string", "description": "Note path (e.g., 'Development/My Note.md')"},
+                    "id": {"type": "string", "description": "Note UUID, if you don't have the path"},
                     "old_string": {"type": "string", "description": "Text to find. Whitespace and indentation differences are tolerated; case is not. Must be unique unless replace_all or occurrence is set."},
                     "new_string": {"type": "string", "description": "Replacement text. Pass \"\" to delete."},
                     "replace_all": {"type": "boolean", "description": "Replace every occurrence (default false)"},
@@ -621,7 +633,7 @@ pub fn get_tools() -> Vec<Tool> {
                         }
                     }
                 },
-                "required": ["path"]
+                "required": []
             }),
         },
         Tool {
@@ -650,12 +662,13 @@ pub fn get_tools() -> Vec<Tool> {
                 "type": "object",
                 "properties": {
                     "path": {"type": "string", "description": "Note path (e.g., 'Development/My Note.md')"},
+                    "id": {"type": "string", "description": "Note UUID, if you don't have the path"},
                     "pattern": {"type": "string", "description": "Regex pattern (e.g., '\\n\\n+' for multiple newlines)"},
                     "replacement": {"type": "string", "description": "Replacement string (supports $1, $2 for capture groups)"},
                     "case_insensitive": {"type": "boolean", "description": "Case-insensitive matching (default: false)"},
                     "multiline": {"type": "boolean", "description": "Multiline mode: ^ and $ match line boundaries (default: false)"}
                 },
-                "required": ["path", "pattern", "replacement"]
+                "required": ["pattern", "replacement"]
             }),
         },
         Tool {
@@ -789,6 +802,14 @@ pub async fn execute_tool(
             let entries = client
                 .list_folder(&folder_path)
                 .map_err(|e| e.to_string())?;
+
+            if entries.is_empty() && !client.folder_exists(&folder_path) {
+                return Err(format!(
+                    "Folder not found: '{}'. Nearest existing ancestor: {}",
+                    folder_path,
+                    client.nearest_existing_ancestor(&folder_path)
+                ));
+            }
 
             Ok(json!({
                 "content": [{
@@ -1063,7 +1084,7 @@ pub async fn execute_tool(
                 .next_back()
                 .unwrap_or(&path)
                 .to_string();
-            let depth = path.matches('/').count() as u32;
+            let depth = path.trim_end_matches('/').matches('/').count() as u32;
 
             client
                 .create_folder(path.clone(), name, depth)
@@ -1084,8 +1105,7 @@ pub async fn execute_tool(
             Ok(json!({"content": [{"type": "text", "text": format!("Deleted folder: {}", path)}]}))
         }
         "append_to_note" => {
-            let path: String = serde_json::from_value(params.arguments["path"].clone())
-                .map_err(|e| e.to_string())?;
+            let path = resolve_note_path(client, &params.arguments)?;
             let content: String = serde_json::from_value(params.arguments["content"].clone())
                 .map_err(|e| e.to_string())?;
 
@@ -1097,8 +1117,7 @@ pub async fn execute_tool(
             Ok(json!({"content": [{"type": "text", "text": format!("Appended to note: {}", path)}]}))
         }
         "prepend_to_note" => {
-            let path: String = serde_json::from_value(params.arguments["path"].clone())
-                .map_err(|e| e.to_string())?;
+            let path = resolve_note_path(client, &params.arguments)?;
             let content: String = serde_json::from_value(params.arguments["content"].clone())
                 .map_err(|e| e.to_string())?;
 
@@ -1110,8 +1129,7 @@ pub async fn execute_tool(
             Ok(json!({"content": [{"type": "text", "text": format!("Prepended to note: {}", path)}]}))
         }
         "edit_note" => {
-            let path: String = serde_json::from_value(params.arguments["path"].clone())
-                .map_err(|e| e.to_string())?;
+            let path = resolve_note_path(client, &params.arguments)?;
             if let Some(edits) = params.arguments.get("edits").and_then(|v| v.as_array()) {
                 if edits.is_empty() {
                     return Err("edits must not be empty".to_string());
@@ -1471,8 +1489,7 @@ pub async fn execute_tool(
             Ok(json!({"content": [{"type": "text", "text": result}]}))
         }
         "regex_replace" => {
-            let path: String = serde_json::from_value(params.arguments["path"].clone())
-                .map_err(|e| e.to_string())?;
+            let path = resolve_note_path(client, &params.arguments)?;
             let pattern: String = serde_json::from_value(params.arguments["pattern"].clone())
                 .map_err(|e| e.to_string())?;
             let replacement: String = serde_json::from_value(params.arguments["replacement"].clone())
@@ -1494,16 +1511,27 @@ pub async fn execute_tool(
                 .build()
                 .map_err(|e| format!("Invalid regex pattern: {}", e))?;
 
+            let match_count = re.find_iter(&current_file.content).count();
             let new_content = re.replace_all(&current_file.content, replacement.as_str()).to_string();
 
             if new_content == current_file.content {
-                return Ok(json!({"content": [{"type": "text", "text": "No matches found - note unchanged"}]}));
+                let text = if match_count == 0 {
+                    "No matches found - note unchanged".to_string()
+                } else {
+                    format!(
+                        "{} match(es) but the replacement leaves the text identical - note unchanged",
+                        match_count
+                    )
+                };
+                return Ok(json!({"content": [{"type": "text", "text": text}]}));
             }
 
-            let match_count = re.find_iter(&current_file.content).count();
-
             client
-                .update_file_content(current_file.id, new_content.clone())
+                .update_file_content_if_unchanged(
+                    current_file.id.clone(),
+                    &current_file.content,
+                    new_content,
+                )
                 .await
                 .map_err(|e| e.to_string())?;
 
@@ -1553,6 +1581,23 @@ pub async fn execute_tool(
         }
         _ => Err(format!("Unknown tool: {}", params.name)),
     }
+}
+
+fn resolve_note_path(
+    client: &crate::spacetime_client::SpacetimeClient,
+    args: &Value,
+) -> Result<String, String> {
+    if let Some(path) = args.get("path").and_then(|v| v.as_str()) {
+        return Ok(path.to_string());
+    }
+    if let Some(id) = args.get("id").and_then(|v| v.as_str()) {
+        let file = client
+            .get_file_by_id(id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("Note not found: {}", id))?;
+        return Ok(file.path);
+    }
+    Err("Must provide either 'path' or 'id'".to_string())
 }
 
 fn resolve_file_id(
@@ -1723,7 +1768,19 @@ mod tests {
         assert!(props.contains_key("occurrence"));
         assert!(props.contains_key("dry_run"));
         let required = edit.input_schema["required"].as_array().unwrap();
-        assert!(required.contains(&json!("path")));
+        assert!(required.is_empty());
+    }
+
+    #[test]
+    fn path_bound_write_tools_accept_an_id_alternative() {
+        for name in ["edit_note", "append_to_note", "prepend_to_note", "regex_replace"] {
+            let tool = get_tools().into_iter().find(|t| t.name == name).unwrap();
+            let props = tool.input_schema["properties"].as_object().unwrap();
+            assert!(props.contains_key("id"), "{} missing id", name);
+            assert!(props.contains_key("path"), "{} missing path", name);
+            let required = tool.input_schema["required"].as_array().unwrap();
+            assert!(!required.contains(&json!("path")), "{} still requires path", name);
+        }
     }
 
     #[test]

@@ -245,7 +245,9 @@ fn reconcile(content: &str, m: &Match, needle: &str, replacement: &str, tier: Ti
         normalized.join(terminator)
     };
 
-    if replacement.ends_with('\n') {
+    let needle_terminator_outside_match =
+        !matches!(tier, Tier::Exact) && needle.ends_with('\n');
+    if replacement.ends_with('\n') && !needle_terminator_outside_match {
         format!("{}{}", body, terminator)
     } else {
         body
@@ -547,5 +549,33 @@ mod regressions {
         let found = find(content, needle).expect("match");
         let out = apply(content, needle, needle, &found, &[0]);
         assert_eq!(out, content, "interior indent was rewritten");
+    }
+
+    #[test]
+    fn tier1_trailing_newline_pair_does_not_insert_a_blank_line() {
+        let content = "alpha  \nrest\n";
+        let needle = "alpha\nrest\n";
+        let found = find(content, needle).expect("match");
+        assert_eq!(found.tier, Tier::TrailingWhitespace);
+        let out = apply(content, needle, "ALPHA\nrest\n", &found, &[0]);
+        assert_eq!(out, "ALPHA\nrest\n");
+    }
+
+    #[test]
+    fn tier1_needle_with_trailing_blank_line_round_trips() {
+        let content = "alpha  \n\nrest\n";
+        let needle = "alpha\n\n";
+        let found = find(content, needle).expect("match");
+        let out = apply(content, needle, "beta\n\n", &found, &[0]);
+        assert_eq!(out, "beta\n\nrest\n");
+    }
+
+    #[test]
+    fn tier1_replacement_newline_without_needle_newline_still_appends() {
+        let content = "alpha \nrest";
+        let needle = "alpha\nrest";
+        let found = find(content, needle).expect("match");
+        let out = apply(content, needle, "beta\n", &found, &[0]);
+        assert_eq!(out, "beta\n");
     }
 }
