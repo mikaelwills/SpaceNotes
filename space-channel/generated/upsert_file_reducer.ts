@@ -18,7 +18,6 @@ export default {
   folderPath: __t.string(),
   depth: __t.u32(),
   extension: __t.string(),
-  kind: __t.string(),
   size: __t.u64(),
   createdTime: __t.u64(),
   modifiedTime: __t.u64(),

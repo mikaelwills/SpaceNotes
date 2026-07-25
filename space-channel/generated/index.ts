@@ -35,30 +35,30 @@ import {
 
 // Import all reducer arg schemas
 import AcceptCallReducer from "./accept_call_reducer";
-import AppendToNoteReducer from "./append_to_note_reducer";
+import AppendToFileReducer from "./append_to_file_reducer";
 import ClearAllReducer from "./clear_all_reducer";
 import ClearAllSessionsReducer from "./clear_all_sessions_reducer";
+import CreateFileReducer from "./create_file_reducer";
 import CreateFolderReducer from "./create_folder_reducer";
-import CreateNoteReducer from "./create_note_reducer";
+import DeleteFileReducer from "./delete_file_reducer";
 import DeleteFolderReducer from "./delete_folder_reducer";
-import DeleteNoteReducer from "./delete_note_reducer";
 import DeleteSessionReducer from "./delete_session_reducer";
 import EditMessageReducer from "./edit_message_reducer";
 import EndCallReducer from "./end_call_reducer";
 import EndSessionReducer from "./end_session_reducer";
-import FindReplaceInNoteReducer from "./find_replace_in_note_reducer";
-import GetRecentNotesReducer from "./get_recent_notes_reducer";
+import FindReplaceInFileReducer from "./find_replace_in_file_reducer";
+import GetRecentFilesReducer from "./get_recent_files_reducer";
 import HeartbeatReducer from "./heartbeat_reducer";
+import MoveFileReducer from "./move_file_reducer";
 import MoveFolderReducer from "./move_folder_reducer";
-import MoveNoteReducer from "./move_note_reducer";
-import PrependToNoteReducer from "./prepend_to_note_reducer";
+import PrependToFileReducer from "./prepend_to_file_reducer";
 import PushContextUsageReducer from "./push_context_usage_reducer";
 import PushImageReducer from "./push_image_reducer";
 import PushMessageReducer from "./push_message_reducer";
 import PushStatusReducer from "./push_status_reducer";
 import PushToolEventReducer from "./push_tool_event_reducer";
 import RegisterSessionReducer from "./register_session_reducer";
-import RenameNoteReducer from "./rename_note_reducer";
+import RenameFileReducer from "./rename_file_reducer";
 import RequestCallReducer from "./request_call_reducer";
 import RequestPermissionReducer from "./request_permission_reducer";
 import RequestQuestionReducer from "./request_question_reducer";
@@ -68,10 +68,10 @@ import SendAudioFrameReducer from "./send_audio_frame_reducer";
 import SendVideoFrameReducer from "./send_video_frame_reducer";
 import SetDisplayNameReducer from "./set_display_name_reducer";
 import SweepOldMessagesReducer from "./sweep_old_messages_reducer";
-import UpdateNoteContentReducer from "./update_note_content_reducer";
-import UpdateNotePathReducer from "./update_note_path_reducer";
+import UpdateFileContentReducer from "./update_file_content_reducer";
+import UpdateFilePathReducer from "./update_file_path_reducer";
+import UpsertFileReducer from "./upsert_file_reducer";
 import UpsertFolderReducer from "./upsert_folder_reducer";
-import UpsertNoteReducer from "./upsert_note_reducer";
 
 // Import all procedure arg schemas
 
@@ -82,11 +82,11 @@ import ConnectedUserRow from "./connected_user_table";
 import FolderRow from "./folder_table";
 import MessageRow from "./message_table";
 import MessageImageRow from "./message_image_table";
-import NoteRow from "./note_table";
 import PermissionRequestRow from "./permission_request_table";
 import QuestionRequestRow from "./question_request_table";
 import SessionRow from "./session_table";
 import SessionActivityRow from "./session_activity_table";
+import SpaceFileRow from "./space_file_table";
 import ToolEventRow from "./tool_event_table";
 import UserProfileRow from "./user_profile_table";
 import VideoFrameRow from "./video_frame_table";
@@ -164,24 +164,6 @@ const tablesSchema = __schema({
       { name: 'message_image_message_id_key', constraint: 'unique', columns: ['messageId'] },
     ],
   }, MessageImageRow),
-  note: __table({
-    name: 'note',
-    indexes: [
-      { accessor: 'db_updated_at', name: 'note_db_updated_at_idx_btree', algorithm: 'btree', columns: [
-        'dbUpdatedAt',
-      ] },
-      { accessor: 'id', name: 'note_id_idx_btree', algorithm: 'btree', columns: [
-        'id',
-      ] },
-      { accessor: 'path', name: 'note_path_idx_btree', algorithm: 'btree', columns: [
-        'path',
-      ] },
-    ],
-    constraints: [
-      { name: 'note_id_key', constraint: 'unique', columns: ['id'] },
-      { name: 'note_path_key', constraint: 'unique', columns: ['path'] },
-    ],
-  }, NoteRow),
   permission_request: __table({
     name: 'permission_request',
     indexes: [
@@ -232,6 +214,24 @@ const tablesSchema = __schema({
       { name: 'session_activity_session_id_key', constraint: 'unique', columns: ['sessionId'] },
     ],
   }, SessionActivityRow),
+  space_file: __table({
+    name: 'space_file',
+    indexes: [
+      { accessor: 'db_updated_at', name: 'space_file_db_updated_at_idx_btree', algorithm: 'btree', columns: [
+        'dbUpdatedAt',
+      ] },
+      { accessor: 'id', name: 'space_file_id_idx_btree', algorithm: 'btree', columns: [
+        'id',
+      ] },
+      { accessor: 'path', name: 'space_file_path_idx_btree', algorithm: 'btree', columns: [
+        'path',
+      ] },
+    ],
+    constraints: [
+      { name: 'space_file_id_key', constraint: 'unique', columns: ['id'] },
+      { name: 'space_file_path_key', constraint: 'unique', columns: ['path'] },
+    ],
+  }, SpaceFileRow),
   tool_event: __table({
     name: 'tool_event',
     indexes: [
@@ -270,30 +270,30 @@ const tablesSchema = __schema({
 /** The schema information for all reducers in this module. This is defined the same way as the reducers would have been defined in the server, except the body of the reducer is omitted in code generation. */
 const reducersSchema = __reducers(
   __reducerSchema("accept_call", AcceptCallReducer),
-  __reducerSchema("append_to_note", AppendToNoteReducer),
+  __reducerSchema("append_to_file", AppendToFileReducer),
   __reducerSchema("clear_all", ClearAllReducer),
   __reducerSchema("clear_all_sessions", ClearAllSessionsReducer),
+  __reducerSchema("create_file", CreateFileReducer),
   __reducerSchema("create_folder", CreateFolderReducer),
-  __reducerSchema("create_note", CreateNoteReducer),
+  __reducerSchema("delete_file", DeleteFileReducer),
   __reducerSchema("delete_folder", DeleteFolderReducer),
-  __reducerSchema("delete_note", DeleteNoteReducer),
   __reducerSchema("delete_session", DeleteSessionReducer),
   __reducerSchema("edit_message", EditMessageReducer),
   __reducerSchema("end_call", EndCallReducer),
   __reducerSchema("end_session", EndSessionReducer),
-  __reducerSchema("find_replace_in_note", FindReplaceInNoteReducer),
-  __reducerSchema("get_recent_notes", GetRecentNotesReducer),
+  __reducerSchema("find_replace_in_file", FindReplaceInFileReducer),
+  __reducerSchema("get_recent_files", GetRecentFilesReducer),
   __reducerSchema("heartbeat", HeartbeatReducer),
+  __reducerSchema("move_file", MoveFileReducer),
   __reducerSchema("move_folder", MoveFolderReducer),
-  __reducerSchema("move_note", MoveNoteReducer),
-  __reducerSchema("prepend_to_note", PrependToNoteReducer),
+  __reducerSchema("prepend_to_file", PrependToFileReducer),
   __reducerSchema("push_context_usage", PushContextUsageReducer),
   __reducerSchema("push_image", PushImageReducer),
   __reducerSchema("push_message", PushMessageReducer),
   __reducerSchema("push_status", PushStatusReducer),
   __reducerSchema("push_tool_event", PushToolEventReducer),
   __reducerSchema("register_session", RegisterSessionReducer),
-  __reducerSchema("rename_note", RenameNoteReducer),
+  __reducerSchema("rename_file", RenameFileReducer),
   __reducerSchema("request_call", RequestCallReducer),
   __reducerSchema("request_permission", RequestPermissionReducer),
   __reducerSchema("request_question", RequestQuestionReducer),
@@ -303,10 +303,10 @@ const reducersSchema = __reducers(
   __reducerSchema("send_video_frame", SendVideoFrameReducer),
   __reducerSchema("set_display_name", SetDisplayNameReducer),
   __reducerSchema("sweep_old_messages", SweepOldMessagesReducer),
-  __reducerSchema("update_note_content", UpdateNoteContentReducer),
-  __reducerSchema("update_note_path", UpdateNotePathReducer),
+  __reducerSchema("update_file_content", UpdateFileContentReducer),
+  __reducerSchema("update_file_path", UpdateFilePathReducer),
+  __reducerSchema("upsert_file", UpsertFileReducer),
   __reducerSchema("upsert_folder", UpsertFolderReducer),
-  __reducerSchema("upsert_note", UpsertNoteReducer),
 );
 
 /** The schema information for all procedures in this module. This is defined the same way as the procedures would have been defined in the server. */

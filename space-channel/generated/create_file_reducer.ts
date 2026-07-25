@@ -10,17 +10,15 @@ import {
   type Infer as __Infer,
 } from "spacetimedb";
 
-export default __t.row({
-  id: __t.string().primaryKey(),
+export default {
+  id: __t.string(),
   path: __t.string(),
   name: __t.string(),
   content: __t.string(),
-  folderPath: __t.string().name("folder_path"),
+  folderPath: __t.string(),
   depth: __t.u32(),
   extension: __t.string(),
-  kind: __t.string(),
   size: __t.u64(),
-  createdTime: __t.u64().name("created_time"),
-  modifiedTime: __t.u64().name("modified_time"),
-  dbUpdatedAt: __t.timestamp().name("db_updated_at"),
-});
+  createdTime: __t.u64(),
+  modifiedTime: __t.u64(),
+};

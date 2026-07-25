@@ -66,22 +66,6 @@ export const MessageImage = __t.object("MessageImage", {
 });
 export type MessageImage = __Infer<typeof MessageImage>;
 
-export const Note = __t.object("Note", {
-  id: __t.string(),
-  path: __t.string(),
-  name: __t.string(),
-  content: __t.string(),
-  folderPath: __t.string(),
-  depth: __t.u32(),
-  extension: __t.string(),
-  kind: __t.string(),
-  size: __t.u64(),
-  createdTime: __t.u64(),
-  modifiedTime: __t.u64(),
-  dbUpdatedAt: __t.timestamp(),
-});
-export type Note = __Infer<typeof Note>;
-
 export const PermissionRequest = __t.object("PermissionRequest", {
   id: __t.string(),
   sessionId: __t.string(),
@@ -126,6 +110,21 @@ export const SessionActivity = __t.object("SessionActivity", {
   updatedAt: __t.timestamp(),
 });
 export type SessionActivity = __Infer<typeof SessionActivity>;
+
+export const SpaceFile = __t.object("SpaceFile", {
+  id: __t.string(),
+  path: __t.string(),
+  name: __t.string(),
+  content: __t.string(),
+  folderPath: __t.string(),
+  depth: __t.u32(),
+  extension: __t.string(),
+  size: __t.u64(),
+  createdTime: __t.u64(),
+  modifiedTime: __t.u64(),
+  dbUpdatedAt: __t.timestamp(),
+});
+export type SpaceFile = __Infer<typeof SpaceFile>;
 
 export const ToolEvent = __t.object("ToolEvent", {
   id: __t.string(),
