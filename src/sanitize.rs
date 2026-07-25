@@ -6,9 +6,9 @@
 ///
 /// # Examples
 /// ```
-/// let path = "folder/SpaceFile with … ellipsis.md";
+/// let path = "folder/File with … ellipsis.md";
 /// let sanitized = sanitize_path(path);
-/// assert_eq!(sanitized, "folder/SpaceFile with ... ellipsis.md");
+/// assert_eq!(sanitized, "folder/File with ... ellipsis.md");
 /// ```
 pub fn sanitize_path(path: &str) -> String {
     path
@@ -25,7 +25,7 @@ pub fn sanitize_path(path: &str) -> String {
         .chars()
         .map(|c| {
             // Keep ASCII alphanumeric, forward slash (for paths), spaces, and safe punctuation
-            if c.is_ascii_alphanumeric() || "/. -_,()[]\"'".contains(c) {
+            if c.is_ascii_alphanumeric() || "/. -_,()[]\"'&+!@#$%;=".contains(c) {
                 c
             } else {
                 // Replace any other character with underscore
@@ -55,8 +55,8 @@ mod tests {
 
     #[test]
     fn test_sanitize_dashes() {
-        let input = "SpaceFile with\u{2014}em dash and\u{2013}en dash.md";
-        let expected = "SpaceFile with-em dash and-en dash.md";
+        let input = "File with\u{2014}em dash and\u{2013}en dash.md";
+        let expected = "File with-em dash and-en dash.md";
         assert_eq!(sanitize_path(input), expected);
     }
 
@@ -69,14 +69,26 @@ mod tests {
 
     #[test]
     fn test_replace_unknown_unicode() {
-        let input = "SpaceFile with emoji 🎵 and symbols ©.md";
-        let expected = "SpaceFile with emoji _ and symbols _.md";
+        let input = "File with emoji 🎵 and symbols ©.md";
+        let expected = "File with emoji _ and symbols _.md";
         assert_eq!(sanitize_path(input), expected);
     }
 
     #[test]
     fn test_clean_path_unchanged() {
         let input = "Development/Clean-File_Name.md";
+        assert_eq!(sanitize_path(input), input);
+    }
+
+    #[test]
+    fn test_ampersand_is_preserved() {
+        let input = "Philosophy & Ideas/Satanism.md";
+        assert_eq!(sanitize_path(input), input);
+    }
+
+    #[test]
+    fn test_common_punctuation_is_preserved() {
+        let input = "Food/M&S vs Sainsburys - 100% Beef (Tortellini) @ 5!.md";
         assert_eq!(sanitize_path(input), input);
     }
 }
