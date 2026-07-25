@@ -172,16 +172,17 @@ fn find_by_lines(content: &str, needle: &str, tier: Tier) -> Vec<Match> {
     let keys: Vec<String> = haystack.iter().map(|l| compare_key(&l.text, tier)).collect();
     let want: Vec<String> = needle_lines.iter().map(|l| compare_key(l, tier)).collect();
 
-    let mut out = Vec::new();
+    let mut out: Vec<Match> = Vec::new();
     if want.len() > keys.len() {
         return out;
     }
-    for offset in 0..=(keys.len() - want.len()) {
-        if want
+    let mut offset = 0;
+    while offset + want.len() <= keys.len() {
+        let hit = want
             .iter()
             .enumerate()
-            .all(|(i, w)| &keys[offset + i] == w)
-        {
+            .all(|(i, w)| &keys[offset + i] == w);
+        if hit {
             let first = &haystack[offset];
             let last = &haystack[offset + want.len() - 1];
             out.push(Match {
@@ -190,6 +191,9 @@ fn find_by_lines(content: &str, needle: &str, tier: Tier) -> Vec<Match> {
                 first_line: offset + 1,
                 last_line: offset + want.len(),
             });
+            offset += want.len();
+        } else {
+            offset += 1;
         }
     }
     out
@@ -221,13 +225,19 @@ fn reconcile(content: &str, m: &Match, needle: &str, replacement: &str, tier: Ti
     let normalized: Vec<&str> = replacement.lines().collect();
 
     let body = if matches!(tier, Tier::Indentation | Tier::Block) {
-        let actual_indent = indent_of(&content[m.start..m.end].lines().next().unwrap_or(""));
-        let needle_indent = indent_of(needle.lines().next().unwrap_or(""));
+        let matched: Vec<&str> = content[m.start..m.end].lines().collect();
+        let needle_lines: Vec<&str> = needle.lines().collect();
+        let fallback = matched.first().map(|l| indent_of(l)).unwrap_or("");
         normalized
             .iter()
-            .map(|line| {
-                let stripped = line.strip_prefix(needle_indent).unwrap_or(line);
-                format!("{}{}", actual_indent, stripped)
+            .enumerate()
+            .map(|(i, line)| {
+                // Keep the indent of the note line this replaces; beyond the matched region
+                // the caller's own indent is all we have.
+                let actual = matched.get(i).map(|l| indent_of(l)).unwrap_or(fallback);
+                let needle_indent = needle_lines.get(i).map(|l| indent_of(l)).unwrap_or("");
+                let stripped = line.strip_prefix(needle_indent).unwrap_or(line.trim_start());
+                format!("{}{}", actual, stripped)
             })
             .collect::<Vec<_>>()
             .join(terminator)
@@ -235,7 +245,7 @@ fn reconcile(content: &str, m: &Match, needle: &str, replacement: &str, tier: Ti
         normalized.join(terminator)
     };
 
-    if replacement.ends_with('\n') && !body.is_empty() {
+    if replacement.ends_with('\n') {
         format!("{}{}", body, terminator)
     } else {
         body
@@ -507,5 +517,35 @@ mod adversarial {
         let content = "solo\n";
         let found = find(content, "solo").unwrap();
         assert_eq!(apply(content, "solo", "", &found, &[0]), "");
+    }
+}
+
+#[cfg(test)]
+mod regressions {
+    use super::*;
+
+    #[test]
+    fn overlapping_line_windows_do_not_panic() {
+        let content = "x \nx \nx \n";
+        let found = find(content, "x\nx").expect("match");
+        let targets: Vec<usize> = (0..found.matches.len()).collect();
+        let out = apply(content, "x\nx", "A\nB", &found, &targets);
+        assert!(!out.is_empty());
+    }
+
+    #[test]
+    fn newline_only_replacement_is_not_a_deletion() {
+        let content = "a-b\n";
+        let found = find(content, "-").expect("match");
+        assert_eq!(apply(content, "-", "\n", &found, &[0]), "a\nb\n");
+    }
+
+    #[test]
+    fn tier2_identity_edit_preserves_interior_indentation() {
+        let content = "- item\n    - sub\n";
+        let needle = "- item\n- sub";
+        let found = find(content, needle).expect("match");
+        let out = apply(content, needle, needle, &found, &[0]);
+        assert_eq!(out, content, "interior indent was rewritten");
     }
 }

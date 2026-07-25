@@ -369,6 +369,25 @@ impl SpacetimeClient {
         self.await_reducer("create_file", rx).await
     }
 
+    // Whole-note commits are last-writer-wins, so a daemon or client write landing between our
+    // read and our commit would be silently clobbered. Re-check the snapshot we edited first.
+    pub async fn update_file_content_if_unchanged(
+        &self,
+        id: String,
+        expected: &str,
+        content: String,
+    ) -> Result<()> {
+        let current = self
+            .get_file_by_id(&id)?
+            .ok_or_else(|| anyhow::anyhow!("note {} no longer exists", id))?;
+        if current.content != expected {
+            anyhow::bail!(
+                "note changed while editing (another writer got there first) — re-read and retry"
+            );
+        }
+        self.update_file_content(id, content).await
+    }
+
     pub async fn update_file_content(&self, id: String, content: String) -> Result<()> {
         tracing::info!("Updating note content: {}", id);
 
@@ -473,12 +492,15 @@ impl SpacetimeClient {
                 continue;
             }
             let depth = prefix.matches('/').count() as u32;
-            // Racing the filewatcher here is fine: a duplicate is reported and ignored.
             if let Err(e) = self
                 .create_folder(prefix.clone(), segment.to_string(), depth)
                 .await
             {
-                tracing::debug!("ancestry backfill skipped {}: {}", prefix, e);
+                // Racing the filewatcher is fine; anything else means the tree is incomplete.
+                if !e.to_string().contains("already exists") {
+                    return Err(e);
+                }
+                tracing::debug!("folder {} already created by the daemon", prefix);
             }
         }
         Ok(())

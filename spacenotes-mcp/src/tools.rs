@@ -1116,7 +1116,7 @@ pub async fn execute_tool(
                 }
 
                 client
-                    .update_file_content(file.id, content)
+                    .update_file_content_if_unchanged(file.id, &file.content, content)
                     .await
                     .map_err(|e| e.to_string())?;
                 return Ok(json!({"content": [{"type": "text", "text": format!(
@@ -1180,7 +1180,7 @@ pub async fn execute_tool(
             }
 
             client
-                .update_file_content(file.id, updated)
+                .update_file_content_if_unchanged(file.id, &file.content, updated)
                 .await
                 .map_err(|e| e.to_string())?;
 
@@ -1243,9 +1243,18 @@ pub async fn execute_tool(
             }
 
             if planned.is_empty() {
-                return Ok(json!({"content": [{"type": "text", "text": format!(
-                    "No notes contain {:?} in scope.", old_string
-                )}]}));
+                let text = if skipped_fuzzy.is_empty() {
+                    format!("No notes contain {:?} in scope.", old_string)
+                } else {
+                    format!(
+                        "No notes matched {:?} exactly. {} note(s) matched only loosely and were \
+                         skipped: {}",
+                        old_string,
+                        skipped_fuzzy.len(),
+                        skipped_fuzzy.join(", ")
+                    )
+                };
+                return Ok(json!({"content": [{"type": "text", "text": text}]}));
             }
             if planned.len() > max_notes {
                 return Err(format!(
@@ -1281,7 +1290,10 @@ pub async fn execute_tool(
             let mut committed = Vec::new();
             let mut failed = Vec::new();
             for (file, n, updated) in planned {
-                match client.update_file_content(file.id.clone(), updated).await {
+                match client
+                    .update_file_content_if_unchanged(file.id.clone(), &file.content, updated)
+                    .await
+                {
                     Ok(()) => committed.push(format!("{} ({})", file.path, n)),
                     Err(e) => failed.push(format!("{}: {}", file.path, e)),
                 }
@@ -1297,6 +1309,13 @@ pub async fn execute_tool(
                     "\n{} note(s) FAILED and were not changed: {}",
                     failed.len(),
                     failed.join("; ")
+                ));
+            }
+            if !skipped_fuzzy.is_empty() {
+                text.push_str(&format!(
+                    "\nskipped {} note(s) that only matched loosely: {}",
+                    skipped_fuzzy.len(),
+                    skipped_fuzzy.join(", ")
                 ));
             }
             Ok(json!({"content": [{"type": "text", "text": text}]}))
