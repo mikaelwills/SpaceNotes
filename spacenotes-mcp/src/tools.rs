@@ -1673,6 +1673,20 @@ mod tests {
     }
 
     #[test]
+    fn e8_gate_allows_a_unique_fuzzy_match_but_not_an_ambiguous_one() {
+        // E8: tier 3 needs EITHER a unique match OR allow_fuzzy. A single fuzzy match
+        // proceeding without opt-in is intended, not a hole.
+        let unique = matcher::find("alpha\u{00A0}beta\n", "alpha beta").unwrap();
+        assert!(unique.tier.needs_opt_in());
+        assert_eq!(unique.matches.len(), 1);
+
+        let ambiguous =
+            matcher::find("alpha\u{00A0}beta\nalpha\u{00A0}beta\n", "alpha beta").unwrap();
+        assert!(ambiguous.tier.needs_opt_in());
+        assert_eq!(ambiguous.matches.len(), 2);
+    }
+
+    #[test]
     fn dry_run_flag_reads_both_spellings() {
         assert!(dry_run_flag(&json!({"dry_run": true})));
         assert!(dry_run_flag(&json!({"dryRun": true})));

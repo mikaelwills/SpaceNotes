@@ -468,3 +468,62 @@ mod tests {
         assert_eq!(dominant_terminator("no newlines"), "\n");
     }
 }
+
+#[cfg(test)]
+mod adversarial {
+    use super::*;
+
+    #[test]
+    fn replace_all_with_different_length_replacement_stays_correct() {
+        // Offsets come from the ORIGINAL content; a longer replacement must not corrupt later ones.
+        let content = "x\nx\nx\n";
+        let found = find(content, "x").unwrap();
+        let out = apply(content, "x", "LONGER", &found, &[0, 1, 2]);
+        assert_eq!(out, "LONGER\nLONGER\nLONGER\n");
+    }
+
+    #[test]
+    fn replace_all_with_shorter_replacement_stays_correct() {
+        let content = "aaa\nbbb\naaa\n";
+        let found = find(content, "aaa").unwrap();
+        let out = apply(content, "aaa", "z", &found, &[0, 1]);
+        assert_eq!(out, "z\nbbb\nz\n");
+    }
+
+    #[test]
+    fn match_at_byte_zero() {
+        let content = "start\nrest\n";
+        let found = find(content, "start").unwrap();
+        assert_eq!(found.matches[0].start, 0);
+        assert_eq!(apply(content, "start", "S", &found, &[0]), "S\nrest\n");
+    }
+
+    #[test]
+    fn match_at_eof_without_trailing_newline() {
+        let content = "a\nlast";
+        let found = find(content, "last").unwrap();
+        assert_eq!(apply(content, "last", "END", &found, &[0]), "a\nEND");
+    }
+
+    #[test]
+    fn multiline_replacement_into_single_line_match() {
+        let content = "a\ntarget\nb\n";
+        let found = find(content, "target").unwrap();
+        assert_eq!(apply(content, "target", "1\n2", &found, &[0]), "a\n1\n2\nb\n");
+    }
+
+    #[test]
+    fn overlapping_needle_does_not_double_count_bytes() {
+        let content = "aaaa\n";
+        let found = find(content, "aa").unwrap();
+        let out = apply(content, "aa", "b", &found, &[0, 1]);
+        assert_eq!(out, "bb\n", "got {:?} from {} matches", out, found.matches.len());
+    }
+
+    #[test]
+    fn deleting_the_only_line_empties_the_note() {
+        let content = "solo\n";
+        let found = find(content, "solo").unwrap();
+        assert_eq!(apply(content, "solo", "", &found, &[0]), "");
+    }
+}
