@@ -308,6 +308,10 @@ fn record_in_journal(ctx: &EventContext, abs: &Path, uuid: &str) {
 }
 
 fn delete_md(ctx: &EventContext, rel: String) -> Vec<Action> {
+    if ctx.vault_path.join(&rel).exists() {
+        tracing::debug!("Watcher ignoring self-write / present-file delete: {}", rel);
+        return Vec::new();
+    }
     let journal_uuid = ctx
         .journal
         .and_then(|j| j.by_path(&rel).ok().flatten())
@@ -605,6 +609,90 @@ mod tests {
 
         let on_disk = std::fs::read_to_string(vault.join("moved.md")).unwrap();
         assert_eq!(extract_spacetime_id(&on_disk).as_deref(), Some(ID_A));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn delete_note_paths(actions: &[Action]) -> Vec<String> {
+        actions
+            .iter()
+            .filter_map(|a| match a {
+                Action::DeleteNote { path, .. } => Some(path.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn remove_event_with_file_still_on_disk_is_not_a_delete() {
+        let (dir, vault, journal) = seeded_vault("remove-present");
+        let tracker = ContentTracker::new();
+
+        let ctx = EventContext {
+            vault_path: &vault,
+            journal: Some(&journal),
+            tracker: &tracker,
+            known_note_id: &no_known_id,
+        };
+        let remove_actions = dispatch_event(
+            &ctx,
+            &EventKind::Remove(RemoveKind::File),
+            &[vault.join("a.md")],
+            false,
+        );
+        let rename_from_actions = dispatch_event(
+            &ctx,
+            &EventKind::Modify(ModifyKind::Name(RenameMode::From)),
+            &[vault.join("a.md")],
+            false,
+        );
+
+        assert!(vault.join("a.md").exists());
+        assert!(
+            delete_note_paths(&remove_actions).is_empty(),
+            "Remove event for a file still on disk must not emit DeleteNote (self-write echo)"
+        );
+        assert!(
+            delete_note_paths(&rename_from_actions).is_empty(),
+            "Rename(From) event for a file still on disk must not emit DeleteNote (self-write echo)"
+        );
+        assert!(journal.by_path("a.md").unwrap().is_some());
+        assert_eq!(journal.event_count("delete"), 0);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn old_path_remove_after_move_does_not_delete_moved_row() {
+        let (dir, vault, journal) = seeded_vault("move-then-old-remove");
+        let tracker = ContentTracker::new();
+        std::fs::rename(vault.join("a.md"), vault.join("moved.md")).unwrap();
+
+        let ctx = EventContext {
+            vault_path: &vault,
+            journal: Some(&journal),
+            tracker: &tracker,
+            known_note_id: &no_known_id,
+        };
+        dispatch_event(
+            &ctx,
+            &EventKind::Modify(ModifyKind::Name(RenameMode::Both)),
+            &[vault.join("a.md"), vault.join("moved.md")],
+            false,
+        );
+
+        let old_path_remove = dispatch_event(
+            &ctx,
+            &EventKind::Remove(RemoveKind::File),
+            &[vault.join("a.md")],
+            false,
+        );
+
+        assert!(delete_note_paths(&old_path_remove).is_empty());
+        let live = journal.live_files().unwrap();
+        assert_eq!(live.len(), 1);
+        assert_eq!(live[0].uuid, ID_A);
+        assert_eq!(live[0].path, "moved.md");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
