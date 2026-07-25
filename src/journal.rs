@@ -4,9 +4,7 @@ use sha2::{Digest, Sha256};
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
 use std::time::UNIX_EPOCH;
-use walkdir::WalkDir;
 
-use crate::frontmatter::extract_spacetime_id;
 use crate::sanitize::sanitize_path;
 
 const SCHEMA_VERSION: i64 = 1;
@@ -202,10 +200,6 @@ impl Journal {
         Ok(())
     }
 
-    pub fn seed(&self, record: &FileRecord) -> Result<bool> {
-        self.observe(record, "seed")
-    }
-
     pub fn observe(&self, record: &FileRecord, op: &str) -> Result<bool> {
         let conn = self.conn();
         let existing: Option<String> = conn
@@ -333,26 +327,6 @@ impl Journal {
         )?;
         insert_event(&conn, ts, "delete", Some(uuid), Some(&path), None)?;
         Ok(())
-    }
-
-    pub fn tombstone_unseen(&self, seen_before: i64, ts: i64) -> Result<usize> {
-        let conn = self.conn();
-        let stale = query_records(
-            &conn,
-            &format!(
-                "{} WHERE deleted_at IS NULL AND last_seen_at < ?1",
-                SELECT_FILES
-            ),
-            params![seen_before],
-        )?;
-        for record in &stale {
-            conn.execute(
-                "UPDATE files SET deleted_at = ?1 WHERE uuid = ?2",
-                params![ts, record.uuid],
-            )?;
-            insert_event(&conn, ts, "delete", Some(&record.uuid), Some(&record.path), None)?;
-        }
-        Ok(stale.len())
     }
 
     pub fn log_event(
@@ -529,60 +503,6 @@ pub fn hash_bytes(bytes: &[u8]) -> String {
     hex::encode(hasher.finalize())
 }
 
-pub struct SeedStats {
-    pub seeded: usize,
-    pub refreshed: usize,
-    pub skipped: usize,
-    pub tombstoned: usize,
-}
-
-pub fn seed_from_vault(journal: &Journal, vault_path: &Path) -> Result<SeedStats> {
-    let scan_started = now_ms();
-    let mut stats = SeedStats {
-        seeded: 0,
-        refreshed: 0,
-        skipped: 0,
-        tombstoned: 0,
-    };
-
-    let walker = WalkDir::new(vault_path).into_iter().filter_entry(|e| {
-        let name = e.file_name().to_string_lossy();
-        !name.starts_with('.') && name != "@eaDir"
-    });
-
-    for entry in walker.filter_map(|e| e.ok()) {
-        let path = entry.path();
-        if !path.is_file() || path.extension().map_or(true, |e| e != "md") {
-            continue;
-        }
-        match seed_one(journal, vault_path, path) {
-            Ok(Some(true)) => stats.seeded += 1,
-            Ok(Some(false)) => stats.refreshed += 1,
-            Ok(None) => stats.skipped += 1,
-            Err(e) => {
-                tracing::warn!("Journal seed failed for {:?}: {}", path, e);
-                stats.skipped += 1;
-            }
-        }
-    }
-
-    stats.tombstoned = journal.tombstone_unseen(scan_started, now_ms())?;
-    journal.set_meta("last_full_scan_at", &now_ms().to_string())?;
-    Ok(stats)
-}
-
-fn seed_one(journal: &Journal, vault_path: &Path, abs_path: &Path) -> Result<Option<bool>> {
-    let bytes = std::fs::read(abs_path)?;
-    let text = String::from_utf8_lossy(&bytes);
-    let Some(uuid) = extract_spacetime_id(&text) else {
-        tracing::debug!("Journal seed skipping note without UUID: {:?}", abs_path);
-        return Ok(None);
-    };
-
-    let record = build_record(vault_path, abs_path, &bytes, uuid)?;
-    Ok(Some(journal.seed(&record)?))
-}
-
 pub fn record_from_disk(vault_path: &Path, abs_path: &Path, uuid: String) -> Result<FileRecord> {
     let bytes = std::fs::read(abs_path)?;
     build_record(vault_path, abs_path, &bytes, uuid)
@@ -652,30 +572,29 @@ mod tests {
         dir
     }
 
-    fn write_note(vault: &Path, file: &str, id: &str) -> Vec<u8> {
-        let content = format!("---\nspacetime_id: {}\n---\nbody of {}\n", id, file);
+    fn write_note(vault: &Path, file: &str) -> Vec<u8> {
+        let content = format!("body of {}\n", file);
         std::fs::write(vault.join(file), &content).unwrap();
         content.into_bytes()
+    }
+
+    fn observe_file(journal: &Journal, vault: &Path, file: &str, id: &str) {
+        let record = record_from_disk(vault, &vault.join(file), id.to_string()).unwrap();
+        journal.observe(&record, "seed").unwrap();
     }
 
     const ID_A: &str = "11111111-1111-1111-1111-111111111111";
     const ID_B: &str = "22222222-2222-2222-2222-222222222222";
 
     #[test]
-    fn seed_matches_frontmatter_truth() {
-        let dir = temp_dir("seed");
+    fn observed_record_matches_disk_truth() {
+        let dir = temp_dir("observe");
         let vault = dir.join("vault");
         std::fs::create_dir_all(&vault).unwrap();
-        let bytes_a = write_note(&vault, "a.md", ID_A);
-        write_note(&vault, "b.md", ID_B);
-        std::fs::write(vault.join("noid.md"), "no frontmatter here\n").unwrap();
+        let bytes_a = write_note(&vault, "a.md");
 
         let journal = Journal::open(&dir.join("journal.db")).unwrap();
-        let stats = seed_from_vault(&journal, &vault).unwrap();
-
-        assert_eq!(stats.seeded, 2);
-        assert_eq!(stats.skipped, 1);
-        assert_eq!(stats.tombstoned, 0);
+        observe_file(&journal, &vault, "a.md", ID_A);
 
         let record = journal.by_path("a.md").unwrap().unwrap();
         assert_eq!(record.uuid, ID_A);
@@ -688,19 +607,16 @@ mod tests {
     }
 
     #[test]
-    fn reseed_is_idempotent() {
+    fn reobserve_is_idempotent() {
         let dir = temp_dir("idempotent");
         let vault = dir.join("vault");
         std::fs::create_dir_all(&vault).unwrap();
-        write_note(&vault, "a.md", ID_A);
+        write_note(&vault, "a.md");
 
         let journal = Journal::open(&dir.join("journal.db")).unwrap();
-        let first = seed_from_vault(&journal, &vault).unwrap();
-        let second = seed_from_vault(&journal, &vault).unwrap();
+        observe_file(&journal, &vault, "a.md", ID_A);
+        observe_file(&journal, &vault, "a.md", ID_A);
 
-        assert_eq!(first.seeded, 1);
-        assert_eq!(second.seeded, 0);
-        assert_eq!(second.refreshed, 1);
         assert_eq!(journal.live_files().unwrap().len(), 1);
         assert_eq!(journal.event_count("seed"), 1);
 
@@ -708,21 +624,18 @@ mod tests {
     }
 
     #[test]
-    fn deleted_file_tombstoned_on_reseed() {
-        let dir = temp_dir("tombstone");
+    fn observe_displaces_stale_row_at_same_path() {
+        let dir = temp_dir("displace");
         let vault = dir.join("vault");
         std::fs::create_dir_all(&vault).unwrap();
-        write_note(&vault, "a.md", ID_A);
-        write_note(&vault, "b.md", ID_B);
+        write_note(&vault, "a.md");
 
         let journal = Journal::open(&dir.join("journal.db")).unwrap();
-        seed_from_vault(&journal, &vault).unwrap();
-        std::fs::remove_file(vault.join("b.md")).unwrap();
-        let stats = seed_from_vault(&journal, &vault).unwrap();
+        observe_file(&journal, &vault, "a.md", ID_A);
+        observe_file(&journal, &vault, "a.md", ID_B);
 
-        assert_eq!(stats.tombstoned, 1);
-        assert!(journal.by_path("b.md").unwrap().is_none());
-        assert_eq!(journal.live_files().unwrap().len(), 1);
+        assert_eq!(journal.by_path("a.md").unwrap().unwrap().uuid, ID_B);
+        assert!(journal.by_uuid(ID_A).unwrap().is_none());
         assert_eq!(journal.event_count("delete"), 1);
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -733,11 +646,12 @@ mod tests {
         let dir = temp_dir("backup");
         let vault = dir.join("vault");
         std::fs::create_dir_all(&vault).unwrap();
-        write_note(&vault, "a.md", ID_A);
-        write_note(&vault, "b.md", ID_B);
+        write_note(&vault, "a.md");
+        write_note(&vault, "b.md");
 
         let journal = Journal::open(&dir.join("journal.db")).unwrap();
-        seed_from_vault(&journal, &vault).unwrap();
+        observe_file(&journal, &vault, "a.md", ID_A);
+        observe_file(&journal, &vault, "b.md", ID_B);
         let target = dir.join("backup").join("journal-backup.db");
         journal.backup_to(&target).unwrap();
 
@@ -765,10 +679,10 @@ mod tests {
         let dir = temp_dir("rekey");
         let vault = dir.join("vault");
         std::fs::create_dir_all(&vault).unwrap();
-        write_note(&vault, "a.md", ID_A);
+        write_note(&vault, "a.md");
 
         let journal = Journal::open(&dir.join("journal.db")).unwrap();
-        seed_from_vault(&journal, &vault).unwrap();
+        observe_file(&journal, &vault, "a.md", ID_A);
         journal.rekey(ID_A, "moved.md", now_ms()).unwrap();
 
         assert!(journal.by_path("a.md").unwrap().is_none());

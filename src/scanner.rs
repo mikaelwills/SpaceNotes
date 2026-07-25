@@ -4,7 +4,6 @@ use std::time::UNIX_EPOCH;
 use walkdir::WalkDir;
 
 use crate::folder::Folder;
-use crate::frontmatter::{extract_spacetime_id, parse_frontmatter};
 use crate::isolation::run_isolated;
 use crate::note::Note;
 use crate::sanitize::sanitize_path;
@@ -26,11 +25,7 @@ pub fn read_note_at(vault_path: &Path, abs_path: &Path) -> Result<Option<Note>> 
         .to_string_lossy()
         .to_string());
 
-    // Read content
     let content = std::fs::read_to_string(abs_path)?;
-
-    // Extract UUID (READ-ONLY - do not inject here)
-    let id = extract_spacetime_id(&content).unwrap_or_default();
 
     let metadata = std::fs::metadata(abs_path)?;
 
@@ -46,37 +41,7 @@ pub fn read_note_at(vault_path: &Path, abs_path: &Path) -> Result<Option<Note>> 
         .map(|d| d.as_millis() as u64)
         .unwrap_or(modified);
 
-    // Parse frontmatter
-    let (body, frontmatter) = parse_frontmatter(&content);
-
-    Ok(Some(Note::new(id, rel_path, body, frontmatter, size, created, modified)))
-}
-
-/// Scan filesystem to find a note by its UUID
-pub fn scan_for_note_by_id(vault_path: &Path, target_id: &str) -> Result<Option<Note>> {
-    let walker = WalkDir::new(vault_path).into_iter().filter_entry(|e| {
-        let name = e.file_name().to_string_lossy();
-        !name.starts_with('.') && name != "@eaDir"
-    });
-
-    for entry in walker.filter_map(|e| e.ok()) {
-        let path = entry.path();
-
-        if !path.is_file() || path.extension().map_or(true, |e| e != "md") {
-            continue;
-        }
-
-        if let Ok(content) = std::fs::read_to_string(path) {
-            if let Some(id) = extract_spacetime_id(&content) {
-                if id == target_id {
-                    // Found it! Read the full note
-                    return read_note_at(vault_path, path);
-                }
-            }
-        }
-    }
-
-    Ok(None)
+    Ok(Some(Note::new(String::new(), rel_path, content, String::new(), size, created, modified)))
 }
 
 pub fn scan_notes(vault_path: &Path) -> Result<Vec<Note>> {
@@ -98,59 +63,11 @@ pub fn scan_notes(vault_path: &Path) -> Result<Vec<Note>> {
 
         let context = format!("scan note {:?}", path);
         run_isolated(context, || {
-            // Get relative path - sanitize to prevent URI encoding issues
-            let rel_path = match path.strip_prefix(vault_path) {
-                Ok(p) => sanitize_path(&p.to_string_lossy().to_string()),
-                Err(e) => {
-                    tracing::warn!("Failed to get relative path for {:?}: {}", path, e);
-                    return;
-                }
-            };
-
-            // Read file content
-            let content = match std::fs::read_to_string(path) {
-                Ok(c) => c,
-                Err(e) => {
-                    tracing::warn!("Failed to read {:?}: {}", path, e);
-                    return;
-                }
-            };
-
-            // Extract UUID (READ-ONLY - do not inject here)
-            // Notes without UUIDs will be skipped during initial scan
-            let Some(id) = extract_spacetime_id(&content) else {
-                tracing::debug!("Skipping note without UUID: {}", rel_path);
-                return;
-            };
-
-            // Get metadata
-            let metadata = match std::fs::metadata(path) {
-                Ok(m) => m,
-                Err(e) => {
-                    tracing::warn!("Failed to get metadata for {:?}: {}", path, e);
-                    return;
-                }
-            };
-
-            let size = metadata.len();
-            let modified = metadata
-                .modified()
-                .ok()
-                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-                .map(|d| d.as_millis() as u64)
-                .unwrap_or(0);
-            let created = metadata
-                .created()
-                .ok()
-                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-                .map(|d| d.as_millis() as u64)
-                .unwrap_or(modified);
-
-            // Parse frontmatter
-            let (body, frontmatter) = parse_frontmatter(&content);
-
-            let note = Note::new(id, rel_path, body, frontmatter, size, created, modified);
-            notes.push(note);
+            match read_note_at(vault_path, path) {
+                Ok(Some(note)) => notes.push(note),
+                Ok(None) => {}
+                Err(e) => tracing::warn!("Failed to read {:?}: {}", path, e),
+            }
         });
     }
 
@@ -194,19 +111,34 @@ mod tests {
         dir
     }
 
-    fn write_note(vault: &Path, file: &str, id: &str) {
-        let content = format!("---\nspacetime_id: {}\n---\nbody of {}\n", id, file);
-        std::fs::write(vault.join(file), content).unwrap();
+    #[test]
+    fn scan_returns_all_notes_with_verbatim_content() {
+        let vault = temp_vault("verbatim");
+        std::fs::write(vault.join("a.md"), "body of a\n").unwrap();
+        std::fs::write(vault.join("b.md"), "body of b\n").unwrap();
+
+        let mut notes = scan_notes(&vault).unwrap();
+        notes.sort_by(|a, b| a.path.cmp(&b.path));
+
+        assert_eq!(notes.len(), 2);
+        assert_eq!(notes[0].content, "body of a\n");
+        assert!(notes[0].id.is_empty());
+        assert_eq!(notes[0].frontmatter, "");
+
+        let _ = std::fs::remove_dir_all(&vault);
     }
 
     #[test]
-    fn scan_returns_all_valid_notes() {
-        let vault = temp_vault("valid");
-        write_note(&vault, "a.md", "11111111-1111-1111-1111-111111111111");
-        write_note(&vault, "b.md", "22222222-2222-2222-2222-222222222222");
+    fn leftover_frontmatter_is_read_as_plain_content() {
+        let vault = temp_vault("leftover");
+        let content = "---\nspacetime_id: 11111111-1111-1111-1111-111111111111\n---\nbody\n";
+        std::fs::write(vault.join("a.md"), content).unwrap();
 
         let notes = scan_notes(&vault).unwrap();
-        assert_eq!(notes.len(), 2);
+
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0].content, content);
+        assert!(notes[0].id.is_empty());
 
         let _ = std::fs::remove_dir_all(&vault);
     }

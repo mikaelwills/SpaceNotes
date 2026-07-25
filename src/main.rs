@@ -1,8 +1,8 @@
 mod client;
 mod folder;
-mod frontmatter;
 mod isolation;
 mod journal;
+mod migrate;
 mod note;
 mod reconcile;
 mod sanitize;
@@ -58,13 +58,7 @@ async fn main() -> Result<()> {
     let data_dir = args.data_dir.clone().unwrap_or_else(default_data_dir);
     tracing::info!("Data dir: {:?}", data_dir);
 
-    let opened_journal = match open_journal(&absolute_vault_path, &data_dir) {
-        Ok(opened) => Some(opened),
-        Err(e) => {
-            tracing::error!("Journal unavailable, continuing without it: {:#}", e);
-            None
-        }
-    };
+    let opened_journal = open_journal(&absolute_vault_path, &data_dir)?;
 
     // Initialize content tracker for loop prevention
     let tracker = Arc::new(ContentTracker::new());
@@ -78,13 +72,23 @@ async fn main() -> Result<()> {
     tracing::info!("Waiting for subscription sync...");
     client.wait_for_sync()?;
 
+    tracing::info!("Running frontmatter strip migration...");
+    let migration = migrate::run(&opened_journal.journal, &client, &tracker, &absolute_vault_path)?;
+    tracing::info!(
+        "Migration: {} stripped, {} adopted, {} clean, {} failed",
+        migration.stripped,
+        migration.adopted,
+        migration.clean,
+        migration.failed
+    );
+
     // Reconcile local vault with server (two-way sync)
     tracing::info!("Reconciling with server...");
     reconcile::reconcile_on_startup(
         &absolute_vault_path,
         &client,
         &tracker,
-        opened_journal.as_ref().map(|o| &*o.journal),
+        &opened_journal.journal,
     )?;
 
     // Reconcile folders (two-way sync)
@@ -112,13 +116,12 @@ async fn main() -> Result<()> {
     // Upload folders that exist locally but not on server
     client.sync_folders(&local_folders);
 
-    if let Some(opened) = &opened_journal {
-        run_journal_maintenance(opened, &absolute_vault_path, &data_dir);
-    }
+    run_journal_maintenance(&opened_journal, &absolute_vault_path, &data_dir);
 
     // Register callback for note updates from server
     let vault_clone = absolute_vault_path.clone();
     let tracker_clone = tracker.clone();
+    let journal_clone = opened_journal.journal.clone();
     client.on_note_updated(move |old_note, new_note| {
         let path_changed = old_note.path != new_note.path;
         let content_changed = tracker_clone.is_modified(&new_note.id, &new_note.content);
@@ -159,6 +162,7 @@ async fn main() -> Result<()> {
         if let Err(e) = write_note_to_disk(&vault_clone, &note) {
             tracing::error!("Failed to write {}: {}", note.path, e);
         } else {
+            record_note_in_journal(&journal_clone, &vault_clone, &note);
             tracing::info!("Downloaded update: {}", note.path);
         }
     });
@@ -166,6 +170,7 @@ async fn main() -> Result<()> {
     // Register callback for note inserts from server
     let vault_clone = absolute_vault_path.clone();
     let tracker_clone = tracker.clone();
+    let journal_clone = opened_journal.journal.clone();
     client.on_note_inserted(move |db_note| {
         // Skip if we already have this content (echo from our own upload)
         if !tracker_clone.is_modified(&db_note.id, &db_note.content) {
@@ -190,6 +195,7 @@ async fn main() -> Result<()> {
         if let Err(e) = write_note_to_disk(&vault_clone, &note) {
             tracing::error!("Failed to write {}: {}", note.path, e);
         } else {
+            record_note_in_journal(&journal_clone, &vault_clone, &note);
             tracing::info!("Downloaded new: {}", note.path);
         }
     });
@@ -197,15 +203,19 @@ async fn main() -> Result<()> {
     // Register callback for note deletions from server
     let vault_clone = absolute_vault_path.clone();
     let tracker_clone = tracker.clone();
+    let journal_clone = opened_journal.journal.clone();
     client.on_note_deleted(move |old_note| {
         let path = vault_clone.join(&old_note.path);
         if path.exists() {
             if let Err(e) = std::fs::remove_file(&path) {
                 tracing::error!("Failed to delete {}: {}", old_note.path, e);
-            } else {
-                tracker_clone.remove(&old_note.id);
-                tracing::info!("Deleted local file: {}", old_note.path);
+                return;
             }
+            tracker_clone.remove(&old_note.id);
+            tracing::info!("Deleted local file: {}", old_note.path);
+        }
+        if let Err(e) = journal_clone.tombstone(&old_note.id, journal::now_ms()) {
+            tracing::error!("Journal tombstone failed for {}: {}", old_note.path, e);
         }
     });
 
@@ -265,7 +275,7 @@ async fn main() -> Result<()> {
     tracing::info!("Two-way sync initialized.");
 
     // Start file watcher
-    let watcher_journal = opened_journal.as_ref().map(|o| o.journal.clone());
+    let watcher_journal = opened_journal.journal.clone();
     watcher::start_watcher(absolute_vault_path, client, tracker, watcher_journal).await?;
 
     Ok(())
@@ -384,16 +394,24 @@ fn move_corrupt_journal_aside(db_path: &Path) {
     }
 }
 
+fn record_note_in_journal(journal: &journal::Journal, vault_path: &Path, note: &note::Note) {
+    let abs = vault_path.join(&note.path);
+    match journal::record_from_disk(vault_path, &abs, note.id.clone()) {
+        Ok(record) => {
+            if let Err(e) = journal.observe(&record, "create") {
+                tracing::error!("Journal record failed for {}: {}", record.path, e);
+            }
+        }
+        Err(e) => tracing::error!("Journal record failed for {}: {}", note.path, e),
+    }
+}
+
 fn run_journal_maintenance(opened: &OpenedJournal, vault_path: &Path, data_dir: &Path) {
-    match journal::seed_from_vault(&opened.journal, vault_path) {
-        Ok(stats) => tracing::info!(
-            "Journal scan: {} seeded, {} refreshed, {} skipped, {} tombstoned",
-            stats.seeded,
-            stats.refreshed,
-            stats.skipped,
-            stats.tombstoned
-        ),
-        Err(e) => tracing::error!("Journal seed failed: {:#}", e),
+    if let Err(e) = opened
+        .journal
+        .set_meta("last_full_scan_at", &journal::now_ms().to_string())
+    {
+        tracing::error!("Journal meta update failed: {:#}", e);
     }
 
     if let Err(e) = opened.journal.prune(journal::now_ms()) {

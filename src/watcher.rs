@@ -9,12 +9,11 @@ use uuid::Uuid;
 
 use crate::client::SpacetimeClient;
 use crate::folder::Folder;
-use crate::frontmatter::inject_spacetime_id;
 use crate::isolation::run_isolated;
-use crate::journal::{self, Journal};
+use crate::journal::{self, FileRecord, Journal};
 use crate::note::Note;
 use crate::sanitize::sanitize_path;
-use crate::scanner::{read_note_at, scan_for_note_by_id};
+use crate::scanner::read_note_at;
 use crate::tracker::ContentTracker;
 
 enum Action {
@@ -27,7 +26,7 @@ enum Action {
 
 struct EventContext<'a> {
     vault_path: &'a Path,
-    journal: Option<&'a Journal>,
+    journal: &'a Journal,
     tracker: &'a ContentTracker,
     known_note_id: &'a dyn Fn(&str) -> Option<String>,
 }
@@ -107,10 +106,7 @@ fn rename_both(ctx: &EventContext, from: &Path, to: &Path) -> Vec<Action> {
 }
 
 fn rename_md(ctx: &EventContext, from_rel: &str, to_abs: &Path) -> Vec<Action> {
-    let Some(journal) = ctx.journal else {
-        return upsert_md(ctx, to_abs);
-    };
-    let Some(row) = journal.by_path(from_rel).ok().flatten() else {
+    let Some(row) = ctx.journal.by_path(from_rel).ok().flatten() else {
         return upsert_md(ctx, to_abs);
     };
 
@@ -123,27 +119,10 @@ fn rename_md(ctx: &EventContext, from_rel: &str, to_abs: &Path) -> Vec<Action> {
         }
     };
 
-    if !note.id.is_empty() && note.id != row.uuid {
-        tracing::error!(
-            "Journal/frontmatter UUID mismatch for {} -> {}: journal {}, frontmatter {}; adopting frontmatter",
-            from_rel,
-            note.path,
-            row.uuid,
-            note.id
-        );
-        if let Err(e) = journal.tombstone(&row.uuid, journal::now_ms()) {
-            tracing::error!("Journal tombstone failed for {}: {}", from_rel, e);
-        }
-        record_in_journal(ctx, to_abs, &note.id);
-        return vec![Action::UpsertNote(note)];
-    }
-
-    if let Err(e) = journal.rekey(&row.uuid, &note.path, journal::now_ms()) {
+    if let Err(e) = ctx.journal.rekey(&row.uuid, &note.path, journal::now_ms()) {
         tracing::error!("Journal rekey failed {} -> {}: {}", from_rel, note.path, e);
     }
-    if note.id.is_empty() {
-        note.id = row.uuid.clone();
-    }
+    note.id = row.uuid;
     record_in_journal(ctx, to_abs, &note.id);
     ctx.tracker.is_modified(&note.id, &note.content);
     tracing::info!(
@@ -157,32 +136,28 @@ fn rename_md(ctx: &EventContext, from_rel: &str, to_abs: &Path) -> Vec<Action> {
 
 fn rename_folder(ctx: &EventContext, from_rel: String, to_rel: String) -> Vec<Action> {
     let mut actions = vec![Action::UpsertFolder(to_rel.clone())];
-    if let Some(journal) = ctx.journal {
-        match journal.rekey_prefix(&from_rel, &to_rel, journal::now_ms()) {
-            Ok(moved) => {
-                for (uuid, new_rel) in moved {
-                    let abs = ctx.vault_path.join(&new_rel);
-                    match read_note_at(ctx.vault_path, &abs) {
-                        Ok(Some(mut note)) => {
-                            if note.id.is_empty() {
-                                note.id = uuid;
-                            }
-                            actions.push(Action::UpsertNote(note));
-                        }
-                        Ok(None) => {
-                            tracing::warn!("Rekeyed note missing on disk: {}", new_rel)
-                        }
-                        Err(e) => tracing::error!("Error reading {}: {}", new_rel, e),
+    match ctx.journal.rekey_prefix(&from_rel, &to_rel, journal::now_ms()) {
+        Ok(moved) => {
+            for (uuid, new_rel) in moved {
+                let abs = ctx.vault_path.join(&new_rel);
+                match read_note_at(ctx.vault_path, &abs) {
+                    Ok(Some(mut note)) => {
+                        note.id = uuid;
+                        actions.push(Action::UpsertNote(note));
                     }
+                    Ok(None) => {
+                        tracing::warn!("Rekeyed note missing on disk: {}", new_rel)
+                    }
+                    Err(e) => tracing::error!("Error reading {}: {}", new_rel, e),
                 }
             }
-            Err(e) => tracing::error!(
-                "Journal folder rekey failed {} -> {}: {}",
-                from_rel,
-                to_rel,
-                e
-            ),
         }
+        Err(e) => tracing::error!(
+            "Journal folder rekey failed {} -> {}: {}",
+            from_rel,
+            to_rel,
+            e
+        ),
     }
     actions.push(Action::FolderVanished(from_rel));
     actions
@@ -238,17 +213,18 @@ fn upsert_md(ctx: &EventContext, abs: &Path) -> Vec<Action> {
         }
     };
 
-    if !note.id.is_empty() && !ctx.tracker.has_changed(&note.id, &note.content) {
+    note.id = match resolve_note_id(ctx, abs, &note.path) {
+        Ok(id) => id,
+        Err(e) => {
+            tracing::error!("Identity resolution failed for {}: {:#}", note.path, e);
+            return Vec::new();
+        }
+    };
+
+    if !ctx.tracker.has_changed(&note.id, &note.content) {
         record_in_journal(ctx, abs, &note.id);
         tracing::debug!("Watcher ignoring echo: {}", note.path);
         return Vec::new();
-    }
-
-    if note.id.is_empty() {
-        let Some(new_id) = mint_or_adopt(ctx, abs, &note) else {
-            return Vec::new();
-        };
-        note.id = new_id;
     }
 
     record_in_journal(ctx, abs, &note.id);
@@ -261,45 +237,73 @@ fn upsert_md(ctx: &EventContext, abs: &Path) -> Vec<Action> {
     }
 }
 
-fn mint_or_adopt(ctx: &EventContext, abs: &Path, note: &Note) -> Option<String> {
-    if let Some(existing) = (ctx.known_note_id)(&note.path) {
-        tracing::warn!(
-            "Safety Stop: Note {} has no UUID on disk, but DB knows it as {}. Skipping injection to prevent split-brain.",
-            note.path,
-            existing
-        );
-        return None;
+fn resolve_note_id(ctx: &EventContext, abs: &Path, rel: &str) -> Result<String> {
+    if let Some(row) = ctx.journal.by_path(rel)? {
+        return Ok(row.uuid);
     }
+    let record = journal::record_from_disk(ctx.vault_path, abs, String::new())?;
+    if let Some(row) = relink_candidate(ctx, &record)? {
+        ctx.journal.relink(&row.uuid, rel, journal::now_ms())?;
+        tracing::info!(
+            "Re-linked create via journal: {} -> {} (ID: {})",
+            row.path,
+            rel,
+            row.uuid
+        );
+        return Ok(row.uuid);
+    }
+    if let Some(existing) = (ctx.known_note_id)(rel) {
+        tracing::info!("Adopted server identity for {}: {}", rel, existing);
+        return Ok(existing);
+    }
+    let minted = Uuid::new_v4().to_string();
+    tracing::info!("Minted journal identity for {}: {}", rel, minted);
+    Ok(minted)
+}
 
-    let Ok(raw_content) = std::fs::read_to_string(abs) else {
-        tracing::error!("Failed to read {} for UUID injection", note.path);
-        return None;
+fn relink_candidate(ctx: &EventContext, record: &FileRecord) -> Result<Option<FileRecord>> {
+    let vanished = |r: &FileRecord| {
+        r.path != record.path && !ctx.vault_path.join(&r.path).exists()
     };
-    if raw_content.contains("spacetime_id:") {
-        tracing::error!(
-            "CRITICAL: spacetime_id found in text but parsing failed. Skipping injection for safety: {}",
-            note.path
-        );
-        return None;
+
+    if let (Some(device), Some(inode)) = (record.device, record.inode) {
+        let mut rows: Vec<FileRecord> = ctx
+            .journal
+            .by_inode(device, inode)?
+            .into_iter()
+            .filter(|r| vanished(r))
+            .collect();
+        if rows.len() == 1 {
+            return Ok(rows.pop());
+        }
     }
 
-    let new_id = Uuid::new_v4().to_string();
-    tracing::info!("Injecting UUID {} into {}", new_id, note.path);
-    let new_content = inject_spacetime_id(&raw_content, &new_id);
-    if let Err(e) = std::fs::write(abs, &new_content) {
-        tracing::error!("Failed to inject UUID into {}: {}", note.path, e);
-        return None;
+    let mut candidates: Vec<FileRecord> = ctx
+        .journal
+        .by_hash(&record.content_hash, record.size)?
+        .into_iter()
+        .filter(|r| vanished(r))
+        .collect();
+    let tombstones = ctx.journal.relinkable_tombstones(
+        &record.content_hash,
+        record.size,
+        journal::now_ms() - journal::RELINK_WINDOW_MS,
+    )?;
+    for tombstone in tombstones {
+        if !candidates.iter().any(|c| c.uuid == tombstone.uuid) {
+            candidates.push(tombstone);
+        }
     }
-    Some(new_id)
+    if candidates.len() == 1 {
+        return Ok(candidates.pop());
+    }
+    Ok(None)
 }
 
 fn record_in_journal(ctx: &EventContext, abs: &Path, uuid: &str) {
-    let Some(journal) = ctx.journal else {
-        return;
-    };
     match journal::record_from_disk(ctx.vault_path, abs, uuid.to_string()) {
         Ok(record) => {
-            if let Err(e) = journal.observe(&record, "create") {
+            if let Err(e) = ctx.journal.observe(&record, "create") {
                 tracing::error!("Journal record failed for {}: {}", record.path, e);
             }
         }
@@ -314,7 +318,9 @@ fn delete_md(ctx: &EventContext, rel: String) -> Vec<Action> {
     }
     let journal_uuid = ctx
         .journal
-        .and_then(|j| j.by_path(&rel).ok().flatten())
+        .by_path(&rel)
+        .ok()
+        .flatten()
         .map(|row| row.uuid);
     let from_journal = journal_uuid.is_some();
     let id = journal_uuid.or_else(|| (ctx.known_note_id)(&rel));
@@ -323,23 +329,19 @@ fn delete_md(ctx: &EventContext, rel: String) -> Vec<Action> {
         return Vec::new();
     };
     if !from_journal {
-        if let Some(journal) = ctx.journal {
-            if let Ok(Some(row)) = journal.by_uuid(&id) {
-                if row.path != rel {
-                    tracing::debug!(
-                        "Watcher ignoring stale delete: {} moved to {}",
-                        rel,
-                        row.path
-                    );
-                    return Vec::new();
-                }
+        if let Ok(Some(row)) = ctx.journal.by_uuid(&id) {
+            if row.path != rel {
+                tracing::debug!(
+                    "Watcher ignoring stale delete: {} moved to {}",
+                    rel,
+                    row.path
+                );
+                return Vec::new();
             }
         }
     }
-    if let Some(journal) = ctx.journal {
-        if let Err(e) = journal.tombstone(&id, journal::now_ms()) {
-            tracing::error!("Journal tombstone failed for {}: {}", rel, e);
-        }
+    if let Err(e) = ctx.journal.tombstone(&id, journal::now_ms()) {
+        tracing::error!("Journal tombstone failed for {}: {}", rel, e);
     }
     vec![Action::DeleteNote { id, path: rel }]
 }
@@ -348,7 +350,7 @@ fn apply_actions(
     vault_path: &Path,
     client: &SpacetimeClient,
     tracker: &ContentTracker,
-    journal: Option<&Journal>,
+    journal: &Journal,
     actions: Vec<Action>,
 ) {
     for action in actions {
@@ -369,7 +371,7 @@ fn apply_actions(
                 tracing::debug!("Synced folder: {}", path);
             }
             Action::FolderVanished(path) => {
-                handle_folder_vanished(vault_path, client, tracker, &path);
+                handle_folder_vanished(vault_path, client, tracker, journal, &path);
             }
             Action::Reconcile => run_full_reconcile(vault_path, client, tracker, journal),
         }
@@ -380,6 +382,7 @@ fn handle_folder_vanished(
     vault_path: &Path,
     client: &SpacetimeClient,
     tracker: &ContentTracker,
+    journal: &Journal,
     old_folder_path: &str,
 ) {
     let notes_in_folder = client.get_notes_in_folder(&format!("{}/", old_folder_path));
@@ -389,22 +392,33 @@ fn handle_folder_vanished(
         if old_path.exists() {
             continue;
         }
-        match scan_for_note_by_id(vault_path, &note.id) {
-            Ok(Some(mut new_note)) => {
-                if new_note.id.is_empty() {
+        let relocated = journal
+            .by_uuid(&note.id)
+            .ok()
+            .flatten()
+            .filter(|row| row.path != note.path && vault_path.join(&row.path).exists());
+        match relocated {
+            Some(row) => match read_note_at(vault_path, &vault_path.join(&row.path)) {
+                Ok(Some(mut new_note)) => {
                     new_note.id = note.id.clone();
+                    client.upsert_note(&new_note);
+                    tracker.update(&new_note.id, &new_note.content);
+                    tracing::info!("Updated note path: {} -> {}", note.path, new_note.path);
                 }
-                client.upsert_note(&new_note);
-                tracker.update(&new_note.id, &new_note.content);
-                tracing::info!("Updated note path: {} -> {}", note.path, new_note.path);
-            }
-            Ok(None) => {
+                Ok(None) => {
+                    tracing::warn!("Journal row for {} points at unreadable {}", note.id, row.path)
+                }
+                Err(e) => {
+                    tracing::error!("Error reading relocated note {}: {}", row.path, e);
+                }
+            },
+            None => {
+                if let Err(e) = journal.tombstone(&note.id, journal::now_ms()) {
+                    tracing::error!("Journal tombstone failed for {}: {}", note.path, e);
+                }
                 client.delete_note(&note.id);
                 tracker.remove(&note.id);
                 tracing::info!("Deleted note: {} (ID: {})", note.path, note.id);
-            }
-            Err(e) => {
-                tracing::error!("Error scanning for note {}: {}", note.id, e);
             }
         }
     }
@@ -417,16 +431,11 @@ fn run_full_reconcile(
     vault_path: &Path,
     client: &SpacetimeClient,
     tracker: &ContentTracker,
-    journal: Option<&Journal>,
+    journal: &Journal,
 ) {
     tracing::warn!("Watcher requested rescan; running full reconcile");
     if let Err(e) = crate::reconcile::reconcile_on_startup(vault_path, client, tracker, journal) {
         tracing::error!("Reconcile after rescan failed: {:#}", e);
-    }
-    if let Some(journal) = journal {
-        if let Err(e) = journal::seed_from_vault(journal, vault_path) {
-            tracing::error!("Journal rescan failed: {:#}", e);
-        }
     }
 }
 
@@ -458,7 +467,7 @@ pub async fn start_watcher(
     vault_path: PathBuf,
     client: Arc<SpacetimeClient>,
     tracker: Arc<ContentTracker>,
-    journal: Option<Arc<Journal>>,
+    journal: Arc<Journal>,
 ) -> Result<()> {
     let vault = vault_path.clone();
 
@@ -474,13 +483,13 @@ pub async fn start_watcher(
                             |path: &str| client.get_note_by_path(path).map(|n| n.id);
                         let ctx = EventContext {
                             vault_path: &vault,
-                            journal: journal.as_deref(),
+                            journal: &journal,
                             tracker: &tracker,
                             known_note_id: &known_note_id,
                         };
                         let actions =
                             dispatch_event(&ctx, &event.kind, &event.paths, event.need_rescan());
-                        apply_actions(&vault, &client, &tracker, journal.as_deref(), actions);
+                        apply_actions(&vault, &client, &tracker, &journal, actions);
                     });
                 }
             }
@@ -504,11 +513,11 @@ pub async fn start_watcher(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::frontmatter::extract_spacetime_id;
-    use crate::journal::{hash_bytes, seed_from_vault};
+    use crate::journal::hash_bytes;
     use notify_debouncer_full::notify::event::{CreateKind, DataChange, RemoveKind};
 
     const ID_A: &str = "11111111-1111-1111-1111-111111111111";
+    const ID_B: &str = "22222222-2222-2222-2222-222222222222";
 
     fn temp_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
@@ -521,18 +530,23 @@ mod tests {
         dir
     }
 
-    fn write_note(vault: &Path, file: &str, id: &str) {
-        let content = format!("---\nspacetime_id: {}\n---\nbody of {}\n", id, file);
-        std::fs::write(vault.join(file), content).unwrap();
+    fn write_note(vault: &Path, file: &str) {
+        std::fs::write(vault.join(file), format!("body of {}\n", file)).unwrap();
+    }
+
+    fn observe_file(journal: &Journal, vault: &Path, file: &str, id: &str) {
+        let record =
+            journal::record_from_disk(vault, &vault.join(file), id.to_string()).unwrap();
+        journal.observe(&record, "seed").unwrap();
     }
 
     fn seeded_vault(name: &str) -> (PathBuf, PathBuf, Journal) {
         let dir = temp_dir(name);
         let vault = dir.join("vault");
         std::fs::create_dir_all(&vault).unwrap();
-        write_note(&vault, "a.md", ID_A);
+        write_note(&vault, "a.md");
         let journal = Journal::open(&dir.join("journal.db")).unwrap();
-        seed_from_vault(&journal, &vault).unwrap();
+        observe_file(&journal, &vault, "a.md", ID_A);
         (dir, vault, journal)
     }
 
@@ -558,7 +572,7 @@ mod tests {
 
         let ctx = EventContext {
             vault_path: &vault,
-            journal: Some(&journal),
+            journal: &journal,
             tracker: &tracker,
             known_note_id: &no_known_id,
         };
@@ -578,7 +592,7 @@ mod tests {
         );
 
         let on_disk = std::fs::read_to_string(vault.join("moved.md")).unwrap();
-        assert_eq!(extract_spacetime_id(&on_disk).as_deref(), Some(ID_A));
+        assert_eq!(on_disk, "body of a.md\n");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -588,12 +602,12 @@ mod tests {
         let (dir, vault, journal) = seeded_vault("move-edit");
         let tracker = ContentTracker::new();
         std::fs::rename(vault.join("a.md"), vault.join("moved.md")).unwrap();
-        let edited = format!("---\nspacetime_id: {}\n---\nedited body\n", ID_A);
-        std::fs::write(vault.join("moved.md"), &edited).unwrap();
+        let edited = "edited body\n";
+        std::fs::write(vault.join("moved.md"), edited).unwrap();
 
         let ctx = EventContext {
             vault_path: &vault,
-            journal: Some(&journal),
+            journal: &journal,
             tracker: &tracker,
             known_note_id: &no_known_id,
         };
@@ -622,9 +636,6 @@ mod tests {
         );
         assert!(upserted_note_ids_and_paths(&modify_actions).is_empty());
 
-        let on_disk = std::fs::read_to_string(vault.join("moved.md")).unwrap();
-        assert_eq!(extract_spacetime_id(&on_disk).as_deref(), Some(ID_A));
-
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -645,7 +656,7 @@ mod tests {
 
         let ctx = EventContext {
             vault_path: &vault,
-            journal: Some(&journal),
+            journal: &journal,
             tracker: &tracker,
             known_note_id: &no_known_id,
         };
@@ -685,7 +696,7 @@ mod tests {
 
         let ctx = EventContext {
             vault_path: &vault,
-            journal: Some(&journal),
+            journal: &journal,
             tracker: &tracker,
             known_note_id: &no_known_id,
         };
@@ -728,7 +739,7 @@ mod tests {
 
         let ctx = EventContext {
             vault_path: &vault,
-            journal: Some(&journal),
+            journal: &journal,
             tracker: &tracker,
             known_note_id: &known_id_a,
         };
@@ -766,7 +777,7 @@ mod tests {
 
         let ctx = EventContext {
             vault_path: &vault,
-            journal: Some(&journal),
+            journal: &journal,
             tracker: &tracker,
             known_note_id: &no_known_id,
         };
@@ -789,14 +800,14 @@ mod tests {
     }
 
     #[test]
-    fn create_injects_uuid_and_records_journal_row() {
+    fn create_mints_uuid_without_touching_the_file() {
         let (dir, vault, journal) = seeded_vault("create");
         let tracker = ContentTracker::new();
         std::fs::write(vault.join("new.md"), "fresh body\n").unwrap();
 
         let ctx = EventContext {
             vault_path: &vault,
-            journal: Some(&journal),
+            journal: &journal,
             tracker: &tracker,
             known_note_id: &no_known_id,
         };
@@ -808,13 +819,76 @@ mod tests {
         );
 
         let on_disk = std::fs::read_to_string(vault.join("new.md")).unwrap();
-        let injected = extract_spacetime_id(&on_disk).expect("uuid injected into frontmatter");
+        assert_eq!(on_disk, "fresh body\n");
         let row = journal.by_path("new.md").unwrap().unwrap();
-        assert_eq!(row.uuid, injected);
+        assert!(!row.uuid.is_empty());
+        assert_ne!(row.uuid, ID_A);
         assert_eq!(journal.event_count("create"), 1);
         assert_eq!(
             upserted_note_ids_and_paths(&actions),
-            vec![(injected, "new.md".to_string())]
+            vec![(row.uuid, "new.md".to_string())]
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn create_adopts_server_uuid_when_path_known() {
+        let (dir, vault, journal) = seeded_vault("create-adopt");
+        let tracker = ContentTracker::new();
+        std::fs::write(vault.join("new.md"), "fresh body\n").unwrap();
+        let known = |path: &str| (path == "new.md").then(|| ID_B.to_string());
+
+        let ctx = EventContext {
+            vault_path: &vault,
+            journal: &journal,
+            tracker: &tracker,
+            known_note_id: &known,
+        };
+        let actions = dispatch_event(
+            &ctx,
+            &EventKind::Create(CreateKind::File),
+            &[vault.join("new.md")],
+            false,
+        );
+
+        let on_disk = std::fs::read_to_string(vault.join("new.md")).unwrap();
+        assert_eq!(on_disk, "fresh body\n");
+        assert_eq!(journal.by_path("new.md").unwrap().unwrap().uuid, ID_B);
+        assert_eq!(
+            upserted_note_ids_and_paths(&actions),
+            vec![(ID_B.to_string(), "new.md".to_string())]
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn create_relinks_recent_tombstone_by_hash() {
+        let (dir, vault, journal) = seeded_vault("create-relink");
+        let tracker = ContentTracker::new();
+        std::fs::rename(vault.join("a.md"), vault.join("moved.md")).unwrap();
+        journal.tombstone(ID_A, journal::now_ms()).unwrap();
+
+        let ctx = EventContext {
+            vault_path: &vault,
+            journal: &journal,
+            tracker: &tracker,
+            known_note_id: &no_known_id,
+        };
+        let actions = dispatch_event(
+            &ctx,
+            &EventKind::Create(CreateKind::File),
+            &[vault.join("moved.md")],
+            false,
+        );
+
+        let row = journal.by_path("moved.md").unwrap().unwrap();
+        assert_eq!(row.uuid, ID_A);
+        assert!(row.deleted_at.is_none());
+        assert_eq!(
+            upserted_note_ids_and_paths(&actions),
+            vec![(ID_A.to_string(), "moved.md".to_string())]
         );
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -825,15 +899,15 @@ mod tests {
         let dir = temp_dir("folder-rename");
         let vault = dir.join("vault");
         std::fs::create_dir_all(vault.join("A")).unwrap();
-        write_note(&vault, "A/a.md", ID_A);
+        write_note(&vault, "A/a.md");
         let journal = Journal::open(&dir.join("journal.db")).unwrap();
-        seed_from_vault(&journal, &vault).unwrap();
+        observe_file(&journal, &vault, "A/a.md", ID_A);
         let tracker = ContentTracker::new();
         std::fs::rename(vault.join("A"), vault.join("B")).unwrap();
 
         let ctx = EventContext {
             vault_path: &vault,
-            journal: Some(&journal),
+            journal: &journal,
             tracker: &tracker,
             known_note_id: &no_known_id,
         };
