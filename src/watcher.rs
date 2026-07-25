@@ -420,13 +420,13 @@ fn run_full_reconcile(
     journal: Option<&Journal>,
 ) {
     tracing::warn!("Watcher requested rescan; running full reconcile");
+    if let Err(e) = crate::reconcile::reconcile_on_startup(vault_path, client, tracker, journal) {
+        tracing::error!("Reconcile after rescan failed: {:#}", e);
+    }
     if let Some(journal) = journal {
         if let Err(e) = journal::seed_from_vault(journal, vault_path) {
             tracing::error!("Journal rescan failed: {:#}", e);
         }
-    }
-    if let Err(e) = crate::reconcile::reconcile_on_startup(vault_path, client, tracker) {
-        tracing::error!("Reconcile after rescan failed: {:#}", e);
     }
 }
 

@@ -12,6 +12,7 @@ use crate::sanitize::sanitize_path;
 const SCHEMA_VERSION: i64 = 1;
 const TOMBSTONE_RETENTION_MS: i64 = 30 * 24 * 60 * 60 * 1000;
 const EVENT_RETENTION_ROWS: i64 = 10_000;
+pub const RELINK_WINDOW_MS: i64 = 10 * 60 * 1000;
 
 const SCHEMA_V1: &str = "
 CREATE TABLE IF NOT EXISTS files (
@@ -172,6 +173,22 @@ impl Journal {
         )
     }
 
+    pub fn relinkable_tombstones(
+        &self,
+        content_hash: &str,
+        size: i64,
+        since: i64,
+    ) -> Result<Vec<FileRecord>> {
+        query_records(
+            &self.conn(),
+            &format!(
+                "{} WHERE content_hash = ?1 AND size = ?2 AND deleted_at IS NOT NULL AND deleted_at >= ?3",
+                SELECT_FILES
+            ),
+            params![content_hash, size, since],
+        )
+    }
+
     pub fn live_files(&self) -> Result<Vec<FileRecord>> {
         query_records(
             &self.conn(),
@@ -235,6 +252,14 @@ impl Journal {
     }
 
     pub fn rekey(&self, uuid: &str, to_path: &str, ts: i64) -> Result<()> {
+        self.repath(uuid, to_path, ts, "rename")
+    }
+
+    pub fn relink(&self, uuid: &str, to_path: &str, ts: i64) -> Result<()> {
+        self.repath(uuid, to_path, ts, "relink")
+    }
+
+    fn repath(&self, uuid: &str, to_path: &str, ts: i64, op: &str) -> Result<()> {
         let conn = self.conn();
         let from_path: Option<String> = conn
             .query_row(
@@ -244,13 +269,13 @@ impl Journal {
             )
             .optional()?;
         let Some(from_path) = from_path else {
-            anyhow::bail!("rekey: unknown uuid {}", uuid);
+            anyhow::bail!("{}: unknown uuid {}", op, uuid);
         };
         conn.execute(
             "UPDATE files SET path = ?1, last_seen_at = ?2, deleted_at = NULL WHERE uuid = ?3",
             params![to_path, ts, uuid],
         )?;
-        insert_event(&conn, ts, "rename", Some(uuid), Some(&from_path), Some(to_path))?;
+        insert_event(&conn, ts, op, Some(uuid), Some(&from_path), Some(to_path))?;
         Ok(())
     }
 

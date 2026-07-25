@@ -80,7 +80,12 @@ async fn main() -> Result<()> {
 
     // Reconcile local vault with server (two-way sync)
     tracing::info!("Reconciling with server...");
-    reconcile::reconcile_on_startup(&absolute_vault_path, &client, &tracker)?;
+    reconcile::reconcile_on_startup(
+        &absolute_vault_path,
+        &client,
+        &tracker,
+        opened_journal.as_ref().map(|o| &*o.journal),
+    )?;
 
     // Reconcile folders (two-way sync)
     tracing::info!("Reconciling folders...");
