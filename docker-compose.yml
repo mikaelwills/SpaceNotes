@@ -13,6 +13,9 @@ services:
       - /path/to/your/notes:/vault  # Edit this to your notes folder
       - spacetimedb-data:/var/lib/spacetimedb
       - opencode-config:/config
+      - spacenotes-daemon-data:/data
+    environment:
+      - DATA_DIR=/data
     restart: unless-stopped
 
   opencode:
@@ -30,3 +33,4 @@ services:
 volumes:
   spacetimedb-data:
   opencode-config:
+  spacenotes-daemon-data:

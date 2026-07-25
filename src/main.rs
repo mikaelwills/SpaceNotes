@@ -2,6 +2,7 @@ mod client;
 mod folder;
 mod frontmatter;
 mod isolation;
+mod journal;
 mod note;
 mod reconcile;
 mod sanitize;
@@ -13,7 +14,7 @@ mod writer;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::tracker::ContentTracker;
@@ -33,6 +34,9 @@ struct Args {
     #[arg(short, long, env = "SPACETIME_DB",
           default_value = "spacenotes")]
     database: String,
+
+    #[arg(long, env = "DATA_DIR")]
+    data_dir: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -50,6 +54,17 @@ async fn main() -> Result<()> {
 
     tracing::info!("Vault path: {:?}", absolute_vault_path);
     tracing::info!("SpacetimeDB: {}/{}", args.spacetime_host, args.database);
+
+    let data_dir = args.data_dir.clone().unwrap_or_else(default_data_dir);
+    tracing::info!("Data dir: {:?}", data_dir);
+
+    let opened_journal = match open_journal(&absolute_vault_path, &data_dir) {
+        Ok(opened) => Some(opened),
+        Err(e) => {
+            tracing::error!("Journal unavailable, continuing without it: {:#}", e);
+            None
+        }
+    };
 
     // Initialize content tracker for loop prevention
     let tracker = Arc::new(ContentTracker::new());
@@ -91,6 +106,10 @@ async fn main() -> Result<()> {
 
     // Upload folders that exist locally but not on server
     client.sync_folders(&local_folders);
+
+    if let Some(opened) = &opened_journal {
+        run_journal_maintenance(opened, &absolute_vault_path, &data_dir);
+    }
 
     // Register callback for note updates from server
     let vault_clone = absolute_vault_path.clone();
@@ -244,4 +263,145 @@ async fn main() -> Result<()> {
     watcher::start_watcher(absolute_vault_path, client, tracker).await?;
 
     Ok(())
+}
+
+struct OpenedJournal {
+    journal: journal::Journal,
+    vault_id: String,
+}
+
+fn default_data_dir() -> PathBuf {
+    match std::env::var_os("HOME") {
+        Some(home) => PathBuf::from(home).join(".local/share/spacenotes"),
+        None => PathBuf::from("/data"),
+    }
+}
+
+fn open_journal(vault_path: &Path, data_dir: &Path) -> Result<OpenedJournal> {
+    let journals_dir = data_dir.join("journals");
+    std::fs::create_dir_all(&journals_dir)
+        .with_context(|| format!("Failed to create journals dir {:?}", journals_dir))?;
+
+    let vault_id = resolve_vault_id(vault_path, &journals_dir)?;
+    let db_path = journals_dir.join(format!("{}.db", vault_id));
+
+    if !db_path.exists() {
+        restore_from_vault_backup(vault_path, &db_path);
+    }
+
+    let journal = match journal::Journal::open(&db_path) {
+        Ok(j) => j,
+        Err(e) => {
+            tracing::error!("Journal open failed ({:#}), moving aside and recreating", e);
+            move_corrupt_journal_aside(&db_path);
+            restore_from_vault_backup(vault_path, &db_path);
+            journal::Journal::open(&db_path)?
+        }
+    };
+
+    journal.set_meta("vault_id", &vault_id)?;
+    journal.set_meta("vault_path_last_seen", &vault_path.to_string_lossy())?;
+    journal.set_meta_if_absent("created_at", &journal::now_ms().to_string())?;
+
+    tracing::info!("Journal open: {:?}", db_path);
+    Ok(OpenedJournal { journal, vault_id })
+}
+
+fn resolve_vault_id(vault_path: &Path, journals_dir: &Path) -> Result<String> {
+    let marker_dir = vault_path.join(".spacenotes");
+    let marker = marker_dir.join("vault-id");
+
+    if let Ok(contents) = std::fs::read_to_string(&marker) {
+        let existing = contents.trim();
+        if !existing.is_empty() {
+            return Ok(existing.to_string());
+        }
+    }
+
+    let vault_id = adopt_existing_journal(vault_path, journals_dir)
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+
+    std::fs::create_dir_all(&marker_dir)
+        .with_context(|| format!("Failed to create marker dir {:?}", marker_dir))?;
+    std::fs::write(&marker, &vault_id)
+        .with_context(|| format!("Failed to write vault-id marker {:?}", marker))?;
+    tracing::info!("Vault id: {}", vault_id);
+    Ok(vault_id)
+}
+
+fn adopt_existing_journal(vault_path: &Path, journals_dir: &Path) -> Option<String> {
+    let vault_str = vault_path.to_string_lossy().to_string();
+    let entries = std::fs::read_dir(journals_dir).ok()?;
+
+    let mut matches = Vec::new();
+    for entry in entries.filter_map(|e| e.ok()) {
+        let path = entry.path();
+        if !path.is_file() || path.extension().map_or(true, |e| e != "db") {
+            continue;
+        }
+        if journal::stored_vault_path(&path).as_deref() != Some(vault_str.as_str()) {
+            continue;
+        }
+        let Some(stem) = path.file_stem() else { continue };
+        matches.push(stem.to_string_lossy().to_string());
+    }
+
+    if matches.len() != 1 {
+        return None;
+    }
+    tracing::info!("Re-adopted journal {} for vault with missing marker", matches[0]);
+    matches.pop()
+}
+
+fn restore_from_vault_backup(vault_path: &Path, db_path: &Path) {
+    let backup = vault_path.join(".spacenotes").join("journal-backup.db");
+    if !backup.exists() {
+        return;
+    }
+    match std::fs::copy(&backup, db_path) {
+        Ok(_) => tracing::info!("Restored journal from vault backup {:?}", backup),
+        Err(e) => tracing::error!("Failed to restore journal from vault backup: {}", e),
+    }
+}
+
+fn move_corrupt_journal_aside(db_path: &Path) {
+    let mut corrupt = db_path.as_os_str().to_os_string();
+    corrupt.push(format!(".corrupt-{}", journal::now_ms()));
+    let _ = std::fs::rename(db_path, PathBuf::from(corrupt));
+    for suffix in ["-wal", "-shm"] {
+        let mut sidecar = db_path.as_os_str().to_os_string();
+        sidecar.push(suffix);
+        let _ = std::fs::remove_file(PathBuf::from(sidecar));
+    }
+}
+
+fn run_journal_maintenance(opened: &OpenedJournal, vault_path: &Path, data_dir: &Path) {
+    match journal::seed_from_vault(&opened.journal, vault_path) {
+        Ok(stats) => tracing::info!(
+            "Journal scan: {} seeded, {} refreshed, {} skipped, {} tombstoned",
+            stats.seeded,
+            stats.refreshed,
+            stats.skipped,
+            stats.tombstoned
+        ),
+        Err(e) => tracing::error!("Journal seed failed: {:#}", e),
+    }
+
+    if let Err(e) = opened.journal.prune(journal::now_ms()) {
+        tracing::error!("Journal prune failed: {:#}", e);
+    }
+
+    let backups = [
+        data_dir
+            .join("journals")
+            .join("backup")
+            .join(format!("{}.db", opened.vault_id)),
+        vault_path.join(".spacenotes").join("journal-backup.db"),
+    ];
+    for target in backups {
+        match opened.journal.backup_to(&target) {
+            Ok(()) => tracing::info!("Journal backup written: {:?}", target),
+            Err(e) => tracing::error!("Journal backup to {:?} failed: {:#}", target, e),
+        }
+    }
 }
