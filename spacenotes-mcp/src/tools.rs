@@ -237,6 +237,22 @@ fn select_targets(
     Ok(vec![0])
 }
 
+fn preview_around(content: &str, first_line: usize, last_line: usize) -> String {
+    let lines: Vec<&str> = content.lines().collect();
+    let from = first_line.saturating_sub(4);
+    let to = (last_line + 3).min(lines.len());
+    lines[from..to]
+        .iter()
+        .enumerate()
+        .map(|(i, line)| {
+            let n = from + i + 1;
+            let marker = if n >= first_line && n <= last_line { ">" } else { " " };
+            format!("{}{:>4}| {}", marker, n, line)
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn arg<'a>(args: &'a Value, snake: &str, camel: &str) -> Option<&'a Value> {
     args.get(snake).or_else(|| args.get(camel))
 }
@@ -281,7 +297,28 @@ fn latest_session_block(
         })
         .min_by(|a, b| a.0.cmp(&b.0).reverse().then(a.1.cmp(&b.1)));
 
+    let unparsed = entries.iter().filter(|e| e.entry_type == "note").count()
+        - entries
+            .iter()
+            .filter(|e| e.entry_type == "note")
+            .filter(|n| {
+                n.name.get(0..10).is_some()
+                    && n.name
+                        .get(11..)
+                        .and_then(|a| a.split_once('-'))
+                        .and_then(|(num, _)| num.parse::<u32>().ok())
+                        .is_some()
+            })
+            .count();
+
     let Some((_, _, id)) = latest else {
+        if unparsed > 0 {
+            return Ok(format!(
+                "No sessions found in {} — {} file(s) there do not match the <date>-<N>- naming \
+                 pattern and were ignored.",
+                folder, unparsed
+            ));
+        }
         return Ok(format!("No sessions found in {}", folder));
     };
     match client.get_file_by_id(id).map_err(|e| e.to_string())? {
@@ -318,7 +355,8 @@ pub fn get_tools() -> Vec<Tool> {
                         "description": "Search query (case-insensitive, matches title/path/content)"
                     },
                     "limit": {"type": "integer", "description": "Max results (default 25)"},
-                    "count_only": {"type": "boolean", "description": "Return just the number of matches"}
+                    "count_only": {"type": "boolean", "description": "Return just the number of matches"},
+                    "paths_only": {"type": "boolean", "description": "Return only paths, no ids or names"}
                 },
                 "required": ["query"]
             }),
@@ -443,13 +481,14 @@ pub fn get_tools() -> Vec<Tool> {
         },
         Tool {
             name: "delete_note".to_string(),
-            description: "Delete a note by ID".to_string(),
+            description: "Delete a note by id or path".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "id": {"type": "string", "description": "Note UUID"}
+                    "id": {"type": "string", "description": "Note UUID"},
+                    "path": {"type": "string", "description": "Note path, if you don't have the id"}
                 },
-                "required": ["id"]
+                "required": []
             }),
         },
         Tool {
@@ -513,7 +552,9 @@ pub fn get_tools() -> Vec<Tool> {
                     "folder": {"type": "string", "description": "Limit to notes under this folder (recursive)"},
                     "paths": {"type": "array", "items": {"type": "string"}, "description": "Limit to these exact note paths"},
                     "dry_run": {"type": "boolean", "description": "Preview only. Defaults TRUE — pass false to write."},
-                    "max_notes": {"type": "integer", "description": "Refuse if more notes than this would change (default 50)"}
+                    "max_notes": {"type": "integer", "description": "Refuse if more notes than this would change (default 50)"},
+                    "recursive": {"type": "boolean", "description": "Include subfolders (default true)"},
+                    "regex": {"type": "boolean", "description": "Treat old_string as a regex; new_string may use $1 groups"}
                 },
                 "required": ["old_string", "new_string"]
             }),
@@ -683,6 +724,11 @@ pub async fn execute_tool(
                 .get("count_only")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
+            let paths_only = params
+                .arguments
+                .get("paths_only")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
 
             let files = client.search_files(&query, None).map_err(|e| e.to_string())?;
             let total = files.len();
@@ -694,6 +740,12 @@ pub async fn execute_tool(
             }
 
             let shown: Vec<_> = files.into_iter().take(limit).collect();
+            if paths_only {
+                let paths: Vec<&str> = shown.iter().map(|f| f.path.as_str()).collect();
+                return Ok(json!({"content": [{"type": "text", "text": format!(
+                    "{} total, showing {}\n{}", total, paths.len(), paths.join("\n")
+                )}]}));
+            }
             let header = if total > shown.len() {
                 format!("{} total, showing {}\n\n", total, shown.len())
             } else {
@@ -941,8 +993,7 @@ pub async fn execute_tool(
             Ok(json!({"content": [{"type": "text", "text": text}]}))
         }
         "delete_note" => {
-            let id: String = serde_json::from_value(params.arguments["id"].clone())
-                .map_err(|e| e.to_string())?;
+            let id = resolve_file_id(client, &params.arguments)?;
 
             client.delete_file(id.clone()).await.map_err(|e| e.to_string())?;
 
@@ -975,6 +1026,10 @@ pub async fn execute_tool(
             let new_path: String = serde_json::from_value(params.arguments["new_path"].clone())
                 .map_err(|e| e.to_string())?;
 
+            client
+                .ensure_folder_ancestry(&folder_path_of(&new_path))
+                .await
+                .map_err(|e| e.to_string())?;
             client
                 .move_file(old_path.clone(), new_path.clone())
                 .await
@@ -1173,16 +1228,41 @@ pub async fn execute_tool(
                         format!("lines {}-{}", m.first_line, m.last_line)
                     })
                     .collect();
+                let first = &found.matches[targets[0]];
+                let before = preview_around(&file.content, first.first_line, first.last_line);
+                let after_first = matcher::find(&updated, &new_string)
+                    .map(|f| {
+                        let m = &f.matches[0];
+                        preview_around(&updated, m.first_line, m.last_line)
+                    })
+                    .unwrap_or_else(|| "(deleted)".to_string());
                 return Ok(json!({"content": [{"type": "text", "text": format!(
-                    "dry run: would edit {} at {} ({} tier, {} of {} match(es)). No changes written.",
-                    path, places.join("; "), found.tier.label(), targets.len(), count
+                    "dry run: would edit {} at {} ({} tier, {} of {} match(es)). No changes written.\n\nbefore:\n{}\n\nafter:\n{}",
+                    path, places.join("; "), found.tier.label(), targets.len(), count, before, after_first
                 )}]}));
             }
 
-            client
-                .update_file_content_if_unchanged(file.id, &file.content, updated)
-                .await
-                .map_err(|e| e.to_string())?;
+            // D6: an exact match can go through the reducer, which re-matches against the
+            // committed row instead of our snapshot — race-safe and a smaller payload. Relaxed
+            // tiers have no server-side equivalent, so they splice and guard with a CAS check.
+            let exact_whole_selection =
+                found.tier == matcher::Tier::Exact && targets.len() == found.matches.len();
+            if exact_whole_selection {
+                client
+                    .find_replace_in_file(
+                        path.clone(),
+                        old_string.clone(),
+                        new_string.clone(),
+                        targets.len() > 1,
+                    )
+                    .await
+                    .map_err(|e| e.to_string())?;
+            } else {
+                client
+                    .update_file_content_if_unchanged(file.id, &file.content, updated)
+                    .await
+                    .map_err(|e| e.to_string())?;
+            }
 
             let summary = format!(
                 "Edited note: {} ({} of {} match(es), {} tier)",
@@ -1223,13 +1303,45 @@ pub async fn execute_tool(
             // Cross-note blast radius: preview unless the caller explicitly opts out.
             let dry_run = dry_run_flag(&params.arguments, true);
 
+            let recursive = params
+                .arguments
+                .get("recursive")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
+            let regex_mode = params
+                .arguments
+                .get("regex")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let pattern = if regex_mode {
+                Some(
+                    RegexBuilder::new(&old_string)
+                        .build()
+                        .map_err(|e| format!("invalid regex: {}", e))?,
+                )
+            } else {
+                None
+            };
+
             let candidates = client
-                .files_in_scope(folder, paths.as_deref())
+                .files_in_scope(folder, paths.as_deref(), recursive)
                 .map_err(|e| e.to_string())?;
 
             let mut planned = Vec::new();
             let mut skipped_fuzzy = Vec::new();
             for file in candidates {
+                if let Some(re) = &pattern {
+                    let hits = re.find_iter(&file.content).count();
+                    if hits == 0 {
+                        continue;
+                    }
+                    let updated = re.replace_all(&file.content, new_string.as_str()).to_string();
+                    if updated == file.content {
+                        continue;
+                    }
+                    planned.push((file, hits, updated));
+                    continue;
+                }
                 let Some(found) = matcher::find(&file.content, &old_string) else {
                     continue;
                 };
@@ -1333,12 +1445,16 @@ pub async fn execute_tool(
                 format!("{}/", destination_folder)
             };
 
+            client
+                .ensure_folder_ancestry(&dest)
+                .await
+                .map_err(|e| e.to_string())?;
+
             let mut moved = Vec::new();
             let mut errors = Vec::new();
 
             for old_path in paths {
-                // Extract filename from old path
-                let filename = old_path.split('/').last().unwrap_or(&old_path);
+                let filename = old_path.rsplit('/').next().unwrap_or(&old_path);
                 let new_path = format!("{}{}", dest, filename);
 
                 match client.move_file(old_path.clone(), new_path.clone()).await {
@@ -1780,6 +1896,48 @@ mod tests {
         let content = "alpha\u{00A0}beta\nalpha\u{00A0}beta\n";
         let found = matcher::find(content, "alpha beta").unwrap();
         assert_eq!(select_targets(&found, "N.md", None, true, true).unwrap(), vec![0, 1]);
+    }
+
+    #[test]
+    fn preview_marks_the_matched_lines_and_shows_context() {
+        let content = "1\n2\n3\n4\n5\n6\n7\n8\n";
+        let out = preview_around(content, 4, 5);
+        assert!(out.contains(">   4| 4"), "{}", out);
+        assert!(out.contains(">   5| 5"), "{}", out);
+        assert!(out.contains("    1| 1"), "{}", out);
+        assert!(!out.contains("| 9"));
+    }
+
+    #[test]
+    fn preview_clamps_at_both_ends() {
+        let out = preview_around("only\n", 1, 1);
+        assert!(out.contains(">   1| only"), "{}", out);
+    }
+
+    #[test]
+    fn replace_across_notes_declares_regex_and_recursive() {
+        let tool = get_tools()
+            .into_iter()
+            .find(|t| t.name == "replace_across_notes")
+            .unwrap();
+        let props = tool.input_schema["properties"].as_object().unwrap();
+        assert!(props.contains_key("regex"));
+        assert!(props.contains_key("recursive"));
+    }
+
+    #[test]
+    fn search_notes_declares_paths_only() {
+        let tool = get_tools().into_iter().find(|t| t.name == "search_notes").unwrap();
+        let props = tool.input_schema["properties"].as_object().unwrap();
+        assert!(props.contains_key("paths_only"));
+    }
+
+    #[test]
+    fn delete_note_accepts_a_path_as_well_as_an_id() {
+        let tool = get_tools().into_iter().find(|t| t.name == "delete_note").unwrap();
+        let props = tool.input_schema["properties"].as_object().unwrap();
+        assert!(props.contains_key("id"));
+        assert!(props.contains_key("path"));
     }
 
     #[test]

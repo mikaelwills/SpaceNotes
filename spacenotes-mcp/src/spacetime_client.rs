@@ -510,6 +510,7 @@ impl SpacetimeClient {
         &self,
         folder: Option<&str>,
         paths: Option<&[String]>,
+        recursive: bool,
     ) -> Result<Vec<FullSpaceFile>> {
         if folder.is_some() && paths.is_some() {
             anyhow::bail!("provide folder or paths, not both");
@@ -529,7 +530,10 @@ impl SpacetimeClient {
                     .db()
                     .space_file()
                     .iter()
-                    .filter(|f| f.path.starts_with(&prefix))
+                    .filter(|f| {
+                        f.path.starts_with(&prefix)
+                            && (recursive || f.folder_path == prefix)
+                    })
                     .map(full_file)
                     .collect()
             }
@@ -550,6 +554,7 @@ impl SpacetimeClient {
     }
 
     pub fn search_files(&self, query: &str, context_lines: Option<u32>) -> Result<Vec<SearchResult>> {
+        const MAX_EXCERPT_BYTES: usize = 4_000;
         tracing::info!("Searching notes for: {} (context_lines: {:?})", query, context_lines);
 
         let tokens: Vec<String> = query
@@ -598,18 +603,35 @@ impl SpacetimeClient {
 
                     let merged = merge_ranges(&matched_ranges);
 
-                    merged
-                        .into_iter()
-                        .map(|(start, end)| {
-                            let snippet: String = lines[start..end]
-                                .iter()
-                                .enumerate()
-                                .map(|(j, line)| format!("{:>4}| {}", start + j + 1, line))
-                                .collect::<Vec<_>>()
-                                .join("\n");
-                            format!("[lines {}-{}]\n{}", start + 1, end, snippet)
-                        })
-                        .collect()
+                    // A note where every line matches would otherwise return its whole body.
+                    let mut budget = MAX_EXCERPT_BYTES;
+                    let mut out: Vec<String> = Vec::new();
+                    for (start, end) in merged {
+                        if budget == 0 {
+                            out.push("[excerpts truncated]".to_string());
+                            break;
+                        }
+                        let snippet: String = lines[start..end]
+                            .iter()
+                            .enumerate()
+                            .map(|(j, line)| format!("{:>4}| {}", start + j + 1, line))
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        let mut block = format!("[lines {}-{}]\n{}", start + 1, end, snippet);
+                        if block.len() > budget {
+                            let mut cut = budget;
+                            while cut > 0 && !block.is_char_boundary(cut) {
+                                cut -= 1;
+                            }
+                            block.truncate(cut);
+                            block.push_str("\n[truncated]");
+                            budget = 0;
+                        } else {
+                            budget -= block.len();
+                        }
+                        out.push(block);
+                    }
+                    out
                 });
 
                 Some((
