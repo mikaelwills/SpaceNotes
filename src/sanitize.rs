@@ -6,9 +6,9 @@
 ///
 /// # Examples
 /// ```
-/// let path = "folder/Note with … ellipsis.md";
+/// let path = "folder/SpaceFile with … ellipsis.md";
 /// let sanitized = sanitize_path(path);
-/// assert_eq!(sanitized, "folder/Note with ... ellipsis.md");
+/// assert_eq!(sanitized, "folder/SpaceFile with ... ellipsis.md");
 /// ```
 pub fn sanitize_path(path: &str) -> String {
     path
@@ -55,8 +55,8 @@ mod tests {
 
     #[test]
     fn test_sanitize_dashes() {
-        let input = "Note with\u{2014}em dash and\u{2013}en dash.md";
-        let expected = "Note with-em dash and-en dash.md";
+        let input = "SpaceFile with\u{2014}em dash and\u{2013}en dash.md";
+        let expected = "SpaceFile with-em dash and-en dash.md";
         assert_eq!(sanitize_path(input), expected);
     }
 
@@ -69,8 +69,8 @@ mod tests {
 
     #[test]
     fn test_replace_unknown_unicode() {
-        let input = "Note with emoji 🎵 and symbols ©.md";
-        let expected = "Note with emoji _ and symbols _.md";
+        let input = "SpaceFile with emoji 🎵 and symbols ©.md";
+        let expected = "SpaceFile with emoji _ and symbols _.md";
         assert_eq!(sanitize_path(input), expected);
     }
 

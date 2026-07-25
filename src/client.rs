@@ -4,16 +4,16 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::folder::Folder as LocalFolder;
-use crate::note::Note as LocalNote;
+use crate::space_file::SpaceFile as LocalSpaceFile;
 use crate::spacetime_bindings::{
     delete_folder_reducer::delete_folder,
-    delete_note_reducer::delete_note,
+    delete_file_reducer::delete_file,
     folder_table::FolderTableAccess,
     folder_type::Folder as DbFolder,
-    note_table::NoteTableAccess,
-    note_type::Note as DbNote,
+    space_file_table::SpaceFileTableAccess,
+    space_file_type::SpaceFile as DbSpaceFile,
     upsert_folder_reducer::upsert_folder,
-    upsert_note_reducer::upsert_note,
+    upsert_file_reducer::upsert_file,
     DbConnection,
 };
 
@@ -34,7 +34,7 @@ impl SpacetimeClient {
         // Start the background thread first
         conn.run_threaded();
 
-        // Subscribe to all notes and folders (separate queries)
+        // Subscribe to all files and folders (separate queries)
         let synced_clone = synced.clone();
         conn.subscription_builder()
             .on_applied(move |_ctx| {
@@ -46,7 +46,7 @@ impl SpacetimeClient {
                 tracing::error!("Subscription error: {:?}", err);
             })
             .subscribe(vec![
-                "SELECT * FROM note",
+                "SELECT * FROM space_file",
                 "SELECT * FROM folder"
             ]);
 
@@ -75,24 +75,23 @@ impl SpacetimeClient {
         }
     }
 
-    /// Get all notes from the local cache
-    pub fn get_all_notes(&self) -> Vec<LocalNote> {
+    /// Get all files from the local cache
+    pub fn get_all_files(&self) -> Vec<LocalSpaceFile> {
         self.conn
             .db
-            .note()
+            .space_file()
             .iter()
-            .map(|db_note| LocalNote {
-                id: db_note.id,
-                path: db_note.path,
-                name: db_note.name,
-                content: db_note.content,
-                folder_path: db_note.folder_path,
-                depth: db_note.depth,
-                extension: db_note.extension,
-                kind: db_note.kind,
-                size: db_note.size,
-                created_time: db_note.created_time,
-                modified_time: db_note.modified_time,
+            .map(|db_file| LocalSpaceFile {
+                id: db_file.id,
+                path: db_file.path,
+                name: db_file.name,
+                content: db_file.content,
+                folder_path: db_file.folder_path,
+                depth: db_file.depth,
+                extension: db_file.extension,
+                size: db_file.size,
+                created_time: db_file.created_time,
+                modified_time: db_file.modified_time,
             })
             .collect()
     }
@@ -111,97 +110,94 @@ impl SpacetimeClient {
             .collect()
     }
 
-    /// Get a note by its relative path from the local cache
-    pub fn get_note_by_path(&self, path: &str) -> Option<LocalNote> {
+    /// Get a file by its relative path from the local cache
+    pub fn get_file_by_path(&self, path: &str) -> Option<LocalSpaceFile> {
         self.conn
             .db
-            .note()
+            .space_file()
             .iter()
             .find(|n| n.path == path)
-            .map(|db_note| LocalNote {
-                id: db_note.id,
-                path: db_note.path,
-                name: db_note.name,
-                content: db_note.content,
-                folder_path: db_note.folder_path,
-                depth: db_note.depth,
-                extension: db_note.extension,
-                kind: db_note.kind,
-                size: db_note.size,
-                created_time: db_note.created_time,
-                modified_time: db_note.modified_time,
+            .map(|db_file| LocalSpaceFile {
+                id: db_file.id,
+                path: db_file.path,
+                name: db_file.name,
+                content: db_file.content,
+                folder_path: db_file.folder_path,
+                depth: db_file.depth,
+                extension: db_file.extension,
+                size: db_file.size,
+                created_time: db_file.created_time,
+                modified_time: db_file.modified_time,
             })
     }
 
-    pub fn get_note_by_id(&self, id: &str) -> Option<LocalNote> {
+    pub fn get_file_by_id(&self, id: &str) -> Option<LocalSpaceFile> {
         self.conn
             .db
-            .note()
+            .space_file()
             .id()
             .find(&id.to_string())
-            .map(|db_note| LocalNote {
-                id: db_note.id,
-                path: db_note.path,
-                name: db_note.name,
-                content: db_note.content,
-                folder_path: db_note.folder_path,
-                depth: db_note.depth,
-                extension: db_note.extension,
-                kind: db_note.kind,
-                size: db_note.size,
-                created_time: db_note.created_time,
-                modified_time: db_note.modified_time,
+            .map(|db_file| LocalSpaceFile {
+                id: db_file.id,
+                path: db_file.path,
+                name: db_file.name,
+                content: db_file.content,
+                folder_path: db_file.folder_path,
+                depth: db_file.depth,
+                extension: db_file.extension,
+                size: db_file.size,
+                created_time: db_file.created_time,
+                modified_time: db_file.modified_time,
             })
     }
 
-    pub fn get_notes_in_folder(&self, folder_path_prefix: &str) -> Vec<LocalNote> {
+    pub fn get_files_in_folder(&self, folder_path_prefix: &str) -> Vec<LocalSpaceFile> {
         self.conn
             .db
-            .note()
+            .space_file()
             .iter()
             .filter(|n| n.path.starts_with(folder_path_prefix))
-            .map(|db_note| LocalNote {
-                id: db_note.id,
-                path: db_note.path,
-                name: db_note.name,
-                content: db_note.content,
-                folder_path: db_note.folder_path,
-                depth: db_note.depth,
-                extension: db_note.extension,
-                kind: db_note.kind,
-                size: db_note.size,
-                created_time: db_note.created_time,
-                modified_time: db_note.modified_time,
+            .map(|db_file| LocalSpaceFile {
+                id: db_file.id,
+                path: db_file.path,
+                name: db_file.name,
+                content: db_file.content,
+                folder_path: db_file.folder_path,
+                depth: db_file.depth,
+                extension: db_file.extension,
+                size: db_file.size,
+                created_time: db_file.created_time,
+                modified_time: db_file.modified_time,
             })
             .collect()
     }
 
-    /// Register callback for note updates
-    pub fn on_note_updated<F>(&self, mut callback: F)
+    /// Register callback for file updates
+    pub fn on_file_updated<F>(&self, mut callback: F)
     where
-        F: FnMut(&DbNote, &DbNote) + Send + 'static,
+        F: FnMut(&DbSpaceFile, &DbSpaceFile) + Send + 'static,
     {
-        self.conn.db.note().on_update(move |_ctx, old, new| {
+        self.conn.db.space_file().on_update(move |_ctx, old, new| {
             callback(old, new);
         });
     }
 
-    /// Register callback for note inserts
-    pub fn on_note_inserted<F>(&self, mut callback: F)
+    /// Register callback for file inserts
+    pub fn on_file_inserted<F>(&self, mut callback: F)
     where
-        F: FnMut(&DbNote) + Send + 'static,
+        F: FnMut(&DbSpaceFile) + Send + 'static,
     {
-        self.conn.db.note().on_insert(move |_ctx, new| {
+        self.conn.db.space_file().on_insert(move |_ctx, new| {
             callback(new);
         });
     }
 
-    /// Register callback for note deletions
-    pub fn on_note_deleted<F>(&self, mut callback: F)
+    /// Register callback for file deletions
+    pub fn on_file_deleted<F>(&self, mut callback: F)
     where
-        F: FnMut(&DbNote) + Send + 'static,
+        F: FnMut(&DbSpaceFile) + Send + 'static,
     {
-        self.conn.db.note().on_delete(move |_ctx, old| {
+        self.conn.db.space_file().on_delete(move |_ctx, old| {
             callback(old);
         });
     }
@@ -236,19 +232,18 @@ impl SpacetimeClient {
         });
     }
 
-    pub fn upsert_note(&self, note: &LocalNote) {
-        let _ = self.conn.reducers().upsert_note(
-            note.id.clone(),
-            note.path.clone(),
-            note.name.clone(),
-            note.content.clone(),
-            note.folder_path.clone(),
-            note.depth,
-            note.extension.clone(),
-            note.kind.clone(),
-            note.size,
-            note.created_time,
-            note.modified_time,
+    pub fn upsert_file(&self, file: &LocalSpaceFile) {
+        let _ = self.conn.reducers().upsert_file(
+            file.id.clone(),
+            file.path.clone(),
+            file.name.clone(),
+            file.content.clone(),
+            file.folder_path.clone(),
+            file.depth,
+            file.extension.clone(),
+            file.size,
+            file.created_time,
+            file.modified_time,
         );
     }
 
@@ -267,9 +262,9 @@ impl SpacetimeClient {
         }
     }
 
-    pub fn delete_note(&self, id: &str) {
-        let _ = self.conn.reducers().delete_note(id.to_string());
-        tracing::debug!("Deleted note with ID: {}", id);
+    pub fn delete_file(&self, id: &str) {
+        let _ = self.conn.reducers().delete_file(id.to_string());
+        tracing::debug!("Deleted file with ID: {}", id);
     }
 
     pub fn delete_folder(&self, path: &str) {

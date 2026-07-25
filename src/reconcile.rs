@@ -6,10 +6,10 @@ use uuid::Uuid;
 use crate::client::SpacetimeClient;
 use crate::isolation::run_isolated;
 use crate::journal::{self, FileRecord, Journal};
-use crate::note::Note;
-use crate::scanner::scan_notes;
+use crate::space_file::SpaceFile;
+use crate::scanner::scan_files;
 use crate::tracker::ContentTracker;
-use crate::writer::write_note_to_disk;
+use crate::writer::write_file_to_disk;
 
 enum Outcome {
     Downloaded,
@@ -214,7 +214,7 @@ fn tiebreak(candidates: Vec<FileRecord>, path: &str) -> Option<FileRecord> {
     }
 }
 
-fn decide_orphan(row: &FileRecord, server: Option<&Note>) -> OrphanDecision {
+fn decide_orphan(row: &FileRecord, server: Option<&SpaceFile>) -> OrphanDecision {
     match server {
         None => OrphanDecision::ForgetLocally,
         Some(server) if (server.modified_time as i64) > row.modified_time => {
@@ -228,7 +228,7 @@ fn propagate_offline_deletes(
     client: &SpacetimeClient,
     tracker: &ContentTracker,
     journal: &Journal,
-    server_map: &mut HashMap<String, Note>,
+    server_map: &mut HashMap<String, SpaceFile>,
     orphans: Vec<FileRecord>,
     now: i64,
 ) {
@@ -251,7 +251,7 @@ fn propagate_offline_deletes(
                     tracing::error!("Journal tombstone failed for {}: {}", row.path, e);
                     continue;
                 }
-                client.delete_note(&row.uuid);
+                client.delete_file(&row.uuid);
                 tracker.remove(&row.uuid);
                 server_map.remove(&row.uuid);
                 tracing::info!("Propagated offline delete: {} (ID: {})", row.path, row.uuid);
@@ -260,15 +260,15 @@ fn propagate_offline_deletes(
     }
 }
 
-fn disk_records(vault_path: &Path, notes: &[Note]) -> Vec<FileRecord> {
-    notes
+fn disk_records(vault_path: &Path, files: &[SpaceFile]) -> Vec<FileRecord> {
+    files
         .iter()
-        .filter_map(|note| {
-            let abs = vault_path.join(&note.path);
+        .filter_map(|file| {
+            let abs = vault_path.join(&file.path);
             match journal::record_from_disk(vault_path, &abs, String::new()) {
                 Ok(record) => Some(record),
                 Err(e) => {
-                    tracing::warn!("Failed to build journal record for {}: {}", note.path, e);
+                    tracing::warn!("Failed to build journal record for {}: {}", file.path, e);
                     None
                 }
             }
@@ -280,8 +280,8 @@ fn reconcile_one(
     vault_path: &Path,
     client: &SpacetimeClient,
     tracker: &ContentTracker,
-    local_map: &HashMap<String, Note>,
-    server_map: &HashMap<String, Note>,
+    local_map: &HashMap<String, SpaceFile>,
+    server_map: &HashMap<String, SpaceFile>,
     relinked: &HashSet<String>,
     id: &str,
 ) -> Result<Outcome> {
@@ -290,7 +290,7 @@ fn reconcile_one(
             let moved_locally = relinked.contains(id) && local.path != server.path;
             if server.modified_time > local.modified_time {
                 if moved_locally {
-                    let merged = Note::new(
+                    let merged = SpaceFile::new(
                         server.id.clone(),
                         local.path.clone(),
                         server.content.clone(),
@@ -298,27 +298,27 @@ fn reconcile_one(
                         server.created_time,
                         server.modified_time,
                     );
-                    write_note_to_disk(vault_path, &merged)?;
+                    write_file_to_disk(vault_path, &merged)?;
                     tracker.update(&merged.id, &merged.content);
-                    client.upsert_note(&merged);
+                    client.upsert_file(&merged);
                     tracing::debug!(
                         "Downloaded newer into moved path: {} (ID: {})",
                         merged.path,
                         id
                     );
                 } else {
-                    write_note_to_disk(vault_path, server)?;
+                    write_file_to_disk(vault_path, server)?;
                     tracker.update(&server.id, &server.content);
                     tracing::debug!("Downloaded newer: {} (ID: {})", server.path, id);
                 }
                 Ok(Outcome::Downloaded)
             } else if local.modified_time > server.modified_time {
-                client.upsert_note(local);
+                client.upsert_file(local);
                 tracker.update(&local.id, &local.content);
                 tracing::debug!("Uploaded newer: {} (ID: {})", local.path, id);
                 Ok(Outcome::Uploaded)
             } else if moved_locally {
-                client.upsert_note(local);
+                client.upsert_file(local);
                 tracker.update(&local.id, &local.content);
                 tracing::info!(
                     "Propagated offline move: {} -> {} (ID: {})",
@@ -334,14 +334,14 @@ fn reconcile_one(
         }
 
         (None, Some(server)) => {
-            write_note_to_disk(vault_path, server)?;
+            write_file_to_disk(vault_path, server)?;
             tracker.update(&server.id, &server.content);
             tracing::debug!("Downloaded new: {} (ID: {})", server.path, id);
             Ok(Outcome::Downloaded)
         }
 
         (Some(local), None) => {
-            client.upsert_note(local);
+            client.upsert_file(local);
             tracker.update(&local.id, &local.content);
             tracing::debug!("Uploaded new: {} (ID: {})", local.path, id);
             Ok(Outcome::Uploaded)
@@ -357,10 +357,10 @@ pub fn reconcile_on_startup(
     tracker: &ContentTracker,
     journal: &Journal,
 ) -> Result<()> {
-    let server_notes = client.get_all_notes();
-    let local_notes = scan_notes(vault_path)?;
+    let server_files = client.get_all_files();
+    let local_files = scan_files(vault_path)?;
 
-    let mut server_map: HashMap<String, Note> = server_notes
+    let mut server_map: HashMap<String, SpaceFile> = server_files
         .into_iter()
         .map(|n| (n.id.clone(), n))
         .collect();
@@ -370,7 +370,7 @@ pub fn reconcile_on_startup(
         .collect();
 
     let now = journal::now_ms();
-    let mut records = disk_records(vault_path, &local_notes);
+    let mut records = disk_records(vault_path, &local_files);
     let outcome =
         resolve_offline_identities(journal, vault_path, &mut records, &server_ids_by_path, now)?;
     let relinked = outcome.relinked;
@@ -387,7 +387,7 @@ pub fn reconcile_on_startup(
         .iter()
         .map(|r| (r.path.clone(), r.uuid.clone()))
         .collect();
-    let local_map: HashMap<String, Note> = local_notes
+    let local_map: HashMap<String, SpaceFile> = local_files
         .into_iter()
         .filter_map(|mut n| {
             let id = uuid_by_path.get(&n.path)?.clone();
@@ -405,7 +405,7 @@ pub fn reconcile_on_startup(
     for id in all_ids {
         let mut outcome: Result<Outcome> = Ok(Outcome::Skipped);
 
-        let context = format!("reconcile note (ID: {})", id);
+        let context = format!("reconcile file (ID: {})", id);
         run_isolated(context, || {
             outcome = reconcile_one(
                 vault_path,
@@ -457,7 +457,7 @@ mod tests {
         dir
     }
 
-    fn write_note(vault: &Path, file: &str) {
+    fn write_file(vault: &Path, file: &str) {
         std::fs::write(vault.join(file), format!("body of {}\n", file)).unwrap();
     }
 
@@ -470,7 +470,7 @@ mod tests {
         let dir = temp_dir(name);
         let vault = dir.join("vault");
         std::fs::create_dir_all(&vault).unwrap();
-        write_note(&vault, "a.md");
+        write_file(&vault, "a.md");
         let journal = Journal::open(&dir.join("journal.db")).unwrap();
         observe_file(&journal, &vault, "a.md", ID_A);
         (dir, vault, journal)
@@ -489,7 +489,6 @@ mod tests {
         FileRecord {
             uuid: uuid.to_string(),
             path: path.to_string(),
-            kind: "md".to_string(),
             content_hash: hash.to_string(),
             size,
             device: Some(1),
@@ -621,17 +620,17 @@ mod tests {
     fn basename_heuristic_relinks_one_to_one() {
         let dir = temp_dir("basename");
         let vault = dir.join("vault");
-        std::fs::create_dir_all(vault.join("notes")).unwrap();
+        std::fs::create_dir_all(vault.join("files")).unwrap();
         std::fs::create_dir_all(vault.join("archive")).unwrap();
-        write_note(&vault, "notes/spec.md");
+        write_file(&vault, "files/spec.md");
         let journal = Journal::open(&dir.join("journal.db")).unwrap();
-        observe_file(&journal, &vault, "notes/spec.md", ID_A);
+        observe_file(&journal, &vault, "files/spec.md", ID_A);
 
         std::fs::write(vault.join("archive/spec.md"), "edited spec body\n").unwrap();
-        std::fs::remove_file(vault.join("notes/spec.md")).unwrap();
+        std::fs::remove_file(vault.join("files/spec.md")).unwrap();
 
         let record = record_for(&vault, "archive/spec.md");
-        let original = journal.by_path("notes/spec.md").unwrap().unwrap();
+        let original = journal.by_path("files/spec.md").unwrap().unwrap();
         assert_ne!(record.inode, original.inode);
         assert_ne!(record.content_hash, original.content_hash);
 
@@ -654,7 +653,7 @@ mod tests {
         let dir = temp_dir("adopt-server");
         let vault = dir.join("vault");
         std::fs::create_dir_all(&vault).unwrap();
-        write_note(&vault, "new.md");
+        write_file(&vault, "new.md");
         let journal = Journal::open(&dir.join("journal.db")).unwrap();
 
         let server: HashMap<String, String> =
@@ -676,7 +675,7 @@ mod tests {
         let dir = temp_dir("mint");
         let vault = dir.join("vault");
         std::fs::create_dir_all(&vault).unwrap();
-        write_note(&vault, "new.md");
+        write_file(&vault, "new.md");
         let journal = Journal::open(&dir.join("journal.db")).unwrap();
 
         let mut records = vec![record_for(&vault, "new.md")];
@@ -698,8 +697,8 @@ mod tests {
         let dir = temp_dir("offline-delete");
         let vault = dir.join("vault");
         std::fs::create_dir_all(&vault).unwrap();
-        write_note(&vault, "a.md");
-        write_note(&vault, "b.md");
+        write_file(&vault, "a.md");
+        write_file(&vault, "b.md");
         let journal = Journal::open(&dir.join("journal.db")).unwrap();
         observe_file(&journal, &vault, "a.md", ID_A);
         observe_file(&journal, &vault, "b.md", ID_B);
@@ -737,8 +736,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    fn server_note(id: &str, path: &str, modified_time: u64) -> Note {
-        Note::new(
+    fn server_file(id: &str, path: &str, modified_time: u64) -> SpaceFile {
+        SpaceFile::new(
             id.to_string(),
             path.to_string(),
             "body".to_string(),
@@ -752,7 +751,7 @@ mod tests {
     fn orphan_matching_server_copy_propagates_delete() {
         let mut row = fabricated_record(ID_A, "b.md", "deadbeef", 4, 1);
         row.modified_time = 1000;
-        let server = server_note(ID_A, "b.md", 1000);
+        let server = server_file(ID_A, "b.md", 1000);
         assert_eq!(
             decide_orphan(&row, Some(&server)),
             OrphanDecision::PropagateDelete
@@ -763,7 +762,7 @@ mod tests {
     fn orphan_with_newer_server_copy_resurrects() {
         let mut row = fabricated_record(ID_A, "b.md", "deadbeef", 4, 1);
         row.modified_time = 1000;
-        let server = server_note(ID_A, "b.md", 2000);
+        let server = server_file(ID_A, "b.md", 2000);
         assert_eq!(
             decide_orphan(&row, Some(&server)),
             OrphanDecision::Resurrect

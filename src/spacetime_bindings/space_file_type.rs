@@ -6,7 +6,7 @@ use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
-pub struct Note {
+pub struct SpaceFile {
     pub id: String,
     pub path: String,
     pub name: String,
@@ -14,39 +14,37 @@ pub struct Note {
     pub folder_path: String,
     pub depth: u32,
     pub extension: String,
-    pub kind: String,
     pub size: u64,
     pub created_time: u64,
     pub modified_time: u64,
     pub db_updated_at: __sdk::Timestamp,
 }
 
-impl __sdk::InModule for Note {
+impl __sdk::InModule for SpaceFile {
     type Module = super::RemoteModule;
 }
 
-/// Column accessor struct for the table `Note`.
+/// Column accessor struct for the table `SpaceFile`.
 ///
 /// Provides typed access to columns for query building.
-pub struct NoteCols {
-    pub id: __sdk::__query_builder::Col<Note, String>,
-    pub path: __sdk::__query_builder::Col<Note, String>,
-    pub name: __sdk::__query_builder::Col<Note, String>,
-    pub content: __sdk::__query_builder::Col<Note, String>,
-    pub folder_path: __sdk::__query_builder::Col<Note, String>,
-    pub depth: __sdk::__query_builder::Col<Note, u32>,
-    pub extension: __sdk::__query_builder::Col<Note, String>,
-    pub kind: __sdk::__query_builder::Col<Note, String>,
-    pub size: __sdk::__query_builder::Col<Note, u64>,
-    pub created_time: __sdk::__query_builder::Col<Note, u64>,
-    pub modified_time: __sdk::__query_builder::Col<Note, u64>,
-    pub db_updated_at: __sdk::__query_builder::Col<Note, __sdk::Timestamp>,
+pub struct SpaceFileCols {
+    pub id: __sdk::__query_builder::Col<SpaceFile, String>,
+    pub path: __sdk::__query_builder::Col<SpaceFile, String>,
+    pub name: __sdk::__query_builder::Col<SpaceFile, String>,
+    pub content: __sdk::__query_builder::Col<SpaceFile, String>,
+    pub folder_path: __sdk::__query_builder::Col<SpaceFile, String>,
+    pub depth: __sdk::__query_builder::Col<SpaceFile, u32>,
+    pub extension: __sdk::__query_builder::Col<SpaceFile, String>,
+    pub size: __sdk::__query_builder::Col<SpaceFile, u64>,
+    pub created_time: __sdk::__query_builder::Col<SpaceFile, u64>,
+    pub modified_time: __sdk::__query_builder::Col<SpaceFile, u64>,
+    pub db_updated_at: __sdk::__query_builder::Col<SpaceFile, __sdk::Timestamp>,
 }
 
-impl __sdk::__query_builder::HasCols for Note {
-    type Cols = NoteCols;
+impl __sdk::__query_builder::HasCols for SpaceFile {
+    type Cols = SpaceFileCols;
     fn cols(table_name: &'static str) -> Self::Cols {
-        NoteCols {
+        SpaceFileCols {
             id: __sdk::__query_builder::Col::new(table_name, "id"),
             path: __sdk::__query_builder::Col::new(table_name, "path"),
             name: __sdk::__query_builder::Col::new(table_name, "name"),
@@ -54,7 +52,6 @@ impl __sdk::__query_builder::HasCols for Note {
             folder_path: __sdk::__query_builder::Col::new(table_name, "folder_path"),
             depth: __sdk::__query_builder::Col::new(table_name, "depth"),
             extension: __sdk::__query_builder::Col::new(table_name, "extension"),
-            kind: __sdk::__query_builder::Col::new(table_name, "kind"),
             size: __sdk::__query_builder::Col::new(table_name, "size"),
             created_time: __sdk::__query_builder::Col::new(table_name, "created_time"),
             modified_time: __sdk::__query_builder::Col::new(table_name, "modified_time"),
@@ -63,19 +60,19 @@ impl __sdk::__query_builder::HasCols for Note {
     }
 }
 
-/// Indexed column accessor struct for the table `Note`.
+/// Indexed column accessor struct for the table `SpaceFile`.
 ///
 /// Provides typed access to indexed columns for query building.
-pub struct NoteIxCols {
-    pub db_updated_at: __sdk::__query_builder::IxCol<Note, __sdk::Timestamp>,
-    pub id: __sdk::__query_builder::IxCol<Note, String>,
-    pub path: __sdk::__query_builder::IxCol<Note, String>,
+pub struct SpaceFileIxCols {
+    pub db_updated_at: __sdk::__query_builder::IxCol<SpaceFile, __sdk::Timestamp>,
+    pub id: __sdk::__query_builder::IxCol<SpaceFile, String>,
+    pub path: __sdk::__query_builder::IxCol<SpaceFile, String>,
 }
 
-impl __sdk::__query_builder::HasIxCols for Note {
-    type IxCols = NoteIxCols;
+impl __sdk::__query_builder::HasIxCols for SpaceFile {
+    type IxCols = SpaceFileIxCols;
     fn ix_cols(table_name: &'static str) -> Self::IxCols {
-        NoteIxCols {
+        SpaceFileIxCols {
             db_updated_at: __sdk::__query_builder::IxCol::new(table_name, "db_updated_at"),
             id: __sdk::__query_builder::IxCol::new(table_name, "id"),
             path: __sdk::__query_builder::IxCol::new(table_name, "path"),
@@ -83,4 +80,4 @@ impl __sdk::__query_builder::HasIxCols for Note {
     }
 }
 
-impl __sdk::__query_builder::CanBeLookupTable for Note {}
+impl __sdk::__query_builder::CanBeLookupTable for SpaceFile {}

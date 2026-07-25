@@ -6,44 +6,49 @@ use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
-pub(super) struct DeleteNoteArgs {
+pub(super) struct UpdateFilePathArgs {
     pub id: String,
+    pub new_path: String,
 }
 
-impl From<DeleteNoteArgs> for super::Reducer {
-    fn from(args: DeleteNoteArgs) -> Self {
-        Self::DeleteNote { id: args.id }
+impl From<UpdateFilePathArgs> for super::Reducer {
+    fn from(args: UpdateFilePathArgs) -> Self {
+        Self::UpdateFilePath {
+            id: args.id,
+            new_path: args.new_path,
+        }
     }
 }
 
-impl __sdk::InModule for DeleteNoteArgs {
+impl __sdk::InModule for UpdateFilePathArgs {
     type Module = super::RemoteModule;
 }
 
 #[allow(non_camel_case_types)]
-/// Extension trait for access to the reducer `delete_note`.
+/// Extension trait for access to the reducer `update_file_path`.
 ///
 /// Implemented for [`super::RemoteReducers`].
-pub trait delete_note {
-    /// Request that the remote module invoke the reducer `delete_note` to run as soon as possible.
+pub trait update_file_path {
+    /// Request that the remote module invoke the reducer `update_file_path` to run as soon as possible.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
-    /// /// Use [`delete_note:delete_note_then`] to run a callback after the reducer completes.
-    fn delete_note(&self, id: String) -> __sdk::Result<()> {
-        self.delete_note_then(id, |_, _| {})
+    /// /// Use [`update_file_path:update_file_path_then`] to run a callback after the reducer completes.
+    fn update_file_path(&self, id: String, new_path: String) -> __sdk::Result<()> {
+        self.update_file_path_then(id, new_path, |_, _| {})
     }
 
-    /// Request that the remote module invoke the reducer `delete_note` to run as soon as possible,
+    /// Request that the remote module invoke the reducer `update_file_path` to run as soon as possible,
     /// registering `callback` to run when we are notified that the reducer completed.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and its status can be observed with the `callback`.
-    fn delete_note_then(
+    fn update_file_path_then(
         &self,
         id: String,
+        new_path: String,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -51,16 +56,17 @@ pub trait delete_note {
     ) -> __sdk::Result<()>;
 }
 
-impl delete_note for super::RemoteReducers {
-    fn delete_note_then(
+impl update_file_path for super::RemoteReducers {
+    fn update_file_path_then(
         &self,
         id: String,
+        new_path: String,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
             + 'static,
     ) -> __sdk::Result<()> {
         self.imp
-            .invoke_reducer_with_callback(DeleteNoteArgs { id }, callback)
+            .invoke_reducer_with_callback(UpdateFilePathArgs { id, new_path }, callback)
     }
 }

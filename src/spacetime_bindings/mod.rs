@@ -7,7 +7,7 @@
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
 pub mod accept_call_reducer;
-pub mod append_to_note_reducer;
+pub mod append_to_file_reducer;
 pub mod audio_frame_table;
 pub mod audio_frame_type;
 pub mod call_session_table;
@@ -17,30 +17,28 @@ pub mod clear_all_reducer;
 pub mod clear_all_sessions_reducer;
 pub mod connected_user_table;
 pub mod connected_user_type;
+pub mod create_file_reducer;
 pub mod create_folder_reducer;
-pub mod create_note_reducer;
+pub mod delete_file_reducer;
 pub mod delete_folder_reducer;
-pub mod delete_note_reducer;
 pub mod delete_session_reducer;
 pub mod edit_message_reducer;
 pub mod end_call_reducer;
 pub mod end_session_reducer;
-pub mod find_replace_in_note_reducer;
+pub mod find_replace_in_file_reducer;
 pub mod folder_table;
 pub mod folder_type;
-pub mod get_recent_notes_reducer;
+pub mod get_recent_files_reducer;
 pub mod heartbeat_reducer;
 pub mod message_image_table;
 pub mod message_image_type;
 pub mod message_table;
 pub mod message_type;
+pub mod move_file_reducer;
 pub mod move_folder_reducer;
-pub mod move_note_reducer;
-pub mod note_table;
-pub mod note_type;
 pub mod permission_request_table;
 pub mod permission_request_type;
-pub mod prepend_to_note_reducer;
+pub mod prepend_to_file_reducer;
 pub mod push_context_usage_reducer;
 pub mod push_image_reducer;
 pub mod push_message_reducer;
@@ -49,7 +47,7 @@ pub mod push_tool_event_reducer;
 pub mod question_request_table;
 pub mod question_request_type;
 pub mod register_session_reducer;
-pub mod rename_note_reducer;
+pub mod rename_file_reducer;
 pub mod request_call_reducer;
 pub mod request_permission_reducer;
 pub mod request_question_reducer;
@@ -62,20 +60,22 @@ pub mod session_activity_type;
 pub mod session_table;
 pub mod session_type;
 pub mod set_display_name_reducer;
+pub mod space_file_table;
+pub mod space_file_type;
 pub mod sweep_old_messages_reducer;
 pub mod tool_event_table;
 pub mod tool_event_type;
-pub mod update_note_content_reducer;
-pub mod update_note_path_reducer;
+pub mod update_file_content_reducer;
+pub mod update_file_path_reducer;
+pub mod upsert_file_reducer;
 pub mod upsert_folder_reducer;
-pub mod upsert_note_reducer;
 pub mod user_profile_table;
 pub mod user_profile_type;
 pub mod video_frame_table;
 pub mod video_frame_type;
 
 pub use accept_call_reducer::accept_call;
-pub use append_to_note_reducer::append_to_note;
+pub use append_to_file_reducer::append_to_file;
 pub use audio_frame_table::*;
 pub use audio_frame_type::AudioFrame;
 pub use call_session_table::*;
@@ -85,30 +85,28 @@ pub use clear_all_reducer::clear_all;
 pub use clear_all_sessions_reducer::clear_all_sessions;
 pub use connected_user_table::*;
 pub use connected_user_type::ConnectedUser;
+pub use create_file_reducer::create_file;
 pub use create_folder_reducer::create_folder;
-pub use create_note_reducer::create_note;
+pub use delete_file_reducer::delete_file;
 pub use delete_folder_reducer::delete_folder;
-pub use delete_note_reducer::delete_note;
 pub use delete_session_reducer::delete_session;
 pub use edit_message_reducer::edit_message;
 pub use end_call_reducer::end_call;
 pub use end_session_reducer::end_session;
-pub use find_replace_in_note_reducer::find_replace_in_note;
+pub use find_replace_in_file_reducer::find_replace_in_file;
 pub use folder_table::*;
 pub use folder_type::Folder;
-pub use get_recent_notes_reducer::get_recent_notes;
+pub use get_recent_files_reducer::get_recent_files;
 pub use heartbeat_reducer::heartbeat;
 pub use message_image_table::*;
 pub use message_image_type::MessageImage;
 pub use message_table::*;
 pub use message_type::Message;
+pub use move_file_reducer::move_file;
 pub use move_folder_reducer::move_folder;
-pub use move_note_reducer::move_note;
-pub use note_table::*;
-pub use note_type::Note;
 pub use permission_request_table::*;
 pub use permission_request_type::PermissionRequest;
-pub use prepend_to_note_reducer::prepend_to_note;
+pub use prepend_to_file_reducer::prepend_to_file;
 pub use push_context_usage_reducer::push_context_usage;
 pub use push_image_reducer::push_image;
 pub use push_message_reducer::push_message;
@@ -117,7 +115,7 @@ pub use push_tool_event_reducer::push_tool_event;
 pub use question_request_table::*;
 pub use question_request_type::QuestionRequest;
 pub use register_session_reducer::register_session;
-pub use rename_note_reducer::rename_note;
+pub use rename_file_reducer::rename_file;
 pub use request_call_reducer::request_call;
 pub use request_permission_reducer::request_permission;
 pub use request_question_reducer::request_question;
@@ -130,13 +128,15 @@ pub use session_activity_type::SessionActivity;
 pub use session_table::*;
 pub use session_type::Session;
 pub use set_display_name_reducer::set_display_name;
+pub use space_file_table::*;
+pub use space_file_type::SpaceFile;
 pub use sweep_old_messages_reducer::sweep_old_messages;
 pub use tool_event_table::*;
 pub use tool_event_type::ToolEvent;
-pub use update_note_content_reducer::update_note_content;
-pub use update_note_path_reducer::update_note_path;
+pub use update_file_content_reducer::update_file_content;
+pub use update_file_path_reducer::update_file_path;
+pub use upsert_file_reducer::upsert_file;
 pub use upsert_folder_reducer::upsert_folder;
-pub use upsert_note_reducer::upsert_note;
 pub use user_profile_table::*;
 pub use user_profile_type::UserProfile;
 pub use video_frame_table::*;
@@ -153,18 +153,13 @@ pub enum Reducer {
     AcceptCall {
         session_id: u64,
     },
-    AppendToNote {
+    AppendToFile {
         path: String,
         content: String,
     },
     ClearAll,
     ClearAllSessions,
-    CreateFolder {
-        path: String,
-        name: String,
-        depth: u32,
-    },
-    CreateNote {
+    CreateFile {
         id: String,
         path: String,
         name: String,
@@ -172,16 +167,20 @@ pub enum Reducer {
         folder_path: String,
         depth: u32,
         extension: String,
-        kind: String,
         size: u64,
         created_time: u64,
         modified_time: u64,
     },
+    CreateFolder {
+        path: String,
+        name: String,
+        depth: u32,
+    },
+    DeleteFile {
+        id: String,
+    },
     DeleteFolder {
         path: String,
-    },
-    DeleteNote {
-        id: String,
     },
     DeleteSession {
         session_id: String,
@@ -196,27 +195,27 @@ pub enum Reducer {
     EndSession {
         session_id: String,
     },
-    FindReplaceInNote {
+    FindReplaceInFile {
         path: String,
         old_text: String,
         new_text: String,
         replace_all: bool,
     },
-    GetRecentNotes {
+    GetRecentFiles {
         limit: u32,
     },
     Heartbeat {
         session_id: String,
     },
+    MoveFile {
+        old_path: String,
+        new_path: String,
+    },
     MoveFolder {
         old_path: String,
         new_path: String,
     },
-    MoveNote {
-        old_path: String,
-        new_path: String,
-    },
-    PrependToNote {
+    PrependToFile {
         path: String,
         content: String,
     },
@@ -254,7 +253,7 @@ pub enum Reducer {
         host: String,
         client_id: String,
     },
-    RenameNote {
+    RenameFile {
         id: String,
         new_path: String,
     },
@@ -299,22 +298,17 @@ pub enum Reducer {
         name: String,
     },
     SweepOldMessages,
-    UpdateNoteContent {
+    UpdateFileContent {
         id: String,
         content: String,
         size: u64,
         modified_time: u64,
     },
-    UpdateNotePath {
+    UpdateFilePath {
         id: String,
         new_path: String,
     },
-    UpsertFolder {
-        path: String,
-        name: String,
-        depth: u32,
-    },
-    UpsertNote {
+    UpsertFile {
         id: String,
         path: String,
         name: String,
@@ -322,10 +316,14 @@ pub enum Reducer {
         folder_path: String,
         depth: u32,
         extension: String,
-        kind: String,
         size: u64,
         created_time: u64,
         modified_time: u64,
+    },
+    UpsertFolder {
+        path: String,
+        name: String,
+        depth: u32,
     },
 }
 
@@ -337,30 +335,30 @@ impl __sdk::Reducer for Reducer {
     fn reducer_name(&self) -> &'static str {
         match self {
             Reducer::AcceptCall { .. } => "accept_call",
-            Reducer::AppendToNote { .. } => "append_to_note",
+            Reducer::AppendToFile { .. } => "append_to_file",
             Reducer::ClearAll => "clear_all",
             Reducer::ClearAllSessions => "clear_all_sessions",
+            Reducer::CreateFile { .. } => "create_file",
             Reducer::CreateFolder { .. } => "create_folder",
-            Reducer::CreateNote { .. } => "create_note",
+            Reducer::DeleteFile { .. } => "delete_file",
             Reducer::DeleteFolder { .. } => "delete_folder",
-            Reducer::DeleteNote { .. } => "delete_note",
             Reducer::DeleteSession { .. } => "delete_session",
             Reducer::EditMessage { .. } => "edit_message",
             Reducer::EndCall { .. } => "end_call",
             Reducer::EndSession { .. } => "end_session",
-            Reducer::FindReplaceInNote { .. } => "find_replace_in_note",
-            Reducer::GetRecentNotes { .. } => "get_recent_notes",
+            Reducer::FindReplaceInFile { .. } => "find_replace_in_file",
+            Reducer::GetRecentFiles { .. } => "get_recent_files",
             Reducer::Heartbeat { .. } => "heartbeat",
+            Reducer::MoveFile { .. } => "move_file",
             Reducer::MoveFolder { .. } => "move_folder",
-            Reducer::MoveNote { .. } => "move_note",
-            Reducer::PrependToNote { .. } => "prepend_to_note",
+            Reducer::PrependToFile { .. } => "prepend_to_file",
             Reducer::PushContextUsage { .. } => "push_context_usage",
             Reducer::PushImage { .. } => "push_image",
             Reducer::PushMessage { .. } => "push_message",
             Reducer::PushStatus { .. } => "push_status",
             Reducer::PushToolEvent { .. } => "push_tool_event",
             Reducer::RegisterSession { .. } => "register_session",
-            Reducer::RenameNote { .. } => "rename_note",
+            Reducer::RenameFile { .. } => "rename_file",
             Reducer::RequestCall { .. } => "request_call",
             Reducer::RequestPermission { .. } => "request_permission",
             Reducer::RequestQuestion { .. } => "request_question",
@@ -370,10 +368,10 @@ impl __sdk::Reducer for Reducer {
             Reducer::SendVideoFrame { .. } => "send_video_frame",
             Reducer::SetDisplayName { .. } => "set_display_name",
             Reducer::SweepOldMessages => "sweep_old_messages",
-            Reducer::UpdateNoteContent { .. } => "update_note_content",
-            Reducer::UpdateNotePath { .. } => "update_note_path",
+            Reducer::UpdateFileContent { .. } => "update_file_content",
+            Reducer::UpdateFilePath { .. } => "update_file_path",
+            Reducer::UpsertFile { .. } => "upsert_file",
             Reducer::UpsertFolder { .. } => "upsert_folder",
-            Reducer::UpsertNote { .. } => "upsert_note",
             _ => unreachable!(),
         }
     }
@@ -385,8 +383,8 @@ impl __sdk::Reducer for Reducer {
                     session_id: session_id.clone(),
                 })
             }
-            Reducer::AppendToNote { path, content } => {
-                __sats::bsatn::to_vec(&append_to_note_reducer::AppendToNoteArgs {
+            Reducer::AppendToFile { path, content } => {
+                __sats::bsatn::to_vec(&append_to_file_reducer::AppendToFileArgs {
                     path: path.clone(),
                     content: content.clone(),
                 })
@@ -395,14 +393,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::ClearAllSessions => {
                 __sats::bsatn::to_vec(&clear_all_sessions_reducer::ClearAllSessionsArgs {})
             }
-            Reducer::CreateFolder { path, name, depth } => {
-                __sats::bsatn::to_vec(&create_folder_reducer::CreateFolderArgs {
-                    path: path.clone(),
-                    name: name.clone(),
-                    depth: depth.clone(),
-                })
-            }
-            Reducer::CreateNote {
+            Reducer::CreateFile {
                 id,
                 path,
                 name,
@@ -410,11 +401,10 @@ impl __sdk::Reducer for Reducer {
                 folder_path,
                 depth,
                 extension,
-                kind,
                 size,
                 created_time,
                 modified_time,
-            } => __sats::bsatn::to_vec(&create_note_reducer::CreateNoteArgs {
+            } => __sats::bsatn::to_vec(&create_file_reducer::CreateFileArgs {
                 id: id.clone(),
                 path: path.clone(),
                 name: name.clone(),
@@ -422,18 +412,24 @@ impl __sdk::Reducer for Reducer {
                 folder_path: folder_path.clone(),
                 depth: depth.clone(),
                 extension: extension.clone(),
-                kind: kind.clone(),
                 size: size.clone(),
                 created_time: created_time.clone(),
                 modified_time: modified_time.clone(),
             }),
+            Reducer::CreateFolder { path, name, depth } => {
+                __sats::bsatn::to_vec(&create_folder_reducer::CreateFolderArgs {
+                    path: path.clone(),
+                    name: name.clone(),
+                    depth: depth.clone(),
+                })
+            }
+            Reducer::DeleteFile { id } => {
+                __sats::bsatn::to_vec(&delete_file_reducer::DeleteFileArgs { id: id.clone() })
+            }
             Reducer::DeleteFolder { path } => {
                 __sats::bsatn::to_vec(&delete_folder_reducer::DeleteFolderArgs {
                     path: path.clone(),
                 })
-            }
-            Reducer::DeleteNote { id } => {
-                __sats::bsatn::to_vec(&delete_note_reducer::DeleteNoteArgs { id: id.clone() })
             }
             Reducer::DeleteSession { session_id } => {
                 __sats::bsatn::to_vec(&delete_session_reducer::DeleteSessionArgs {
@@ -456,19 +452,19 @@ impl __sdk::Reducer for Reducer {
                     session_id: session_id.clone(),
                 })
             }
-            Reducer::FindReplaceInNote {
+            Reducer::FindReplaceInFile {
                 path,
                 old_text,
                 new_text,
                 replace_all,
-            } => __sats::bsatn::to_vec(&find_replace_in_note_reducer::FindReplaceInNoteArgs {
+            } => __sats::bsatn::to_vec(&find_replace_in_file_reducer::FindReplaceInFileArgs {
                 path: path.clone(),
                 old_text: old_text.clone(),
                 new_text: new_text.clone(),
                 replace_all: replace_all.clone(),
             }),
-            Reducer::GetRecentNotes { limit } => {
-                __sats::bsatn::to_vec(&get_recent_notes_reducer::GetRecentNotesArgs {
+            Reducer::GetRecentFiles { limit } => {
+                __sats::bsatn::to_vec(&get_recent_files_reducer::GetRecentFilesArgs {
                     limit: limit.clone(),
                 })
             }
@@ -477,20 +473,20 @@ impl __sdk::Reducer for Reducer {
                     session_id: session_id.clone(),
                 })
             }
+            Reducer::MoveFile { old_path, new_path } => {
+                __sats::bsatn::to_vec(&move_file_reducer::MoveFileArgs {
+                    old_path: old_path.clone(),
+                    new_path: new_path.clone(),
+                })
+            }
             Reducer::MoveFolder { old_path, new_path } => {
                 __sats::bsatn::to_vec(&move_folder_reducer::MoveFolderArgs {
                     old_path: old_path.clone(),
                     new_path: new_path.clone(),
                 })
             }
-            Reducer::MoveNote { old_path, new_path } => {
-                __sats::bsatn::to_vec(&move_note_reducer::MoveNoteArgs {
-                    old_path: old_path.clone(),
-                    new_path: new_path.clone(),
-                })
-            }
-            Reducer::PrependToNote { path, content } => {
-                __sats::bsatn::to_vec(&prepend_to_note_reducer::PrependToNoteArgs {
+            Reducer::PrependToFile { path, content } => {
+                __sats::bsatn::to_vec(&prepend_to_file_reducer::PrependToFileArgs {
                     path: path.clone(),
                     content: content.clone(),
                 })
@@ -556,8 +552,8 @@ impl __sdk::Reducer for Reducer {
                 host: host.clone(),
                 client_id: client_id.clone(),
             }),
-            Reducer::RenameNote { id, new_path } => {
-                __sats::bsatn::to_vec(&rename_note_reducer::RenameNoteArgs {
+            Reducer::RenameFile { id, new_path } => {
+                __sats::bsatn::to_vec(&rename_file_reducer::RenameFileArgs {
                     id: id.clone(),
                     new_path: new_path.clone(),
                 })
@@ -635,31 +631,24 @@ impl __sdk::Reducer for Reducer {
             Reducer::SweepOldMessages => {
                 __sats::bsatn::to_vec(&sweep_old_messages_reducer::SweepOldMessagesArgs {})
             }
-            Reducer::UpdateNoteContent {
+            Reducer::UpdateFileContent {
                 id,
                 content,
                 size,
                 modified_time,
-            } => __sats::bsatn::to_vec(&update_note_content_reducer::UpdateNoteContentArgs {
+            } => __sats::bsatn::to_vec(&update_file_content_reducer::UpdateFileContentArgs {
                 id: id.clone(),
                 content: content.clone(),
                 size: size.clone(),
                 modified_time: modified_time.clone(),
             }),
-            Reducer::UpdateNotePath { id, new_path } => {
-                __sats::bsatn::to_vec(&update_note_path_reducer::UpdateNotePathArgs {
+            Reducer::UpdateFilePath { id, new_path } => {
+                __sats::bsatn::to_vec(&update_file_path_reducer::UpdateFilePathArgs {
                     id: id.clone(),
                     new_path: new_path.clone(),
                 })
             }
-            Reducer::UpsertFolder { path, name, depth } => {
-                __sats::bsatn::to_vec(&upsert_folder_reducer::UpsertFolderArgs {
-                    path: path.clone(),
-                    name: name.clone(),
-                    depth: depth.clone(),
-                })
-            }
-            Reducer::UpsertNote {
+            Reducer::UpsertFile {
                 id,
                 path,
                 name,
@@ -667,11 +656,10 @@ impl __sdk::Reducer for Reducer {
                 folder_path,
                 depth,
                 extension,
-                kind,
                 size,
                 created_time,
                 modified_time,
-            } => __sats::bsatn::to_vec(&upsert_note_reducer::UpsertNoteArgs {
+            } => __sats::bsatn::to_vec(&upsert_file_reducer::UpsertFileArgs {
                 id: id.clone(),
                 path: path.clone(),
                 name: name.clone(),
@@ -679,11 +667,17 @@ impl __sdk::Reducer for Reducer {
                 folder_path: folder_path.clone(),
                 depth: depth.clone(),
                 extension: extension.clone(),
-                kind: kind.clone(),
                 size: size.clone(),
                 created_time: created_time.clone(),
                 modified_time: modified_time.clone(),
             }),
+            Reducer::UpsertFolder { path, name, depth } => {
+                __sats::bsatn::to_vec(&upsert_folder_reducer::UpsertFolderArgs {
+                    path: path.clone(),
+                    name: name.clone(),
+                    depth: depth.clone(),
+                })
+            }
             _ => unreachable!(),
         }
     }
@@ -699,11 +693,11 @@ pub struct DbUpdate {
     folder: __sdk::TableUpdate<Folder>,
     message: __sdk::TableUpdate<Message>,
     message_image: __sdk::TableUpdate<MessageImage>,
-    note: __sdk::TableUpdate<Note>,
     permission_request: __sdk::TableUpdate<PermissionRequest>,
     question_request: __sdk::TableUpdate<QuestionRequest>,
     session: __sdk::TableUpdate<Session>,
     session_activity: __sdk::TableUpdate<SessionActivity>,
+    space_file: __sdk::TableUpdate<SpaceFile>,
     tool_event: __sdk::TableUpdate<ToolEvent>,
     user_profile: __sdk::TableUpdate<UserProfile>,
     video_frame: __sdk::TableUpdate<VideoFrame>,
@@ -733,9 +727,6 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "message_image" => db_update
                     .message_image
                     .append(message_image_table::parse_table_update(table_update)?),
-                "note" => db_update
-                    .note
-                    .append(note_table::parse_table_update(table_update)?),
                 "permission_request" => db_update
                     .permission_request
                     .append(permission_request_table::parse_table_update(table_update)?),
@@ -748,6 +739,9 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "session_activity" => db_update
                     .session_activity
                     .append(session_activity_table::parse_table_update(table_update)?),
+                "space_file" => db_update
+                    .space_file
+                    .append(space_file_table::parse_table_update(table_update)?),
                 "tool_event" => db_update
                     .tool_event
                     .append(tool_event_table::parse_table_update(table_update)?),
@@ -799,9 +793,6 @@ impl __sdk::DbUpdate for DbUpdate {
         diff.message_image = cache
             .apply_diff_to_table::<MessageImage>("message_image", &self.message_image)
             .with_updates_by_pk(|row| &row.message_id);
-        diff.note = cache
-            .apply_diff_to_table::<Note>("note", &self.note)
-            .with_updates_by_pk(|row| &row.id);
         diff.permission_request = cache
             .apply_diff_to_table::<PermissionRequest>(
                 "permission_request",
@@ -817,6 +808,9 @@ impl __sdk::DbUpdate for DbUpdate {
         diff.session_activity = cache
             .apply_diff_to_table::<SessionActivity>("session_activity", &self.session_activity)
             .with_updates_by_pk(|row| &row.session_id);
+        diff.space_file = cache
+            .apply_diff_to_table::<SpaceFile>("space_file", &self.space_file)
+            .with_updates_by_pk(|row| &row.id);
         diff.tool_event = cache
             .apply_diff_to_table::<ToolEvent>("tool_event", &self.tool_event)
             .with_updates_by_pk(|row| &row.id);
@@ -849,9 +843,6 @@ impl __sdk::DbUpdate for DbUpdate {
                 "message_image" => db_update
                     .message_image
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
-                "note" => db_update
-                    .note
-                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "permission_request" => db_update
                     .permission_request
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
@@ -863,6 +854,9 @@ impl __sdk::DbUpdate for DbUpdate {
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "session_activity" => db_update
                     .session_activity
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "space_file" => db_update
+                    .space_file
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "tool_event" => db_update
                     .tool_event
@@ -904,9 +898,6 @@ impl __sdk::DbUpdate for DbUpdate {
                 "message_image" => db_update
                     .message_image
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
-                "note" => db_update
-                    .note
-                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "permission_request" => db_update
                     .permission_request
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -918,6 +909,9 @@ impl __sdk::DbUpdate for DbUpdate {
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "session_activity" => db_update
                     .session_activity
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "space_file" => db_update
+                    .space_file
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "tool_event" => db_update
                     .tool_event
@@ -949,11 +943,11 @@ pub struct AppliedDiff<'r> {
     folder: __sdk::TableAppliedDiff<'r, Folder>,
     message: __sdk::TableAppliedDiff<'r, Message>,
     message_image: __sdk::TableAppliedDiff<'r, MessageImage>,
-    note: __sdk::TableAppliedDiff<'r, Note>,
     permission_request: __sdk::TableAppliedDiff<'r, PermissionRequest>,
     question_request: __sdk::TableAppliedDiff<'r, QuestionRequest>,
     session: __sdk::TableAppliedDiff<'r, Session>,
     session_activity: __sdk::TableAppliedDiff<'r, SessionActivity>,
+    space_file: __sdk::TableAppliedDiff<'r, SpaceFile>,
     tool_event: __sdk::TableAppliedDiff<'r, ToolEvent>,
     user_profile: __sdk::TableAppliedDiff<'r, UserProfile>,
     video_frame: __sdk::TableAppliedDiff<'r, VideoFrame>,
@@ -988,7 +982,6 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
             &self.message_image,
             event,
         );
-        callbacks.invoke_table_row_callbacks::<Note>("note", &self.note, event);
         callbacks.invoke_table_row_callbacks::<PermissionRequest>(
             "permission_request",
             &self.permission_request,
@@ -1005,6 +998,7 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
             &self.session_activity,
             event,
         );
+        callbacks.invoke_table_row_callbacks::<SpaceFile>("space_file", &self.space_file, event);
         callbacks.invoke_table_row_callbacks::<ToolEvent>("tool_event", &self.tool_event, event);
         callbacks.invoke_table_row_callbacks::<UserProfile>(
             "user_profile",
@@ -1678,11 +1672,11 @@ impl __sdk::SpacetimeModule for RemoteModule {
         folder_table::register_table(client_cache);
         message_table::register_table(client_cache);
         message_image_table::register_table(client_cache);
-        note_table::register_table(client_cache);
         permission_request_table::register_table(client_cache);
         question_request_table::register_table(client_cache);
         session_table::register_table(client_cache);
         session_activity_table::register_table(client_cache);
+        space_file_table::register_table(client_cache);
         tool_event_table::register_table(client_cache);
         user_profile_table::register_table(client_cache);
         video_frame_table::register_table(client_cache);
@@ -1694,11 +1688,11 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "folder",
         "message",
         "message_image",
-        "note",
         "permission_request",
         "question_request",
         "session",
         "session_activity",
+        "space_file",
         "tool_event",
         "user_profile",
         "video_frame",

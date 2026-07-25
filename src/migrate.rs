@@ -7,7 +7,7 @@ use walkdir::WalkDir;
 
 use crate::client::SpacetimeClient;
 use crate::journal::{self, Journal};
-use crate::note::Note;
+use crate::space_file::SpaceFile;
 use crate::sanitize::sanitize_path;
 use crate::tracker::ContentTracker;
 
@@ -19,7 +19,7 @@ pub struct MigrationStats {
 }
 
 enum FileOutcome {
-    Stripped(Note),
+    Stripped(SpaceFile),
     Adopted,
     Clean,
 }
@@ -30,18 +30,18 @@ pub fn run(
     tracker: &ContentTracker,
     vault_path: &Path,
 ) -> Result<MigrationStats> {
-    let known_note_id = |path: &str| client.get_note_by_path(path).map(|n| n.id);
-    sweep(journal, vault_path, &known_note_id, |note| {
-        client.upsert_note(note);
-        tracker.update(&note.id, &note.content);
+    let known_file_id = |path: &str| client.get_file_by_path(path).map(|n| n.id);
+    sweep(journal, vault_path, &known_file_id, |file| {
+        client.upsert_file(file);
+        tracker.update(&file.id, &file.content);
     })
 }
 
 fn sweep(
     journal: &Journal,
     vault_path: &Path,
-    known_note_id: &dyn Fn(&str) -> Option<String>,
-    mut on_stripped: impl FnMut(&Note),
+    known_file_id: &dyn Fn(&str) -> Option<String>,
+    mut on_stripped: impl FnMut(&SpaceFile),
 ) -> Result<MigrationStats> {
     let mut stats = MigrationStats {
         stripped: 0,
@@ -60,9 +60,9 @@ fn sweep(
         if !path.is_file() || path.extension().map_or(true, |e| e != "md") {
             continue;
         }
-        match migrate_file(journal, vault_path, path, known_note_id) {
-            Ok(FileOutcome::Stripped(note)) => {
-                on_stripped(&note);
+        match migrate_file(journal, vault_path, path, known_file_id) {
+            Ok(FileOutcome::Stripped(file)) => {
+                on_stripped(&file);
                 stats.stripped += 1;
             }
             Ok(FileOutcome::Adopted) => stats.adopted += 1,
@@ -87,14 +87,14 @@ fn migrate_file(
     journal: &Journal,
     vault_path: &Path,
     abs_path: &Path,
-    known_note_id: &dyn Fn(&str) -> Option<String>,
+    known_file_id: &dyn Fn(&str) -> Option<String>,
 ) -> Result<FileOutcome> {
     let bytes = std::fs::read(abs_path)?;
     let text = String::from_utf8(bytes).context("File is not valid UTF-8")?;
     let rel_path = sanitize_path(&abs_path.strip_prefix(vault_path)?.to_string_lossy());
 
     let Some(file_uuid) = extract_spacetime_id(&text) else {
-        return ensure_row(journal, vault_path, abs_path, &rel_path, known_note_id);
+        return ensure_row(journal, vault_path, abs_path, &rel_path, known_file_id);
     };
 
     let uuid = match journal.by_path(&rel_path)? {
@@ -140,7 +140,7 @@ fn migrate_file(
     )?;
     tracing::info!("Stripped frontmatter identity: {} (ID: {})", rel_path, uuid);
 
-    let note = Note::new(
+    let file = SpaceFile::new(
         uuid,
         rel_path,
         stripped,
@@ -148,7 +148,7 @@ fn migrate_file(
         post.created_time as u64,
         post.modified_time as u64,
     );
-    Ok(FileOutcome::Stripped(note))
+    Ok(FileOutcome::Stripped(file))
 }
 
 fn ensure_row(
@@ -156,12 +156,12 @@ fn ensure_row(
     vault_path: &Path,
     abs_path: &Path,
     rel_path: &str,
-    known_note_id: &dyn Fn(&str) -> Option<String>,
+    known_file_id: &dyn Fn(&str) -> Option<String>,
 ) -> Result<FileOutcome> {
     if journal.by_path(rel_path)?.is_some() {
         return Ok(FileOutcome::Clean);
     }
-    let Some(server_id) = known_note_id(rel_path) else {
+    let Some(server_id) = known_file_id(rel_path) else {
         return Ok(FileOutcome::Clean);
     };
     let record = journal::record_from_disk(vault_path, abs_path, server_id.clone())?;
@@ -312,7 +312,7 @@ mod tests {
     fn strip_preserves_other_user_keys() {
         let (dir, vault, journal) = setup("user-keys");
         let content = format!(
-            "---\ntitle: My Note\nspacetime_id: {}\ntags: [a, b]\n---\n\nbody\n",
+            "---\ntitle: My SpaceFile\nspacetime_id: {}\ntags: [a, b]\n---\n\nbody\n",
             ID_A
         );
         std::fs::write(vault.join("a.md"), &content).unwrap();
@@ -321,7 +321,7 @@ mod tests {
 
         assert_eq!(stats.stripped, 1);
         let on_disk = std::fs::read_to_string(vault.join("a.md")).unwrap();
-        assert_eq!(on_disk, "---\ntitle: My Note\ntags: [a, b]\n---\n\nbody\n");
+        assert_eq!(on_disk, "---\ntitle: My SpaceFile\ntags: [a, b]\n---\n\nbody\n");
         assert_eq!(journal.by_path("a.md").unwrap().unwrap().uuid, ID_A);
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -439,14 +439,14 @@ mod tests {
     }
 
     #[test]
-    fn stripped_note_is_upserted_with_empty_frontmatter() {
+    fn stripped_file_is_upserted_with_empty_frontmatter() {
         let (dir, vault, journal) = setup("upsert");
         let content = format!("---\nspacetime_id: {}\n---\n\nbody\n", ID_A);
         std::fs::write(vault.join("a.md"), &content).unwrap();
 
         let mut upserted = Vec::new();
-        sweep(&journal, &vault, &no_known_id, |note| {
-            upserted.push(note.clone());
+        sweep(&journal, &vault, &no_known_id, |file| {
+            upserted.push(file.clone());
         })
         .unwrap();
 
@@ -455,7 +455,6 @@ mod tests {
         assert_eq!(upserted[0].path, "a.md");
         assert_eq!(upserted[0].content, "body\n");
         assert_eq!(upserted[0].extension, "md");
-        assert_eq!(upserted[0].kind, "md");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -480,7 +479,7 @@ mod tests {
     }
 
     fn straddling_content() -> String {
-        let prefix = "---\ntitle: Migration Note\ntags: [a, b]\n---\n\n";
+        let prefix = "---\ntitle: Migration SpaceFile\ntags: [a, b]\n---\n\n";
         let em_dash = "—";
         let em_dash_start = 1022;
         let pad_before = em_dash_start - prefix.len();
@@ -504,7 +503,7 @@ mod tests {
     #[test]
     fn strategy_1_yaml_spacetime_id_extracted() {
         let id = "abc123-def456";
-        let prefix = format!("---\nspacetime_id: {}\ntitle: Note\n---\n\n", id);
+        let prefix = format!("---\nspacetime_id: {}\ntitle: SpaceFile\n---\n\n", id);
         let content = format!("{}{}—{}", prefix, "x".repeat(1200), "y".repeat(200));
         assert!(content.len() > 1024);
         assert_eq!(extract_spacetime_id(&content), Some(id.to_string()));

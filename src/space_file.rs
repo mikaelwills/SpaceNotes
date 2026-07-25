@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Note {
+pub struct SpaceFile {
     pub id: String,
     pub path: String,
     pub name: String,
@@ -9,7 +9,6 @@ pub struct Note {
     pub folder_path: String,
     pub depth: u32,
     pub extension: String,
-    pub kind: String,
     pub size: u64,
     pub created_time: u64,
     pub modified_time: u64,
@@ -23,15 +22,7 @@ pub fn extension_of(path: &str) -> String {
     }
 }
 
-pub fn kind_of(extension: &str) -> String {
-    if extension == "md" {
-        "md".to_string()
-    } else {
-        "file".to_string()
-    }
-}
-
-impl Note {
+impl SpaceFile {
     pub fn new(
         id: String,
         path: String,
@@ -41,7 +32,6 @@ impl Note {
         modified_time: u64,
     ) -> Self {
         let extension = extension_of(&path);
-        let kind = kind_of(&extension);
 
         let base = path.rsplit('/').next().unwrap_or("");
         let name = match base.rsplit_once('.') {
@@ -64,7 +54,6 @@ impl Note {
             folder_path,
             depth,
             extension,
-            kind,
             size,
             created_time,
             modified_time,

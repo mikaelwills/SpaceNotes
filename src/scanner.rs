@@ -5,7 +5,7 @@ use walkdir::WalkDir;
 
 use crate::folder::Folder;
 use crate::isolation::run_isolated;
-use crate::note::Note;
+use crate::space_file::SpaceFile;
 use crate::sanitize::sanitize_path;
 
 const INGEST_EXTENSIONS: [&str; 6] = ["md", "yaml", "yml", "json", "toml", "txt"];
@@ -17,7 +17,7 @@ pub fn is_ingestible(path: &Path) -> bool {
     }
 }
 
-pub fn read_note_at(vault_path: &Path, abs_path: &Path) -> Result<Option<Note>> {
+pub fn read_file_at(vault_path: &Path, abs_path: &Path) -> Result<Option<SpaceFile>> {
     // Validation
     if !abs_path.exists() || !abs_path.is_file() {
         return Ok(None);
@@ -50,11 +50,11 @@ pub fn read_note_at(vault_path: &Path, abs_path: &Path) -> Result<Option<Note>> 
         .map(|d| d.as_millis() as u64)
         .unwrap_or(modified);
 
-    Ok(Some(Note::new(String::new(), rel_path, content, size, created, modified)))
+    Ok(Some(SpaceFile::new(String::new(), rel_path, content, size, created, modified)))
 }
 
-pub fn scan_notes(vault_path: &Path) -> Result<Vec<Note>> {
-    let mut notes = Vec::new();
+pub fn scan_files(vault_path: &Path) -> Result<Vec<SpaceFile>> {
+    let mut files = Vec::new();
 
     // Optimization: filter_entry prevents descending into hidden directories
     let walker = WalkDir::new(vault_path).into_iter().filter_entry(|e| {
@@ -69,17 +69,17 @@ pub fn scan_notes(vault_path: &Path) -> Result<Vec<Note>> {
             continue;
         }
 
-        let context = format!("scan note {:?}", path);
+        let context = format!("scan file {:?}", path);
         run_isolated(context, || {
-            match read_note_at(vault_path, path) {
-                Ok(Some(note)) => notes.push(note),
+            match read_file_at(vault_path, path) {
+                Ok(Some(file)) => files.push(file),
                 Ok(None) => {}
                 Err(e) => tracing::warn!("Failed to read {:?}: {}", path, e),
             }
         });
     }
 
-    Ok(notes)
+    Ok(files)
 }
 
 pub fn scan_folders(vault_path: &Path) -> Result<Vec<Folder>> {
@@ -120,19 +120,18 @@ mod tests {
     }
 
     #[test]
-    fn scan_returns_all_notes_with_verbatim_content() {
+    fn scan_returns_all_files_with_verbatim_content() {
         let vault = temp_vault("verbatim");
         std::fs::write(vault.join("a.md"), "body of a\n").unwrap();
         std::fs::write(vault.join("b.md"), "body of b\n").unwrap();
 
-        let mut notes = scan_notes(&vault).unwrap();
-        notes.sort_by(|a, b| a.path.cmp(&b.path));
+        let mut files = scan_files(&vault).unwrap();
+        files.sort_by(|a, b| a.path.cmp(&b.path));
 
-        assert_eq!(notes.len(), 2);
-        assert_eq!(notes[0].content, "body of a\n");
-        assert!(notes[0].id.is_empty());
-        assert_eq!(notes[0].extension, "md");
-        assert_eq!(notes[0].kind, "md");
+        assert_eq!(files.len(), 2);
+        assert_eq!(files[0].content, "body of a\n");
+        assert!(files[0].id.is_empty());
+        assert_eq!(files[0].extension, "md");
 
         let _ = std::fs::remove_dir_all(&vault);
     }
@@ -143,32 +142,30 @@ mod tests {
         let content = "---\nspacetime_id: 11111111-1111-1111-1111-111111111111\n---\nbody\n";
         std::fs::write(vault.join("a.md"), content).unwrap();
 
-        let notes = scan_notes(&vault).unwrap();
+        let files = scan_files(&vault).unwrap();
 
-        assert_eq!(notes.len(), 1);
-        assert_eq!(notes[0].content, content);
-        assert!(notes[0].id.is_empty());
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].content, content);
+        assert!(files[0].id.is_empty());
 
         let _ = std::fs::remove_dir_all(&vault);
     }
 
     #[test]
-    fn scan_ingests_non_md_with_generic_kind() {
+    fn scan_ingests_non_md() {
         let vault = temp_vault("non-md");
         std::fs::write(vault.join("config.yaml"), "key: value\n").unwrap();
         std::fs::write(vault.join("data.json"), "{}\n").unwrap();
         std::fs::write(vault.join("ignored.png"), "binary").unwrap();
 
-        let mut notes = scan_notes(&vault).unwrap();
-        notes.sort_by(|a, b| a.path.cmp(&b.path));
+        let mut files = scan_files(&vault).unwrap();
+        files.sort_by(|a, b| a.path.cmp(&b.path));
 
-        assert_eq!(notes.len(), 2);
-        assert_eq!(notes[0].path, "config.yaml");
-        assert_eq!(notes[0].extension, "yaml");
-        assert_eq!(notes[0].kind, "file");
-        assert_eq!(notes[0].content, "key: value\n");
-        assert_eq!(notes[1].extension, "json");
-        assert_eq!(notes[1].kind, "file");
+        assert_eq!(files.len(), 2);
+        assert_eq!(files[0].path, "config.yaml");
+        assert_eq!(files[0].extension, "yaml");
+        assert_eq!(files[0].content, "key: value\n");
+        assert_eq!(files[1].extension, "json");
 
         let _ = std::fs::remove_dir_all(&vault);
     }

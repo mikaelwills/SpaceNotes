@@ -3,7 +3,7 @@ mod folder;
 mod isolation;
 mod journal;
 mod migrate;
-mod note;
+mod space_file;
 mod reconcile;
 mod sanitize;
 mod scanner;
@@ -18,11 +18,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::tracker::ContentTracker;
-use crate::writer::write_note_to_disk;
+use crate::writer::write_file_to_disk;
 
 #[derive(Parser, Debug)]
 #[command(name = "spacenotes")]
-#[command(about = "Sync markdown notes to SpacetimeDB")]
+#[command(about = "Sync markdown files to SpacetimeDB")]
 struct Args {
     #[arg(short, long, env = "VAULT_PATH")]
     vault_path: PathBuf,
@@ -118,106 +118,104 @@ async fn main() -> Result<()> {
 
     run_journal_maintenance(&opened_journal, &absolute_vault_path, &data_dir);
 
-    // Register callback for note updates from server
+    // Register callback for file updates from server
     let vault_clone = absolute_vault_path.clone();
     let tracker_clone = tracker.clone();
     let journal_clone = opened_journal.journal.clone();
-    client.on_note_updated(move |old_note, new_note| {
-        let path_changed = old_note.path != new_note.path;
-        let content_changed = tracker_clone.is_modified(&new_note.id, &new_note.content);
+    client.on_file_updated(move |old_file, new_file| {
+        let path_changed = old_file.path != new_file.path;
+        let content_changed = tracker_clone.is_modified(&new_file.id, &new_file.content);
 
         // Skip if nothing changed (echo from our own update)
         if !path_changed && !content_changed {
-            tracing::debug!("Skipping update echo: {}", new_note.path);
+            tracing::debug!("Skipping update echo: {}", new_file.path);
             return;
         }
 
         // If path changed, delete the old file (this is a rename)
-        if old_note.path != new_note.path {
-            let old_path = vault_clone.join(&old_note.path);
+        if old_file.path != new_file.path {
+            let old_path = vault_clone.join(&old_file.path);
             if old_path.exists() {
                 if let Err(e) = std::fs::remove_file(&old_path) {
-                    tracing::error!("Failed to delete old file {}: {}", old_note.path, e);
+                    tracing::error!("Failed to delete old file {}: {}", old_file.path, e);
                 } else {
-                    tracing::info!("Deleted old file during rename: {}", old_note.path);
+                    tracing::info!("Deleted old file during rename: {}", old_file.path);
                 }
             }
         }
 
-        // Convert DbNote to LocalNote for writer
-        let note = note::Note {
-            id: new_note.id.clone(),
-            path: new_note.path.clone(),
-            name: new_note.name.clone(),
-            content: new_note.content.clone(),
-            folder_path: new_note.folder_path.clone(),
-            depth: new_note.depth,
-            extension: new_note.extension.clone(),
-            kind: new_note.kind.clone(),
-            size: new_note.size,
-            created_time: new_note.created_time,
-            modified_time: new_note.modified_time,
+        // Convert DbSpaceFile to LocalSpaceFile for writer
+        let file = space_file::SpaceFile {
+            id: new_file.id.clone(),
+            path: new_file.path.clone(),
+            name: new_file.name.clone(),
+            content: new_file.content.clone(),
+            folder_path: new_file.folder_path.clone(),
+            depth: new_file.depth,
+            extension: new_file.extension.clone(),
+            size: new_file.size,
+            created_time: new_file.created_time,
+            modified_time: new_file.modified_time,
         };
 
-        tracker_clone.update(&note.id, &note.content);
-        if let Err(e) = write_note_to_disk(&vault_clone, &note) {
-            tracing::error!("Failed to write {}: {}", note.path, e);
+        tracker_clone.update(&file.id, &file.content);
+        if let Err(e) = write_file_to_disk(&vault_clone, &file) {
+            tracing::error!("Failed to write {}: {}", file.path, e);
         } else {
-            record_note_in_journal(&journal_clone, &vault_clone, &note);
-            tracing::info!("Downloaded update: {}", note.path);
+            record_file_in_journal(&journal_clone, &vault_clone, &file);
+            tracing::info!("Downloaded update: {}", file.path);
         }
     });
 
-    // Register callback for note inserts from server
+    // Register callback for file inserts from server
     let vault_clone = absolute_vault_path.clone();
     let tracker_clone = tracker.clone();
     let journal_clone = opened_journal.journal.clone();
-    client.on_note_inserted(move |db_note| {
+    client.on_file_inserted(move |db_file| {
         // Skip if we already have this content (echo from our own upload)
-        if !tracker_clone.is_modified(&db_note.id, &db_note.content) {
-            tracing::debug!("Skipping insert echo: {}", db_note.path);
+        if !tracker_clone.is_modified(&db_file.id, &db_file.content) {
+            tracing::debug!("Skipping insert echo: {}", db_file.path);
             return;
         }
 
-        let note = note::Note {
-            id: db_note.id.clone(),
-            path: db_note.path.clone(),
-            name: db_note.name.clone(),
-            content: db_note.content.clone(),
-            folder_path: db_note.folder_path.clone(),
-            depth: db_note.depth,
-            extension: db_note.extension.clone(),
-            kind: db_note.kind.clone(),
-            size: db_note.size,
-            created_time: db_note.created_time,
-            modified_time: db_note.modified_time,
+        let file = space_file::SpaceFile {
+            id: db_file.id.clone(),
+            path: db_file.path.clone(),
+            name: db_file.name.clone(),
+            content: db_file.content.clone(),
+            folder_path: db_file.folder_path.clone(),
+            depth: db_file.depth,
+            extension: db_file.extension.clone(),
+            size: db_file.size,
+            created_time: db_file.created_time,
+            modified_time: db_file.modified_time,
         };
 
-        tracker_clone.update(&note.id, &note.content);
-        if let Err(e) = write_note_to_disk(&vault_clone, &note) {
-            tracing::error!("Failed to write {}: {}", note.path, e);
+        tracker_clone.update(&file.id, &file.content);
+        if let Err(e) = write_file_to_disk(&vault_clone, &file) {
+            tracing::error!("Failed to write {}: {}", file.path, e);
         } else {
-            record_note_in_journal(&journal_clone, &vault_clone, &note);
-            tracing::info!("Downloaded new: {}", note.path);
+            record_file_in_journal(&journal_clone, &vault_clone, &file);
+            tracing::info!("Downloaded new: {}", file.path);
         }
     });
 
-    // Register callback for note deletions from server
+    // Register callback for file deletions from server
     let vault_clone = absolute_vault_path.clone();
     let tracker_clone = tracker.clone();
     let journal_clone = opened_journal.journal.clone();
-    client.on_note_deleted(move |old_note| {
-        let path = vault_clone.join(&old_note.path);
+    client.on_file_deleted(move |old_file| {
+        let path = vault_clone.join(&old_file.path);
         if path.exists() {
             if let Err(e) = std::fs::remove_file(&path) {
-                tracing::error!("Failed to delete {}: {}", old_note.path, e);
+                tracing::error!("Failed to delete {}: {}", old_file.path, e);
                 return;
             }
-            tracker_clone.remove(&old_note.id);
-            tracing::info!("Deleted local file: {}", old_note.path);
+            tracker_clone.remove(&old_file.id);
+            tracing::info!("Deleted local file: {}", old_file.path);
         }
-        if let Err(e) = journal_clone.tombstone(&old_note.id, journal::now_ms()) {
-            tracing::error!("Journal tombstone failed for {}: {}", old_note.path, e);
+        if let Err(e) = journal_clone.tombstone(&old_file.id, journal::now_ms()) {
+            tracing::error!("Journal tombstone failed for {}: {}", old_file.path, e);
         }
     });
 
@@ -396,15 +394,15 @@ fn move_corrupt_journal_aside(db_path: &Path) {
     }
 }
 
-fn record_note_in_journal(journal: &journal::Journal, vault_path: &Path, note: &note::Note) {
-    let abs = vault_path.join(&note.path);
-    match journal::record_from_disk(vault_path, &abs, note.id.clone()) {
+fn record_file_in_journal(journal: &journal::Journal, vault_path: &Path, file: &space_file::SpaceFile) {
+    let abs = vault_path.join(&file.path);
+    match journal::record_from_disk(vault_path, &abs, file.id.clone()) {
         Ok(record) => {
             if let Err(e) = journal.observe(&record, "create") {
                 tracing::error!("Journal record failed for {}: {}", record.path, e);
             }
         }
-        Err(e) => tracing::error!("Journal record failed for {}: {}", note.path, e),
+        Err(e) => tracing::error!("Journal record failed for {}: {}", file.path, e),
     }
 }
 

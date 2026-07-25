@@ -1,14 +1,14 @@
 use anyhow::Result;
 use std::path::Path;
 
-use crate::note::Note;
+use crate::space_file::SpaceFile;
 
-pub fn write_note_to_disk(vault_root: &Path, note: &Note) -> Result<()> {
-    let file_path = vault_root.join(&note.path);
+pub fn write_file_to_disk(vault_root: &Path, file: &SpaceFile) -> Result<()> {
+    let file_path = vault_root.join(&file.path);
 
     // Security check (prevent writing outside vault)
     if !file_path.starts_with(vault_root) {
-        anyhow::bail!("Security violation: Path {:?} is outside vault", note.path);
+        anyhow::bail!("Security violation: Path {:?} is outside vault", file.path);
     }
 
     // Ensure parent folder exists
@@ -19,15 +19,15 @@ pub fn write_note_to_disk(vault_root: &Path, note: &Note) -> Result<()> {
     // ATOMIC WRITE (Write to tmp -> Rename)
     // This guarantees we never have a half-written file if the app crashes
     let tmp_path = file_path.with_extension("tmp");
-    std::fs::write(&tmp_path, &note.content)?;
+    std::fs::write(&tmp_path, &file.content)?;
     std::fs::rename(&tmp_path, &file_path)?;
 
     // Sync Timestamp
     // Sets the file modification time to match the Server's time
     // This helps "Startup Reconciliation" logic significantly
     let mtime = filetime::FileTime::from_unix_time(
-        (note.modified_time / 1000) as i64,
-        ((note.modified_time % 1000) * 1_000_000) as u32,
+        (file.modified_time / 1000) as i64,
+        ((file.modified_time % 1000) * 1_000_000) as u32,
     );
     let _ = filetime::set_file_mtime(&file_path, mtime);
 
@@ -53,7 +53,7 @@ mod tests {
     #[test]
     fn download_writes_content_verbatim() {
         let vault = temp_vault("verbatim");
-        let note = Note::new(
+        let file = SpaceFile::new(
             "11111111-1111-1111-1111-111111111111".to_string(),
             "a.md".to_string(),
             "verbatim body\nno identity injected\n".to_string(),
@@ -62,10 +62,10 @@ mod tests {
             1_600_000_000_000,
         );
 
-        write_note_to_disk(&vault, &note).unwrap();
+        write_file_to_disk(&vault, &file).unwrap();
 
         let on_disk = std::fs::read_to_string(vault.join("a.md")).unwrap();
-        assert_eq!(on_disk, note.content);
+        assert_eq!(on_disk, file.content);
         let metadata = std::fs::metadata(vault.join("a.md")).unwrap();
         let mtime = filetime::FileTime::from_last_modification_time(&metadata);
         assert_eq!(mtime.unix_seconds(), 1_600_000_000);

@@ -6,7 +6,7 @@ use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
-pub(super) struct CreateNoteArgs {
+pub(super) struct CreateFileArgs {
     pub id: String,
     pub path: String,
     pub name: String,
@@ -14,15 +14,14 @@ pub(super) struct CreateNoteArgs {
     pub folder_path: String,
     pub depth: u32,
     pub extension: String,
-    pub kind: String,
     pub size: u64,
     pub created_time: u64,
     pub modified_time: u64,
 }
 
-impl From<CreateNoteArgs> for super::Reducer {
-    fn from(args: CreateNoteArgs) -> Self {
-        Self::CreateNote {
+impl From<CreateFileArgs> for super::Reducer {
+    fn from(args: CreateFileArgs) -> Self {
+        Self::CreateFile {
             id: args.id,
             path: args.path,
             name: args.name,
@@ -30,7 +29,6 @@ impl From<CreateNoteArgs> for super::Reducer {
             folder_path: args.folder_path,
             depth: args.depth,
             extension: args.extension,
-            kind: args.kind,
             size: args.size,
             created_time: args.created_time,
             modified_time: args.modified_time,
@@ -38,22 +36,22 @@ impl From<CreateNoteArgs> for super::Reducer {
     }
 }
 
-impl __sdk::InModule for CreateNoteArgs {
+impl __sdk::InModule for CreateFileArgs {
     type Module = super::RemoteModule;
 }
 
 #[allow(non_camel_case_types)]
-/// Extension trait for access to the reducer `create_note`.
+/// Extension trait for access to the reducer `create_file`.
 ///
 /// Implemented for [`super::RemoteReducers`].
-pub trait create_note {
-    /// Request that the remote module invoke the reducer `create_note` to run as soon as possible.
+pub trait create_file {
+    /// Request that the remote module invoke the reducer `create_file` to run as soon as possible.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
-    /// /// Use [`create_note:create_note_then`] to run a callback after the reducer completes.
-    fn create_note(
+    /// /// Use [`create_file:create_file_then`] to run a callback after the reducer completes.
+    fn create_file(
         &self,
         id: String,
         path: String,
@@ -62,12 +60,11 @@ pub trait create_note {
         folder_path: String,
         depth: u32,
         extension: String,
-        kind: String,
         size: u64,
         created_time: u64,
         modified_time: u64,
     ) -> __sdk::Result<()> {
-        self.create_note_then(
+        self.create_file_then(
             id,
             path,
             name,
@@ -75,7 +72,6 @@ pub trait create_note {
             folder_path,
             depth,
             extension,
-            kind,
             size,
             created_time,
             modified_time,
@@ -83,13 +79,13 @@ pub trait create_note {
         )
     }
 
-    /// Request that the remote module invoke the reducer `create_note` to run as soon as possible,
+    /// Request that the remote module invoke the reducer `create_file` to run as soon as possible,
     /// registering `callback` to run when we are notified that the reducer completed.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and its status can be observed with the `callback`.
-    fn create_note_then(
+    fn create_file_then(
         &self,
         id: String,
         path: String,
@@ -98,7 +94,6 @@ pub trait create_note {
         folder_path: String,
         depth: u32,
         extension: String,
-        kind: String,
         size: u64,
         created_time: u64,
         modified_time: u64,
@@ -109,8 +104,8 @@ pub trait create_note {
     ) -> __sdk::Result<()>;
 }
 
-impl create_note for super::RemoteReducers {
-    fn create_note_then(
+impl create_file for super::RemoteReducers {
+    fn create_file_then(
         &self,
         id: String,
         path: String,
@@ -119,7 +114,6 @@ impl create_note for super::RemoteReducers {
         folder_path: String,
         depth: u32,
         extension: String,
-        kind: String,
         size: u64,
         created_time: u64,
         modified_time: u64,
@@ -129,7 +123,7 @@ impl create_note for super::RemoteReducers {
             + 'static,
     ) -> __sdk::Result<()> {
         self.imp.invoke_reducer_with_callback(
-            CreateNoteArgs {
+            CreateFileArgs {
                 id,
                 path,
                 name,
@@ -137,7 +131,6 @@ impl create_note for super::RemoteReducers {
                 folder_path,
                 depth,
                 extension,
-                kind,
                 size,
                 created_time,
                 modified_time,

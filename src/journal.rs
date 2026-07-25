@@ -16,7 +16,6 @@ const SCHEMA_V1: &str = "
 CREATE TABLE IF NOT EXISTS files (
   uuid          TEXT PRIMARY KEY,
   path          TEXT NOT NULL,
-  kind          TEXT NOT NULL DEFAULT 'md' CHECK (kind IN ('md','file')),
   content_hash  TEXT NOT NULL,
   size          INTEGER NOT NULL,
   device        INTEGER,
@@ -40,15 +39,14 @@ CREATE TABLE IF NOT EXISTS events (
 );
 ";
 
-const SELECT_FILES: &str = "SELECT uuid, path, kind, content_hash, size, device, inode, \
+const SELECT_FILES: &str = "SELECT uuid, path, content_hash, size, device, inode, \
      created_time, modified_time, last_seen_at, deleted_at FROM files";
 
-const UPSERT_FILE: &str = "INSERT INTO files (uuid, path, kind, content_hash, size, device, inode, \
+const UPSERT_FILE: &str = "INSERT INTO files (uuid, path, content_hash, size, device, inode, \
      created_time, modified_time, last_seen_at, deleted_at) \
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, NULL) \
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL) \
      ON CONFLICT(uuid) DO UPDATE SET \
        path = excluded.path, \
-       kind = excluded.kind, \
        content_hash = excluded.content_hash, \
        size = excluded.size, \
        device = excluded.device, \
@@ -63,7 +61,6 @@ const UPSERT_FILE: &str = "INSERT INTO files (uuid, path, kind, content_hash, si
 pub struct FileRecord {
     pub uuid: String,
     pub path: String,
-    pub kind: String,
     pub content_hash: String,
     pub size: i64,
     pub device: Option<i64>,
@@ -426,7 +423,6 @@ fn execute_upsert(conn: &Connection, record: &FileRecord) -> Result<()> {
         params![
             record.uuid,
             record.path,
-            record.kind,
             record.content_hash,
             record.size,
             record.device,
@@ -468,15 +464,14 @@ fn row_to_record(row: &rusqlite::Row) -> rusqlite::Result<FileRecord> {
     Ok(FileRecord {
         uuid: row.get(0)?,
         path: row.get(1)?,
-        kind: row.get(2)?,
-        content_hash: row.get(3)?,
-        size: row.get(4)?,
-        device: row.get(5)?,
-        inode: row.get(6)?,
-        created_time: row.get(7)?,
-        modified_time: row.get(8)?,
-        last_seen_at: row.get(9)?,
-        deleted_at: row.get(10)?,
+        content_hash: row.get(2)?,
+        size: row.get(3)?,
+        device: row.get(4)?,
+        inode: row.get(5)?,
+        created_time: row.get(6)?,
+        modified_time: row.get(7)?,
+        last_seen_at: row.get(8)?,
+        deleted_at: row.get(9)?,
     })
 }
 
@@ -529,12 +524,10 @@ fn build_record(
         .map(|d| d.as_millis() as i64)
         .unwrap_or(modified);
     let (device, inode) = device_inode(&metadata);
-    let kind = crate::note::kind_of(&crate::note::extension_of(&rel_path));
 
     Ok(FileRecord {
         uuid,
         path: rel_path,
-        kind,
         content_hash: hash_bytes(bytes),
         size: metadata.len() as i64,
         device,
@@ -573,7 +566,7 @@ mod tests {
         dir
     }
 
-    fn write_note(vault: &Path, file: &str) -> Vec<u8> {
+    fn write_file(vault: &Path, file: &str) -> Vec<u8> {
         let content = format!("body of {}\n", file);
         std::fs::write(vault.join(file), &content).unwrap();
         content.into_bytes()
@@ -592,14 +585,13 @@ mod tests {
         let dir = temp_dir("observe");
         let vault = dir.join("vault");
         std::fs::create_dir_all(&vault).unwrap();
-        let bytes_a = write_note(&vault, "a.md");
+        let bytes_a = write_file(&vault, "a.md");
 
         let journal = Journal::open(&dir.join("journal.db")).unwrap();
         observe_file(&journal, &vault, "a.md", ID_A);
 
         let record = journal.by_path("a.md").unwrap().unwrap();
         assert_eq!(record.uuid, ID_A);
-        assert_eq!(record.kind, "md");
         assert_eq!(record.content_hash, hash_bytes(&bytes_a));
         assert_eq!(record.size, bytes_a.len() as i64);
         assert!(record.inode.is_some());
@@ -612,7 +604,7 @@ mod tests {
         let dir = temp_dir("idempotent");
         let vault = dir.join("vault");
         std::fs::create_dir_all(&vault).unwrap();
-        write_note(&vault, "a.md");
+        write_file(&vault, "a.md");
 
         let journal = Journal::open(&dir.join("journal.db")).unwrap();
         observe_file(&journal, &vault, "a.md", ID_A);
@@ -629,7 +621,7 @@ mod tests {
         let dir = temp_dir("displace");
         let vault = dir.join("vault");
         std::fs::create_dir_all(&vault).unwrap();
-        write_note(&vault, "a.md");
+        write_file(&vault, "a.md");
 
         let journal = Journal::open(&dir.join("journal.db")).unwrap();
         observe_file(&journal, &vault, "a.md", ID_A);
@@ -647,8 +639,8 @@ mod tests {
         let dir = temp_dir("backup");
         let vault = dir.join("vault");
         std::fs::create_dir_all(&vault).unwrap();
-        write_note(&vault, "a.md");
-        write_note(&vault, "b.md");
+        write_file(&vault, "a.md");
+        write_file(&vault, "b.md");
 
         let journal = Journal::open(&dir.join("journal.db")).unwrap();
         observe_file(&journal, &vault, "a.md", ID_A);
@@ -680,7 +672,7 @@ mod tests {
         let dir = temp_dir("rekey");
         let vault = dir.join("vault");
         std::fs::create_dir_all(&vault).unwrap();
-        write_note(&vault, "a.md");
+        write_file(&vault, "a.md");
 
         let journal = Journal::open(&dir.join("journal.db")).unwrap();
         observe_file(&journal, &vault, "a.md", ID_A);

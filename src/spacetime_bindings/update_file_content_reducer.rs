@@ -6,101 +6,60 @@ use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
-pub(super) struct UpsertNoteArgs {
+pub(super) struct UpdateFileContentArgs {
     pub id: String,
-    pub path: String,
-    pub name: String,
     pub content: String,
-    pub folder_path: String,
-    pub depth: u32,
-    pub extension: String,
-    pub kind: String,
     pub size: u64,
-    pub created_time: u64,
     pub modified_time: u64,
 }
 
-impl From<UpsertNoteArgs> for super::Reducer {
-    fn from(args: UpsertNoteArgs) -> Self {
-        Self::UpsertNote {
+impl From<UpdateFileContentArgs> for super::Reducer {
+    fn from(args: UpdateFileContentArgs) -> Self {
+        Self::UpdateFileContent {
             id: args.id,
-            path: args.path,
-            name: args.name,
             content: args.content,
-            folder_path: args.folder_path,
-            depth: args.depth,
-            extension: args.extension,
-            kind: args.kind,
             size: args.size,
-            created_time: args.created_time,
             modified_time: args.modified_time,
         }
     }
 }
 
-impl __sdk::InModule for UpsertNoteArgs {
+impl __sdk::InModule for UpdateFileContentArgs {
     type Module = super::RemoteModule;
 }
 
 #[allow(non_camel_case_types)]
-/// Extension trait for access to the reducer `upsert_note`.
+/// Extension trait for access to the reducer `update_file_content`.
 ///
 /// Implemented for [`super::RemoteReducers`].
-pub trait upsert_note {
-    /// Request that the remote module invoke the reducer `upsert_note` to run as soon as possible.
+pub trait update_file_content {
+    /// Request that the remote module invoke the reducer `update_file_content` to run as soon as possible.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
-    /// /// Use [`upsert_note:upsert_note_then`] to run a callback after the reducer completes.
-    fn upsert_note(
+    /// /// Use [`update_file_content:update_file_content_then`] to run a callback after the reducer completes.
+    fn update_file_content(
         &self,
         id: String,
-        path: String,
-        name: String,
         content: String,
-        folder_path: String,
-        depth: u32,
-        extension: String,
-        kind: String,
         size: u64,
-        created_time: u64,
         modified_time: u64,
     ) -> __sdk::Result<()> {
-        self.upsert_note_then(
-            id,
-            path,
-            name,
-            content,
-            folder_path,
-            depth,
-            extension,
-            kind,
-            size,
-            created_time,
-            modified_time,
-            |_, _| {},
-        )
+        self.update_file_content_then(id, content, size, modified_time, |_, _| {})
     }
 
-    /// Request that the remote module invoke the reducer `upsert_note` to run as soon as possible,
+    /// Request that the remote module invoke the reducer `update_file_content` to run as soon as possible,
     /// registering `callback` to run when we are notified that the reducer completed.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and its status can be observed with the `callback`.
-    fn upsert_note_then(
+    fn update_file_content_then(
         &self,
         id: String,
-        path: String,
-        name: String,
         content: String,
-        folder_path: String,
-        depth: u32,
-        extension: String,
-        kind: String,
         size: u64,
-        created_time: u64,
         modified_time: u64,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
@@ -109,19 +68,12 @@ pub trait upsert_note {
     ) -> __sdk::Result<()>;
 }
 
-impl upsert_note for super::RemoteReducers {
-    fn upsert_note_then(
+impl update_file_content for super::RemoteReducers {
+    fn update_file_content_then(
         &self,
         id: String,
-        path: String,
-        name: String,
         content: String,
-        folder_path: String,
-        depth: u32,
-        extension: String,
-        kind: String,
         size: u64,
-        created_time: u64,
         modified_time: u64,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
@@ -129,17 +81,10 @@ impl upsert_note for super::RemoteReducers {
             + 'static,
     ) -> __sdk::Result<()> {
         self.imp.invoke_reducer_with_callback(
-            UpsertNoteArgs {
+            UpdateFileContentArgs {
                 id,
-                path,
-                name,
                 content,
-                folder_path,
-                depth,
-                extension,
-                kind,
                 size,
-                created_time,
                 modified_time,
             },
             callback,
