@@ -93,8 +93,21 @@ fn migrate_file(
     let text = String::from_utf8(bytes).context("File is not valid UTF-8")?;
     let rel_path = sanitize_path(&abs_path.strip_prefix(vault_path)?.to_string_lossy());
 
-    let Some(uuid) = extract_spacetime_id(&text) else {
+    let Some(file_uuid) = extract_spacetime_id(&text) else {
         return ensure_row(journal, vault_path, abs_path, &rel_path, known_note_id);
+    };
+
+    let uuid = match journal.by_path(&rel_path)? {
+        Some(existing) if existing.uuid != file_uuid => {
+            tracing::warn!(
+                "Path {} already owned by {} in journal; keeping incumbent, discarding file frontmatter uuid {}",
+                rel_path,
+                existing.uuid,
+                file_uuid
+            );
+            existing.uuid
+        }
+        _ => file_uuid,
     };
 
     let record = journal::record_from_disk(vault_path, abs_path, uuid.clone())?;
