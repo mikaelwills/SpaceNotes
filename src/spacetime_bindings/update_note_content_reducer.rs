@@ -9,7 +9,6 @@ use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 pub(super) struct UpdateNoteContentArgs {
     pub id: String,
     pub content: String,
-    pub frontmatter: String,
     pub size: u64,
     pub modified_time: u64,
 }
@@ -19,7 +18,6 @@ impl From<UpdateNoteContentArgs> for super::Reducer {
         Self::UpdateNoteContent {
             id: args.id,
             content: args.content,
-            frontmatter: args.frontmatter,
             size: args.size,
             modified_time: args.modified_time,
         }
@@ -46,7 +44,6 @@ pub trait update_note_content {
         &self,
         id: String,
         content: String,
-        frontmatter: String,
         size: u64,
         modified_time: u64,
     ) -> __sdk::Result<()>;
@@ -59,7 +56,7 @@ pub trait update_note_content {
     /// to cancel the callback.
     fn on_update_note_content(
         &self,
-        callback: impl FnMut(&super::ReducerEventContext, &String, &String, &String, &u64, &u64)
+        callback: impl FnMut(&super::ReducerEventContext, &String, &String, &u64, &u64)
             + Send
             + 'static,
     ) -> UpdateNoteContentCallbackId;
@@ -73,7 +70,6 @@ impl update_note_content for super::RemoteReducers {
         &self,
         id: String,
         content: String,
-        frontmatter: String,
         size: u64,
         modified_time: u64,
     ) -> __sdk::Result<()> {
@@ -82,7 +78,6 @@ impl update_note_content for super::RemoteReducers {
             UpdateNoteContentArgs {
                 id,
                 content,
-                frontmatter,
                 size,
                 modified_time,
             },
@@ -90,7 +85,7 @@ impl update_note_content for super::RemoteReducers {
     }
     fn on_update_note_content(
         &self,
-        mut callback: impl FnMut(&super::ReducerEventContext, &String, &String, &String, &u64, &u64)
+        mut callback: impl FnMut(&super::ReducerEventContext, &String, &String, &u64, &u64)
             + Send
             + 'static,
     ) -> UpdateNoteContentCallbackId {
@@ -104,7 +99,6 @@ impl update_note_content for super::RemoteReducers {
                                 super::Reducer::UpdateNoteContent {
                                     id,
                                     content,
-                                    frontmatter,
                                     size,
                                     modified_time,
                                 },
@@ -115,7 +109,7 @@ impl update_note_content for super::RemoteReducers {
                 else {
                     unreachable!()
                 };
-                callback(ctx, id, content, frontmatter, size, modified_time)
+                callback(ctx, id, content, size, modified_time)
             }),
         ))
     }

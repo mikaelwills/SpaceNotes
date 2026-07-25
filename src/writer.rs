@@ -57,7 +57,6 @@ mod tests {
             "11111111-1111-1111-1111-111111111111".to_string(),
             "a.md".to_string(),
             "verbatim body\nno identity injected\n".to_string(),
-            "{\"title\":\"ignored\"}".to_string(),
             36,
             1_600_000_000_000,
             1_600_000_000_000,

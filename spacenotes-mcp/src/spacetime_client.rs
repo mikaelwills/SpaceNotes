@@ -169,7 +169,6 @@ impl SpacetimeClient {
                 name: note.name.clone(),
                 content: note.content.clone(),
                 folder_path: note.folder_path.clone(),
-                frontmatter: note.frontmatter.clone(),
             });
 
         Ok(note)
@@ -190,7 +189,6 @@ impl SpacetimeClient {
                 name: note.name.clone(),
                 content: note.content.clone(),
                 folder_path: note.folder_path.clone(),
-                frontmatter: note.frontmatter.clone(),
             });
 
         Ok(note)
@@ -213,7 +211,6 @@ impl SpacetimeClient {
                         name: note.name.clone(),
                         content: note.content.clone(),
                         folder_path: note.folder_path.clone(),
-                        frontmatter: note.frontmatter.clone(),
                     })
             })
             .collect();
@@ -239,7 +236,6 @@ impl SpacetimeClient {
                         name: note.name.clone(),
                         content: note.content.clone(),
                         folder_path: note.folder_path.clone(),
-                        frontmatter: note.frontmatter.clone(),
                     })
             })
             .collect();
@@ -259,6 +255,8 @@ impl SpacetimeClient {
         tracing::info!("Creating note: {} at {}", name, path);
 
         let depth = path.matches('/').count() as u32;
+        let extension = extension_of(&path);
+        let kind = kind_of(&extension);
         let size = content.len() as u64;
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -272,7 +270,8 @@ impl SpacetimeClient {
             content,
             folder_path,
             depth,
-            String::new(), // frontmatter
+            extension,
+            kind,
             size,
             now,
             now,
@@ -293,7 +292,6 @@ impl SpacetimeClient {
         self.conn.reducers().update_note_content(
             id,
             content,
-            String::new(), // frontmatter - keep existing or empty
             size,
             now,
         )?;
@@ -606,7 +604,22 @@ pub struct FullNote {
     pub name: String,
     pub content: String,
     pub folder_path: String,
-    pub frontmatter: String,
+}
+
+fn extension_of(path: &str) -> String {
+    let base = path.rsplit('/').next().unwrap_or(path);
+    match base.rsplit_once('.') {
+        Some((stem, ext)) if !stem.is_empty() => ext.to_lowercase(),
+        _ => String::new(),
+    }
+}
+
+fn kind_of(extension: &str) -> String {
+    if extension == "md" {
+        "md".to_string()
+    } else {
+        "file".to_string()
+    }
 }
 
 fn merge_ranges(ranges: &[(usize, usize)]) -> Vec<(usize, usize)> {

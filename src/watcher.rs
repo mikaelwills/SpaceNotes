@@ -38,8 +38,8 @@ fn is_ignored(path: &Path) -> bool {
     })
 }
 
-fn is_md(path: &Path) -> bool {
-    path.extension().map_or(false, |e| e == "md")
+fn is_ingestible(path: &Path) -> bool {
+    crate::scanner::is_ingestible(path)
 }
 
 fn rel_path(vault_path: &Path, abs: &Path) -> Option<String> {
@@ -97,7 +97,7 @@ fn rename_both(ctx: &EventContext, from: &Path, to: &Path) -> Vec<Action> {
     if to.is_dir() {
         return rename_folder(ctx, from_rel, to_rel);
     }
-    match (is_md(from), is_md(to)) {
+    match (is_ingestible(from), is_ingestible(to)) {
         (true, true) => rename_md(ctx, &from_rel, to),
         (true, false) => delete_md(ctx, from_rel),
         (false, true) => handle_present(ctx, to),
@@ -173,7 +173,7 @@ fn handle_present(ctx: &EventContext, abs: &Path) -> Vec<Action> {
         };
         return vec![Action::UpsertFolder(rel)];
     }
-    if is_md(abs) {
+    if is_ingestible(abs) {
         return upsert_md(ctx, abs);
     }
     Vec::new()
@@ -186,7 +186,7 @@ fn handle_absent(ctx: &EventContext, abs: &Path) -> Vec<Action> {
     let Some(rel) = rel_path(ctx.vault_path, abs) else {
         return Vec::new();
     };
-    if is_md(abs) {
+    if is_ingestible(abs) {
         return delete_md(ctx, rel);
     }
     if abs.extension().is_none() {

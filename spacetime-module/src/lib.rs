@@ -23,7 +23,8 @@ pub struct Note {
     pub content: String,
     pub folder_path: String, // "Projects/"
     pub depth: u32,
-    pub frontmatter: String, // JSON-serialized Map
+    pub extension: String,
+    pub kind: String,
     pub size: u64,
     pub created_time: u64,  // ms since epoch (filesystem)
     pub modified_time: u64, // ms since epoch (filesystem)

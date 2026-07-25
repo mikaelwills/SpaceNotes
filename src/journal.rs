@@ -529,11 +529,12 @@ fn build_record(
         .map(|d| d.as_millis() as i64)
         .unwrap_or(modified);
     let (device, inode) = device_inode(&metadata);
+    let kind = crate::note::kind_of(&crate::note::extension_of(&rel_path));
 
     Ok(FileRecord {
         uuid,
         path: rel_path,
-        kind: "md".to_string(),
+        kind,
         content_hash: hash_bytes(bytes),
         size: metadata.len() as i64,
         device,

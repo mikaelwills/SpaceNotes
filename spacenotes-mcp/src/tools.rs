@@ -21,8 +21,8 @@ fn numbered(content: &str) -> String {
 
 fn format_note(n: &crate::spacetime_client::FullNote) -> String {
     format!(
-        "id: {}\npath: {}\nname: {}\nfolder_path: {}\nfrontmatter: {}\n\n{}",
-        n.id, n.path, n.name, n.folder_path, n.frontmatter, numbered(&n.content)
+        "id: {}\npath: {}\nname: {}\nfolder_path: {}\n\n{}",
+        n.id, n.path, n.name, n.folder_path, numbered(&n.content)
     )
 }
 
@@ -463,8 +463,8 @@ pub async fn execute_tool(
                 Some(n) => {
                     let body = if raw { n.content.clone() } else { numbered(&n.content) };
                     let text = format!(
-                        "id: {}\npath: {}\nname: {}\nfolder_path: {}\nfrontmatter: {}\n\n{}",
-                        n.id, n.path, n.name, n.folder_path, n.frontmatter, body
+                        "id: {}\npath: {}\nname: {}\nfolder_path: {}\n\n{}",
+                        n.id, n.path, n.name, n.folder_path, body
                     );
                     Ok(json!({"content": [{"type": "text", "text": text}]}))
                 },
@@ -501,8 +501,8 @@ pub async fn execute_tool(
                     .join("\n");
 
                 result.push_str(&format!(
-                    "---\nid: {}\npath: {}\nname: {}\nfolder_path: {}\nfrontmatter: {}\n\n{}\n\n",
-                    note.id, note.path, note.name, note.folder_path, note.frontmatter, numbered_content
+                    "---\nid: {}\npath: {}\nname: {}\nfolder_path: {}\n\n{}\n\n",
+                    note.id, note.path, note.name, note.folder_path, numbered_content
                 ));
             }
 

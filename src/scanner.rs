@@ -8,14 +8,22 @@ use crate::isolation::run_isolated;
 use crate::note::Note;
 use crate::sanitize::sanitize_path;
 
+const INGEST_EXTENSIONS: [&str; 6] = ["md", "yaml", "yml", "json", "toml", "txt"];
+
+pub fn is_ingestible(path: &Path) -> bool {
+    match path.extension().and_then(|e| e.to_str()) {
+        Some(ext) => INGEST_EXTENSIONS.contains(&ext.to_lowercase().as_str()),
+        None => false,
+    }
+}
+
 pub fn read_note_at(vault_path: &Path, abs_path: &Path) -> Result<Option<Note>> {
     // Validation
     if !abs_path.exists() || !abs_path.is_file() {
         return Ok(None);
     }
 
-    // Skip non-markdown
-    if abs_path.extension().map_or(true, |e| e != "md") {
+    if !is_ingestible(abs_path) {
         return Ok(None);
     }
 
@@ -25,7 +33,8 @@ pub fn read_note_at(vault_path: &Path, abs_path: &Path) -> Result<Option<Note>> 
         .to_string_lossy()
         .to_string());
 
-    let content = std::fs::read_to_string(abs_path)?;
+    let bytes = std::fs::read(abs_path)?;
+    let content = String::from_utf8_lossy(&bytes).into_owned();
 
     let metadata = std::fs::metadata(abs_path)?;
 
@@ -41,7 +50,7 @@ pub fn read_note_at(vault_path: &Path, abs_path: &Path) -> Result<Option<Note>> 
         .map(|d| d.as_millis() as u64)
         .unwrap_or(modified);
 
-    Ok(Some(Note::new(String::new(), rel_path, content, String::new(), size, created, modified)))
+    Ok(Some(Note::new(String::new(), rel_path, content, size, created, modified)))
 }
 
 pub fn scan_notes(vault_path: &Path) -> Result<Vec<Note>> {
@@ -56,8 +65,7 @@ pub fn scan_notes(vault_path: &Path) -> Result<Vec<Note>> {
     for entry in walker.filter_map(|e| e.ok()) {
         let path = entry.path();
 
-        // Skip non-markdown files
-        if !path.is_file() || path.extension().map_or(true, |e| e != "md") {
+        if !path.is_file() || !is_ingestible(path) {
             continue;
         }
 
@@ -123,7 +131,8 @@ mod tests {
         assert_eq!(notes.len(), 2);
         assert_eq!(notes[0].content, "body of a\n");
         assert!(notes[0].id.is_empty());
-        assert_eq!(notes[0].frontmatter, "");
+        assert_eq!(notes[0].extension, "md");
+        assert_eq!(notes[0].kind, "md");
 
         let _ = std::fs::remove_dir_all(&vault);
     }
@@ -139,6 +148,27 @@ mod tests {
         assert_eq!(notes.len(), 1);
         assert_eq!(notes[0].content, content);
         assert!(notes[0].id.is_empty());
+
+        let _ = std::fs::remove_dir_all(&vault);
+    }
+
+    #[test]
+    fn scan_ingests_non_md_with_generic_kind() {
+        let vault = temp_vault("non-md");
+        std::fs::write(vault.join("config.yaml"), "key: value\n").unwrap();
+        std::fs::write(vault.join("data.json"), "{}\n").unwrap();
+        std::fs::write(vault.join("ignored.png"), "binary").unwrap();
+
+        let mut notes = scan_notes(&vault).unwrap();
+        notes.sort_by(|a, b| a.path.cmp(&b.path));
+
+        assert_eq!(notes.len(), 2);
+        assert_eq!(notes[0].path, "config.yaml");
+        assert_eq!(notes[0].extension, "yaml");
+        assert_eq!(notes[0].kind, "file");
+        assert_eq!(notes[0].content, "key: value\n");
+        assert_eq!(notes[1].extension, "json");
+        assert_eq!(notes[1].kind, "file");
 
         let _ = std::fs::remove_dir_all(&vault);
     }

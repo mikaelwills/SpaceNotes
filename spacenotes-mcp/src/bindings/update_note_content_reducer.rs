@@ -9,7 +9,6 @@ use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 pub(super) struct UpdateNoteContentArgs {
     pub id: String,
     pub content: String,
-    pub frontmatter: String,
     pub size: u64,
     pub modified_time: u64,
 }
@@ -19,7 +18,6 @@ impl From<UpdateNoteContentArgs> for super::Reducer {
         Self::UpdateNoteContent {
             id: args.id,
             content: args.content,
-            frontmatter: args.frontmatter,
             size: args.size,
             modified_time: args.modified_time,
         }
@@ -45,11 +43,10 @@ pub trait update_note_content {
         &self,
         id: String,
         content: String,
-        frontmatter: String,
         size: u64,
         modified_time: u64,
     ) -> __sdk::Result<()> {
-        self.update_note_content_then(id, content, frontmatter, size, modified_time, |_, _| {})
+        self.update_note_content_then(id, content, size, modified_time, |_, _| {})
     }
 
     /// Request that the remote module invoke the reducer `update_note_content` to run as soon as possible,
@@ -62,7 +59,6 @@ pub trait update_note_content {
         &self,
         id: String,
         content: String,
-        frontmatter: String,
         size: u64,
         modified_time: u64,
 
@@ -77,7 +73,6 @@ impl update_note_content for super::RemoteReducers {
         &self,
         id: String,
         content: String,
-        frontmatter: String,
         size: u64,
         modified_time: u64,
 
@@ -89,7 +84,6 @@ impl update_note_content for super::RemoteReducers {
             UpdateNoteContentArgs {
                 id,
                 content,
-                frontmatter,
                 size,
                 modified_time,
             },

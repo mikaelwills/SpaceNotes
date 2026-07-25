@@ -131,7 +131,6 @@ fn migrate_file(
         uuid,
         rel_path,
         stripped,
-        String::new(),
         post.size as u64,
         post.created_time as u64,
         post.modified_time as u64,
@@ -442,7 +441,8 @@ mod tests {
         assert_eq!(upserted[0].id, ID_A);
         assert_eq!(upserted[0].path, "a.md");
         assert_eq!(upserted[0].content, "body\n");
-        assert_eq!(upserted[0].frontmatter, "");
+        assert_eq!(upserted[0].extension, "md");
+        assert_eq!(upserted[0].kind, "md");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

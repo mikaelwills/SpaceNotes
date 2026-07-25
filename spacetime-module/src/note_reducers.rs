@@ -2,6 +2,37 @@ use spacetimedb::{ReducerContext, Table};
 
 use crate::{Note, note};
 
+pub fn extension_of(path: &str) -> String {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    match name.rsplit_once('.') {
+        Some((stem, ext)) if !stem.is_empty() => ext.to_lowercase(),
+        _ => String::new(),
+    }
+}
+
+pub fn kind_of(extension: &str) -> String {
+    if extension == "md" {
+        "md".to_string()
+    } else {
+        "file".to_string()
+    }
+}
+
+fn name_from_path(path: &str) -> String {
+    let base = path.rsplit('/').next().unwrap_or(path);
+    match base.rsplit_once('.') {
+        Some((stem, _)) if !stem.is_empty() => stem.to_string(),
+        _ => base.to_string(),
+    }
+}
+
+fn folder_path_of(path: &str) -> String {
+    match path.rfind('/') {
+        Some(idx) => format!("{}/", &path[..idx]),
+        None => String::new(),
+    }
+}
+
 // =============================================================================
 // Note Reducers
 // =============================================================================
@@ -15,7 +46,8 @@ pub fn create_note(
     content: String,
     folder_path: String,
     depth: u32,
-    frontmatter: String,
+    extension: String,
+    kind: String,
     size: u64,
     created_time: u64,
     modified_time: u64,
@@ -39,7 +71,8 @@ pub fn create_note(
         content,
         folder_path,
         depth,
-        frontmatter,
+        extension,
+        kind,
         size,
         created_time,
         modified_time,
@@ -54,7 +87,6 @@ pub fn update_note_content(
     ctx: &ReducerContext,
     id: String,
     content: String,
-    frontmatter: String,
     size: u64,
     modified_time: u64,
 ) {
@@ -68,7 +100,8 @@ pub fn update_note_content(
             content,
             folder_path: existing.folder_path.clone(),
             depth: existing.depth,
-            frontmatter,
+            extension: existing.extension.clone(),
+            kind: existing.kind.clone(),
             size,
             created_time: existing.created_time,
             modified_time,
@@ -97,20 +130,11 @@ pub fn rename_note(
         }
 
         // Calculate new metadata from new path
-        let new_name = new_path
-            .trim_end_matches(".md")
-            .rsplit('/')
-            .next()
-            .unwrap_or(&new_path)
-            .to_string();
-
-        let new_folder_path = if let Some(idx) = new_path.rfind('/') {
-            format!("{}/", &new_path[..idx])
-        } else {
-            String::new()
-        };
-
+        let new_name = name_from_path(&new_path);
+        let new_folder_path = folder_path_of(&new_path);
         let new_depth = new_path.matches('/').count() as u32;
+        let new_extension = extension_of(&new_path);
+        let new_kind = kind_of(&new_extension);
 
         ctx.db.note().id().delete(&id);
         ctx.db.note().insert(Note {
@@ -120,7 +144,8 @@ pub fn rename_note(
             content: existing.content,
             folder_path: new_folder_path,
             depth: new_depth,
-            frontmatter: existing.frontmatter,
+            extension: new_extension,
+            kind: new_kind,
             size: existing.size,
             created_time: existing.created_time,
             modified_time: existing.modified_time,
@@ -146,20 +171,11 @@ pub fn delete_note(ctx: &ReducerContext, id: String) {
 pub fn update_note_path(ctx: &ReducerContext, id: String, new_path: String) {
     if let Some(existing) = ctx.db.note().id().find(&id) {
         // Calculate new metadata from new path
-        let new_name = new_path
-            .trim_end_matches(".md")
-            .rsplit('/')
-            .next()
-            .unwrap_or(&new_path)
-            .to_string();
-
-        let new_folder_path = if let Some(idx) = new_path.rfind('/') {
-            format!("{}/", &new_path[..idx])
-        } else {
-            String::new()
-        };
-
+        let new_name = name_from_path(&new_path);
+        let new_folder_path = folder_path_of(&new_path);
         let new_depth = new_path.matches('/').count() as u32;
+        let new_extension = extension_of(&new_path);
+        let new_kind = kind_of(&new_extension);
 
         ctx.db.note().id().delete(&id);
         ctx.db.note().insert(Note {
@@ -169,7 +185,8 @@ pub fn update_note_path(ctx: &ReducerContext, id: String, new_path: String) {
             content: existing.content,
             folder_path: new_folder_path,
             depth: new_depth,
-            frontmatter: existing.frontmatter,
+            extension: new_extension,
+            kind: new_kind,
             size: existing.size,
             created_time: existing.created_time,
             modified_time: existing.modified_time,
@@ -187,20 +204,11 @@ pub fn update_note_path(ctx: &ReducerContext, id: String, new_path: String) {
 pub fn move_note(ctx: &ReducerContext, old_path: String, new_path: String) {
     if let Some(existing) = ctx.db.note().path().find(&old_path) {
         // Calculate new metadata
-        let new_name = new_path
-            .trim_end_matches(".md")
-            .rsplit('/')
-            .next()
-            .unwrap_or(&new_path)
-            .to_string();
-
-        let new_folder_path = if let Some(idx) = new_path.rfind('/') {
-            format!("{}/", &new_path[..idx])
-        } else {
-            String::new()
-        };
-
+        let new_name = name_from_path(&new_path);
+        let new_folder_path = folder_path_of(&new_path);
         let new_depth = new_path.matches('/').count() as u32;
+        let new_extension = extension_of(&new_path);
+        let new_kind = kind_of(&new_extension);
 
         let id = existing.id.clone();
         ctx.db.note().id().delete(&id);
@@ -211,7 +219,8 @@ pub fn move_note(ctx: &ReducerContext, old_path: String, new_path: String) {
             content: existing.content,
             folder_path: new_folder_path,
             depth: new_depth,
-            frontmatter: existing.frontmatter,
+            extension: new_extension,
+            kind: new_kind,
             size: existing.size,
             created_time: existing.created_time,
             modified_time: existing.modified_time,
@@ -232,7 +241,8 @@ pub fn upsert_note(
     content: String,
     folder_path: String,
     depth: u32,
-    frontmatter: String,
+    extension: String,
+    kind: String,
     size: u64,
     created_time: u64,
     modified_time: u64,
@@ -256,7 +266,8 @@ pub fn upsert_note(
         content,
         folder_path,
         depth,
-        frontmatter,
+        extension,
+        kind,
         size,
         created_time,
         modified_time,
@@ -280,7 +291,8 @@ pub fn append_to_note(ctx: &ReducerContext, path: String, content: String) {
             content: new_content,
             folder_path: existing.folder_path,
             depth: existing.depth,
-            frontmatter: existing.frontmatter,
+            extension: existing.extension,
+            kind: existing.kind,
             size: new_size,
             created_time: existing.created_time,
             modified_time: now,
@@ -308,7 +320,8 @@ pub fn prepend_to_note(ctx: &ReducerContext, path: String, content: String) {
             content: new_content,
             folder_path: existing.folder_path,
             depth: existing.depth,
-            frontmatter: existing.frontmatter,
+            extension: existing.extension,
+            kind: existing.kind,
             size: new_size,
             created_time: existing.created_time,
             modified_time: now,
@@ -353,7 +366,8 @@ pub fn find_replace_in_note(
             content: new_content,
             folder_path: existing.folder_path,
             depth: existing.depth,
-            frontmatter: existing.frontmatter,
+            extension: existing.extension,
+            kind: existing.kind,
             size: new_size,
             created_time: existing.created_time,
             modified_time: now,

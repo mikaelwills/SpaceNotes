@@ -13,7 +13,6 @@ import {
 export default {
   id: __t.string(),
   content: __t.string(),
-  frontmatter: __t.string(),
   size: __t.u64(),
   modifiedTime: __t.u64(),
 };
