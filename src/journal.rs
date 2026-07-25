@@ -138,6 +138,18 @@ impl Journal {
         Ok(record)
     }
 
+    pub fn by_uuid(&self, uuid: &str) -> Result<Option<FileRecord>> {
+        let record = self
+            .conn()
+            .query_row(
+                &format!("{} WHERE uuid = ?1 AND deleted_at IS NULL", SELECT_FILES),
+                params![uuid],
+                row_to_record,
+            )
+            .optional()?;
+        Ok(record)
+    }
+
     pub fn by_inode(&self, device: i64, inode: i64) -> Result<Vec<FileRecord>> {
         query_records(
             &self.conn(),

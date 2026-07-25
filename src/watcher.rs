@@ -316,11 +316,26 @@ fn delete_md(ctx: &EventContext, rel: String) -> Vec<Action> {
         .journal
         .and_then(|j| j.by_path(&rel).ok().flatten())
         .map(|row| row.uuid);
+    let from_journal = journal_uuid.is_some();
     let id = journal_uuid.or_else(|| (ctx.known_note_id)(&rel));
     let Some(id) = id else {
         tracing::warn!("Note deleted but not found in DB: {}", rel);
         return Vec::new();
     };
+    if !from_journal {
+        if let Some(journal) = ctx.journal {
+            if let Ok(Some(row)) = journal.by_uuid(&id) {
+                if row.path != rel {
+                    tracing::debug!(
+                        "Watcher ignoring stale delete: {} moved to {}",
+                        rel,
+                        row.path
+                    );
+                    return Vec::new();
+                }
+            }
+        }
+    }
     if let Some(journal) = ctx.journal {
         if let Err(e) = journal.tombstone(&id, journal::now_ms()) {
             tracing::error!("Journal tombstone failed for {}: {}", rel, e);
@@ -691,6 +706,52 @@ mod tests {
         assert!(delete_note_paths(&old_path_remove).is_empty());
         let live = journal.live_files().unwrap();
         assert_eq!(live.len(), 1);
+        assert_eq!(live[0].uuid, ID_A);
+        assert_eq!(live[0].path, "moved.md");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn known_id_a(path: &str) -> Option<String> {
+        if path == "a.md" {
+            Some(ID_A.to_string())
+        } else {
+            None
+        }
+    }
+
+    #[test]
+    fn skeptic_old_path_remove_with_live_db_fallback_deletes_moved_row() {
+        let (dir, vault, journal) = seeded_vault("skeptic-move-db-fallback");
+        let tracker = ContentTracker::new();
+        std::fs::rename(vault.join("a.md"), vault.join("moved.md")).unwrap();
+
+        let ctx = EventContext {
+            vault_path: &vault,
+            journal: Some(&journal),
+            tracker: &tracker,
+            known_note_id: &known_id_a,
+        };
+        dispatch_event(
+            &ctx,
+            &EventKind::Modify(ModifyKind::Name(RenameMode::Both)),
+            &[vault.join("a.md"), vault.join("moved.md")],
+            false,
+        );
+
+        let old_path_remove = dispatch_event(
+            &ctx,
+            &EventKind::Remove(RemoveKind::File),
+            &[vault.join("a.md")],
+            false,
+        );
+
+        assert!(
+            delete_note_paths(&old_path_remove).is_empty(),
+            "old-path Remove after move must not delete the moved row via DB fallback"
+        );
+        let live = journal.live_files().unwrap();
+        assert_eq!(live.len(), 1, "moved row must survive");
         assert_eq!(live[0].uuid, ID_A);
         assert_eq!(live[0].path, "moved.md");
 
