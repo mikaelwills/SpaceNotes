@@ -141,7 +141,6 @@ fn heading_level(line: &str) -> Option<usize> {
     }
 }
 
-// Returns the requested slice plus the 1-based line number it starts at.
 fn slice_note(
     content: &str,
     line_start: Option<usize>,
@@ -185,20 +184,71 @@ fn slice_note(
     Ok((lines[first - 1..last].join("\n"), first))
 }
 
-fn dry_run_flag(args: &Value) -> bool {
-    args.get("dry_run")
-        .or_else(|| args.get("dryRun"))
+// Which matches an edit should touch, and why it may refuse. Pure so the policy is testable
+// without a live connection.
+fn select_targets(
+    found: &matcher::Matches,
+    path: &str,
+    occurrence: Option<usize>,
+    replace_all: bool,
+    allow_fuzzy: bool,
+) -> Result<Vec<usize>, String> {
+    let count = found.matches.len();
+
+    if found.tier.needs_opt_in() && count > 1 && !allow_fuzzy {
+        return Err(format!(
+            "old_string only matched in '{}' at the {} tier, in {} places. \
+             Add exact context, or pass allow_fuzzy: true.",
+            path,
+            found.tier.label(),
+            count
+        ));
+    }
+
+    if let Some(n) = occurrence {
+        if n == 0 || n > count {
+            return Err(format!(
+                "occurrence {} is out of range: {} match(es) in '{}'.",
+                n, count, path
+            ));
+        }
+        return Ok(vec![n - 1]);
+    }
+
+    if replace_all {
+        return Ok((0..count).collect());
+    }
+
+    if count > 1 {
+        let places: Vec<String> = found
+            .matches
+            .iter()
+            .map(|m| format!("lines {}-{}", m.first_line, m.last_line))
+            .collect();
+        return Err(format!(
+            "old_string appears {} times in '{}' ({}). Add context to make it unique, \
+             pass replace_all: true, or target one with occurrence: N.",
+            count,
+            path,
+            places.join("; ")
+        ));
+    }
+
+    Ok(vec![0])
+}
+
+fn arg<'a>(args: &'a Value, snake: &str, camel: &str) -> Option<&'a Value> {
+    args.get(snake).or_else(|| args.get(camel))
+}
+
+fn dry_run_flag(args: &Value, default: bool) -> bool {
+    arg(args, "dry_run", "dryRun")
         .and_then(|v| v.as_bool())
-        .unwrap_or(false)
+        .unwrap_or(default)
 }
 
 fn numbered(content: &str) -> String {
-    content
-        .lines()
-        .enumerate()
-        .map(|(i, line)| format!("{:>4}| {}", i + 1, line))
-        .collect::<Vec<_>>()
-        .join("\n")
+    numbered_from(content, 1)
 }
 
 fn format_file(n: &crate::spacetime_client::FullSpaceFile) -> String {
@@ -1039,6 +1089,13 @@ pub async fn execute_tool(
                         format!("edits[{}]: {}", i, edit_no_match_error(&path, old, &content))
                     })?;
                     let count = found.matches.len();
+                    if found.tier.needs_opt_in() && count > 1 {
+                        return Err(format!(
+                            "edits[{}]: old_string only matched in '{}' at the {} tier, in {} \
+                             places. Add exact context.",
+                            i, path, found.tier.label(), count
+                        ));
+                    }
                     if count > 1 && !all {
                         return Err(format!(
                             "edits[{}]: old_string appears {} times in '{}'. Add context or pass \
@@ -1051,7 +1108,7 @@ pub async fn execute_tool(
                     applied.push(format!("edits[{}]: {} at {}", i, targets.len(), found.tier.label()));
                 }
 
-                if dry_run_flag(&params.arguments) {
+                if dry_run_flag(&params.arguments, false) {
                     return Ok(json!({"content": [{"type": "text", "text": format!(
                         "dry run: {} edit(s) would apply to {} ({}). No changes written.",
                         applied.len(), path, applied.join("; ")
@@ -1067,20 +1124,17 @@ pub async fn execute_tool(
                 )}]}));
             }
 
-            let old_string: String = params.arguments.get("old_string")
-                .or_else(|| params.arguments.get("oldString"))
+            let old_string: String = arg(&params.arguments, "old_string", "oldString")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string())
                 .ok_or_else(|| "old_string is required (or pass edits: [...])".to_string())?;
-            let new_string: String = params.arguments.get("new_string")
-                .or_else(|| params.arguments.get("newString"))
+            let new_string: String = arg(&params.arguments, "new_string", "newString")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string())
                 .ok_or_else(|| {
                     "new_string is required (pass \"\" to delete the matched text)".to_string()
                 })?;
-            let replace_all: bool = params.arguments.get("replace_all")
-                .or_else(|| params.arguments.get("replaceAll"))
+            let replace_all: bool = arg(&params.arguments, "replace_all", "replaceAll")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
 
@@ -1089,16 +1143,8 @@ pub async fn execute_tool(
                 .get("occurrence")
                 .and_then(|v| v.as_u64())
                 .map(|n| n as usize);
-            let dry_run: bool = params
-                .arguments
-                .get("dry_run")
-                .or_else(|| params.arguments.get("dryRun"))
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-            let allow_fuzzy: bool = params
-                .arguments
-                .get("allow_fuzzy")
-                .or_else(|| params.arguments.get("allowFuzzy"))
+            let dry_run = dry_run_flag(&params.arguments, false);
+            let allow_fuzzy: bool = arg(&params.arguments, "allow_fuzzy", "allowFuzzy")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
 
@@ -1115,47 +1161,7 @@ pub async fn execute_tool(
                 .ok_or_else(|| edit_no_match_error(&path, &old_string, &file.content))?;
             let count = found.matches.len();
 
-            // A fuzzy tier can match text the caller did not mean, so it needs either an
-            // unambiguous match or an explicit opt-in.
-            if found.tier.needs_opt_in() && count > 1 && !allow_fuzzy {
-                return Err(format!(
-                    "old_string only matched '{}' at the {} tier, in {} places. \
-                     Add exact context, or pass allow_fuzzy: true.",
-                    path,
-                    found.tier.label(),
-                    count
-                ));
-            }
-
-            let targets: Vec<usize> = match (occurrence, replace_all) {
-                (Some(n), _) => {
-                    if n == 0 || n > count {
-                        return Err(format!(
-                            "occurrence {} is out of range: {} match(es) in '{}'.",
-                            n, count, path
-                        ));
-                    }
-                    vec![n - 1]
-                }
-                (None, true) => (0..count).collect(),
-                (None, false) => {
-                    if count > 1 {
-                        let places: Vec<String> = found
-                            .matches
-                            .iter()
-                            .map(|m| format!("lines {}-{}", m.first_line, m.last_line))
-                            .collect();
-                        return Err(format!(
-                            "old_string appears {} times in '{}' ({}). Add context to make it \
-                             unique, pass replace_all: true, or target one with occurrence: N.",
-                            count,
-                            path,
-                            places.join("; ")
-                        ));
-                    }
-                    vec![0]
-                }
-            };
+            let targets = select_targets(&found, &path, occurrence, replace_all, allow_fuzzy)?;
 
             let updated = matcher::apply(&file.content, &old_string, &new_string, &found, &targets);
 
@@ -1215,24 +1221,20 @@ pub async fn execute_tool(
                 .and_then(|v| v.as_u64())
                 .unwrap_or(50) as usize;
             // Cross-note blast radius: preview unless the caller explicitly opts out.
-            let dry_run = params
-                .arguments
-                .get("dry_run")
-                .or_else(|| params.arguments.get("dryRun"))
-                .and_then(|v| v.as_bool())
-                .unwrap_or(true);
+            let dry_run = dry_run_flag(&params.arguments, true);
 
             let candidates = client
                 .files_in_scope(folder, paths.as_deref())
                 .map_err(|e| e.to_string())?;
 
             let mut planned = Vec::new();
+            let mut skipped_fuzzy = Vec::new();
             for file in candidates {
                 let Some(found) = matcher::find(&file.content, &old_string) else {
                     continue;
                 };
-                // Fuzzy tiers are not safe to fan out across notes unattended.
                 if found.tier.needs_opt_in() {
+                    skipped_fuzzy.push(file.path.clone());
                     continue;
                 }
                 let targets: Vec<usize> = (0..found.matches.len()).collect();
@@ -1259,11 +1261,21 @@ pub async fn execute_tool(
                     .iter()
                     .map(|(f, n, _)| format!("  {} ({} match(es))", f.path, n))
                     .collect();
-                return Ok(json!({"content": [{"type": "text", "text": format!(
+                let mut text = format!(
                     "dry run: {} replacement(s) across {} note(s). No changes written. \
                      Re-run with dry_run: false to commit.\n{}",
-                    total, planned.len(), lines.join("\n")
-                )}]}));
+                    total,
+                    planned.len(),
+                    lines.join("\n")
+                );
+                if !skipped_fuzzy.is_empty() {
+                    text.push_str(&format!(
+                        "\nskipped {} note(s) that only matched loosely: {}",
+                        skipped_fuzzy.len(),
+                        skipped_fuzzy.join(", ")
+                    ));
+                }
+                return Ok(json!({"content": [{"type": "text", "text": text}]}));
             }
 
             let mut committed = Vec::new();
@@ -1687,10 +1699,76 @@ mod tests {
     }
 
     #[test]
-    fn dry_run_flag_reads_both_spellings() {
-        assert!(dry_run_flag(&json!({"dry_run": true})));
-        assert!(dry_run_flag(&json!({"dryRun": true})));
-        assert!(!dry_run_flag(&json!({})));
+    fn dry_run_flag_reads_both_spellings_and_honours_the_default() {
+        assert!(dry_run_flag(&json!({"dry_run": true}), false));
+        assert!(dry_run_flag(&json!({"dryRun": true}), false));
+        assert!(!dry_run_flag(&json!({"dry_run": false}), true));
+        assert!(!dry_run_flag(&json!({}), false));
+        assert!(dry_run_flag(&json!({}), true));
+    }
+
+    #[test]
+    fn select_targets_picks_the_single_match() {
+        let found = matcher::find("a\nb\n", "a").unwrap();
+        assert_eq!(select_targets(&found, "N.md", None, false, false).unwrap(), vec![0]);
+    }
+
+    #[test]
+    fn select_targets_refuses_ambiguity_and_lists_the_places() {
+        let found = matcher::find("a\nb\na\n", "a").unwrap();
+        let err = select_targets(&found, "N.md", None, false, false).unwrap_err();
+        assert!(err.contains("appears 2 times"), "{}", err);
+        assert!(err.contains("lines 1-1"), "{}", err);
+        assert!(err.contains("occurrence"), "{}", err);
+    }
+
+    #[test]
+    fn select_targets_replace_all_takes_every_match() {
+        let found = matcher::find("a\nb\na\n", "a").unwrap();
+        assert_eq!(select_targets(&found, "N.md", None, true, false).unwrap(), vec![0, 1]);
+    }
+
+    #[test]
+    fn select_targets_honours_occurrence() {
+        let found = matcher::find("a\nb\na\n", "a").unwrap();
+        assert_eq!(select_targets(&found, "N.md", Some(2), false, false).unwrap(), vec![1]);
+    }
+
+    #[test]
+    fn select_targets_rejects_out_of_range_occurrence() {
+        let found = matcher::find("a\n", "a").unwrap();
+        assert!(select_targets(&found, "N.md", Some(0), false, false).is_err());
+        assert!(select_targets(&found, "N.md", Some(2), false, false).is_err());
+    }
+
+    #[test]
+    fn select_targets_allows_a_unique_fuzzy_match_without_opt_in() {
+        let found = matcher::find("alpha\u{00A0}beta\n", "alpha beta").unwrap();
+        assert!(found.tier.needs_opt_in());
+        assert_eq!(select_targets(&found, "N.md", None, false, false).unwrap(), vec![0]);
+    }
+
+    #[test]
+    fn select_targets_refuses_ambiguous_fuzzy_without_opt_in() {
+        let content = "alpha\u{00A0}beta\nalpha\u{00A0}beta\n";
+        let found = matcher::find(content, "alpha beta").unwrap();
+        let err = select_targets(&found, "N.md", None, true, false).unwrap_err();
+        assert!(err.contains("allow_fuzzy"), "{}", err);
+    }
+
+    #[test]
+    fn select_targets_permits_ambiguous_fuzzy_with_opt_in() {
+        let content = "alpha\u{00A0}beta\nalpha\u{00A0}beta\n";
+        let found = matcher::find(content, "alpha beta").unwrap();
+        assert_eq!(select_targets(&found, "N.md", None, true, true).unwrap(), vec![0, 1]);
+    }
+
+    #[test]
+    fn arg_prefers_snake_case_then_camel() {
+        let args = json!({"camelOnly": 1, "both": 2, "bothCamel": 3});
+        assert_eq!(arg(&args, "camel_only", "camelOnly").unwrap(), 1);
+        assert_eq!(arg(&args, "both", "bothCamel").unwrap(), 2);
+        assert!(arg(&args, "missing", "missingCamel").is_none());
     }
 
     #[test]

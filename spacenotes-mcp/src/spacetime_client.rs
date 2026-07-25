@@ -484,15 +484,21 @@ impl SpacetimeClient {
         Ok(())
     }
 
-    // Every file under a folder prefix, or an explicit path list, for cross-note operations.
     pub fn files_in_scope(
         &self,
         folder: Option<&str>,
         paths: Option<&[String]>,
     ) -> Result<Vec<FullSpaceFile>> {
+        if folder.is_some() && paths.is_some() {
+            anyhow::bail!("provide folder or paths, not both");
+        }
         let mut out: Vec<FullSpaceFile> = match (folder, paths) {
             (Some(folder), _) => {
-                let prefix = if folder.is_empty() || folder.ends_with('/') {
+                // An empty prefix would silently scope to the entire vault.
+                if folder.trim_matches('/').is_empty() {
+                    anyhow::bail!("folder must not be empty; pass a real folder or use paths");
+                }
+                let prefix = if folder.ends_with('/') {
                     folder.to_string()
                 } else {
                     format!("{}/", folder)

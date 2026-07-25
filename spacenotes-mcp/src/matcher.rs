@@ -62,7 +62,7 @@ fn lines_with_offsets(content: &str) -> Vec<Line> {
             start = idx + 1;
         }
     }
-    if start <= content.len() {
+    {
         let rest = &content[start..];
         if !rest.is_empty() || content.is_empty() {
             lines.push(Line {
@@ -116,10 +116,6 @@ fn compare_key(line: &str, tier: Tier) -> String {
     }
 }
 
-fn is_blank(line: &str) -> bool {
-    line.trim().is_empty()
-}
-
 pub fn find(content: &str, needle: &str) -> Option<Matches> {
     if needle.is_empty() {
         return None;
@@ -157,7 +153,7 @@ fn find_exact(content: &str, needle: &str) -> Option<Vec<Match>> {
             first_line: line_of(content, start),
             last_line: line_of(content, end.saturating_sub(1)),
         });
-        from = end.max(start + 1);
+        from = end;
     }
     if out.is_empty() {
         None
@@ -176,16 +172,6 @@ fn find_by_lines(content: &str, needle: &str, tier: Tier) -> Vec<Match> {
     let keys: Vec<String> = haystack.iter().map(|l| compare_key(&l.text, tier)).collect();
     let want: Vec<String> = needle_lines.iter().map(|l| compare_key(l, tier)).collect();
 
-    // Tier 3 treats any run of blank lines as one separator, so a needle with one blank line
-    // matches a note with three.
-    let equal = |a: &str, b: &str| {
-        if tier == Tier::Block && is_blank(a) && is_blank(b) {
-            true
-        } else {
-            a == b
-        }
-    };
-
     let mut out = Vec::new();
     if want.len() > keys.len() {
         return out;
@@ -194,7 +180,7 @@ fn find_by_lines(content: &str, needle: &str, tier: Tier) -> Vec<Match> {
         if want
             .iter()
             .enumerate()
-            .all(|(i, w)| equal(&keys[offset + i], w))
+            .all(|(i, w)| &keys[offset + i] == w)
         {
             let first = &haystack[offset];
             let last = &haystack[offset + want.len() - 1];
@@ -272,16 +258,12 @@ pub fn apply(
         cursor = m.end;
 
         // A whole-line match deleted to nothing would otherwise leave a blank line behind.
-        if replacement.is_empty() && content[m.start..].starts_with(&content[m.start..m.end]) {
+        if replacement.is_empty() && is_whole_lines(content, m) {
             let after = &content[m.end..];
-            if let Some(rest) = after.strip_prefix("\r\n") {
-                if is_whole_lines(content, m) {
-                    cursor = m.end + (after.len() - rest.len());
-                }
-            } else if let Some(rest) = after.strip_prefix('\n') {
-                if is_whole_lines(content, m) {
-                    cursor = m.end + (after.len() - rest.len());
-                }
+            if after.starts_with("\r\n") {
+                cursor = m.end + 2;
+            } else if after.starts_with('\n') {
+                cursor = m.end + 1;
             }
         }
     }
@@ -349,7 +331,7 @@ mod tests {
     }
 
     #[test]
-    fn tier3_treats_a_whitespace_only_line_as_blank() {
+    fn whitespace_only_line_matches_a_blank_line_at_tier1() {
         let found = only("a\n   \nb\n", "a\n\nb");
         assert_eq!(found.tier, Tier::TrailingWhitespace);
     }
