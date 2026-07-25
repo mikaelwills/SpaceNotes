@@ -1,6 +1,6 @@
 use spacetimedb::{ReducerContext, Table};
 
-use crate::{Folder, folder, note};
+use crate::{Folder, folder, space_file};
 
 // =============================================================================
 // Folder Reducers
@@ -34,24 +34,24 @@ pub fn delete_folder(ctx: &ReducerContext, path: String) {
         return;
     }
 
-    // For cascade operations, use path with slash to match note.folder_path
+    // For cascade operations, use path with slash to match space_file.folder_path
     let path_with_slash = format!("{}/", normalized_path);
 
-    // CASCADE: Delete all notes inside this folder (and subfolders)
-    let notes_to_delete: Vec<String> = ctx
+    // CASCADE: Delete all files inside this folder (and subfolders)
+    let files_to_delete: Vec<String> = ctx
         .db
-        .note()
+        .space_file()
         .iter()
-        .filter(|note| note.folder_path.starts_with(&path_with_slash))
-        .map(|note| note.id.clone())
+        .filter(|file| file.folder_path.starts_with(&path_with_slash))
+        .map(|file| file.id.clone())
         .collect();
 
-    for note_id in &notes_to_delete {
-        ctx.db.note().id().delete(note_id);
+    for file_id in &files_to_delete {
+        ctx.db.space_file().id().delete(file_id);
     }
 
-    if !notes_to_delete.is_empty() {
-        log::info!("Cascade deleted {} notes from folder: {}", notes_to_delete.len(), normalized_path);
+    if !files_to_delete.is_empty() {
+        log::info!("Cascade deleted {} files from folder: {}", files_to_delete.len(), normalized_path);
     }
 
     // CASCADE: Delete all subfolders (use normalized path for comparison)
@@ -106,41 +106,40 @@ pub fn move_folder(ctx: &ReducerContext, old_path: String, new_path: String) {
     let old_path_with_slash = format!("{}/", old_normalized);
     let new_path_with_slash = format!("{}/", new_normalized);
 
-    // CASCADE 1: Update all notes inside this folder
-    let notes_to_update: Vec<_> = ctx
+    // CASCADE 1: Update all files inside this folder
+    let files_to_update: Vec<_> = ctx
         .db
-        .note()
+        .space_file()
         .iter()
-        .filter(|note| note.folder_path.starts_with(&old_path_with_slash))
+        .filter(|file| file.folder_path.starts_with(&old_path_with_slash))
         .collect();
 
-    let notes_count = notes_to_update.len();
-    for note in notes_to_update {
-        // Calculate new paths for the note
-        let new_note_folder_path = note.folder_path.replacen(&old_path_with_slash, &new_path_with_slash, 1);
-        let new_note_path = note.path.replacen(&old_path_with_slash, &new_path_with_slash, 1);
-        let new_note_depth = new_note_path.matches('/').count() as u32;
+    let files_count = files_to_update.len();
+    for file in files_to_update {
+        // Calculate new paths for the file
+        let new_file_folder_path = file.folder_path.replacen(&old_path_with_slash, &new_path_with_slash, 1);
+        let new_file_path = file.path.replacen(&old_path_with_slash, &new_path_with_slash, 1);
+        let new_file_depth = new_file_path.matches('/').count() as u32;
 
         // Delete old entry and insert with updated paths
-        ctx.db.note().id().delete(&note.id);
-        ctx.db.note().insert(crate::Note {
-            id: note.id.clone(),
-            path: new_note_path,
-            name: note.name,
-            content: note.content,
-            folder_path: new_note_folder_path,
-            depth: new_note_depth,
-            extension: note.extension,
-            kind: note.kind,
-            size: note.size,
-            created_time: note.created_time,
-            modified_time: note.modified_time,
+        ctx.db.space_file().id().delete(&file.id);
+        ctx.db.space_file().insert(crate::SpaceFile {
+            id: file.id.clone(),
+            path: new_file_path,
+            name: file.name,
+            content: file.content,
+            folder_path: new_file_folder_path,
+            depth: new_file_depth,
+            extension: file.extension,
+            size: file.size,
+            created_time: file.created_time,
+            modified_time: file.modified_time,
             db_updated_at: ctx.timestamp,
         });
     }
 
-    if notes_count > 0 {
-        log::info!("Cascade updated {} notes in folder move", notes_count);
+    if files_count > 0 {
+        log::info!("Cascade updated {} files in folder move", files_count);
     }
 
     // CASCADE 2: Update all subfolders
@@ -183,8 +182,8 @@ pub fn move_folder(ctx: &ReducerContext, old_path: String, new_path: String) {
         depth: new_depth,
     });
 
-    log::info!("Moved folder: {} -> {} (with {} notes, {} subfolders)",
-               old_normalized, new_normalized, notes_count, subfolders_count);
+    log::info!("Moved folder: {} -> {} (with {} files, {} subfolders)",
+               old_normalized, new_normalized, files_count, subfolders_count);
 }
 
 #[spacetimedb::reducer]

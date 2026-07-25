@@ -4,8 +4,8 @@ use spacetimedb::{CaseConversionPolicy, ReducerContext, Table, Timestamp};
 const CASE_CONVERSION_POLICY: CaseConversionPolicy = CaseConversionPolicy::None;
 
 mod call_reducers;
+mod file_reducers;
 mod folder_reducers;
-mod note_reducers;
 mod space_channel_reducers;
 mod space_channel_tables;
 
@@ -13,8 +13,8 @@ mod space_channel_tables;
 // Tables
 // =============================================================================
 
-#[spacetimedb::table(accessor = note, public)]
-pub struct Note {
+#[spacetimedb::table(accessor = space_file, public)]
+pub struct SpaceFile {
     #[primary_key]
     pub id: String, // UUID (e.g., "550e8400-e29b...")
     #[unique]
@@ -24,7 +24,6 @@ pub struct Note {
     pub folder_path: String, // "Projects/"
     pub depth: u32,
     pub extension: String,
-    pub kind: String,
     pub size: u64,
     pub created_time: u64,  // ms since epoch (filesystem)
     pub modified_time: u64, // ms since epoch (filesystem)
@@ -125,10 +124,10 @@ pub fn set_display_name(ctx: &ReducerContext, name: String) {
 #[spacetimedb::reducer]
 #[allow(clippy::too_many_arguments)]
 pub fn clear_all(ctx: &ReducerContext) {
-    // Clear all notes
-    let note_ids: Vec<String> = ctx.db.note().iter().map(|n| n.id.clone()).collect();
-    for id in note_ids {
-        ctx.db.note().id().delete(&id);
+    // Clear all files
+    let file_ids: Vec<String> = ctx.db.space_file().iter().map(|f| f.id.clone()).collect();
+    for id in file_ids {
+        ctx.db.space_file().id().delete(&id);
     }
 
     // Clear all folders
@@ -137,39 +136,39 @@ pub fn clear_all(ctx: &ReducerContext) {
         ctx.db.folder().path().delete(&path);
     }
 
-    log::info!("Cleared all notes and folders");
+    log::info!("Cleared all files and folders");
 }
 
 // =============================================================================
 // Queries (Reducers that return data without side effects)
 // =============================================================================
 
-/// Get the most recently updated notes in the database
+/// Get the most recently updated files in the database
 ///
 /// This is implemented as a reducer (not a view) so it can accept parameters.
 /// It has no side effects - it only queries and returns data.
 ///
 /// # Arguments
-/// * `limit` - Number of recent notes to return (e.g., 5, 10, 20)
+/// * `limit` - Number of recent files to return (e.g., 5, 10, 20)
 ///
 /// # Returns
-/// JSON array of the most recent notes via log output
+/// JSON array of the most recent files via log output
 #[spacetimedb::reducer]
-pub fn get_recent_notes(ctx: &ReducerContext, limit: u32) {
-    let mut notes: Vec<Note> = ctx.db.note().iter().collect();
+pub fn get_recent_files(ctx: &ReducerContext, limit: u32) {
+    let mut files: Vec<SpaceFile> = ctx.db.space_file().iter().collect();
 
     // Sort by db_updated_at descending (newest first)
-    notes.sort_by(|a, b| b.db_updated_at.cmp(&a.db_updated_at));
+    files.sort_by(|a, b| b.db_updated_at.cmp(&a.db_updated_at));
 
     // Take only the requested limit
-    notes.truncate(limit as usize);
+    files.truncate(limit as usize);
 
     // Return results via log
-    for note in notes {
+    for file in files {
         log::info!(
-            "Recent note: {} (updated: {:?})",
-            note.path,
-            note.db_updated_at
+            "Recent file: {} (updated: {:?})",
+            file.path,
+            file.db_updated_at
         );
     }
 }
