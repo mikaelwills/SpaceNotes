@@ -510,6 +510,8 @@ pub async fn execute_tool(
     client: &crate::spacetime_client::SpacetimeClient,
     params: ToolCallParams,
 ) -> Result<Value, String> {
+    client.await_ready().await.map_err(|e| e.to_string())?;
+
     match params.name.as_str() {
         "search_notes" => {
             let query: String = serde_json::from_value(params.arguments["query"].clone())
@@ -642,6 +644,7 @@ pub async fn execute_tool(
 
             client
                 .create_file(id.clone(), path.clone(), name, content, folder_path)
+                .await
                 .map_err(|e| e.to_string())?;
 
             Ok(
@@ -687,6 +690,7 @@ pub async fn execute_tool(
                 let new_path = format!("{}{}-{}-{}.md", folder, date, num + 1, rest);
                 client
                     .move_file(old_path.clone(), new_path.clone())
+                    .await
                     .map_err(|e| e.to_string())?;
                 bumped.push(format!("{} -> {}-{}-{}", name, date, num + 1, rest));
             }
@@ -696,6 +700,7 @@ pub async fn execute_tool(
             let new_id = uuid::Uuid::new_v4().to_string();
             client
                 .create_file(new_id.clone(), new_path.clone(), new_name, content, folder)
+                .await
                 .map_err(|e| e.to_string())?;
 
             let mut text = format!("Created session: {} (id: {})", new_path, new_id);
@@ -735,7 +740,7 @@ pub async fn execute_tool(
             let id: String = serde_json::from_value(params.arguments["id"].clone())
                 .map_err(|e| e.to_string())?;
 
-            client.delete_file(id.clone()).map_err(|e| e.to_string())?;
+            client.delete_file(id.clone()).await.map_err(|e| e.to_string())?;
 
             Ok(json!({"content": [{"type": "text", "text": format!("Deleted note: {}", id)}]}))
         }
@@ -747,7 +752,7 @@ pub async fn execute_tool(
             let mut errors = Vec::new();
 
             for id in ids {
-                match client.delete_file(id.clone()) {
+                match client.delete_file(id.clone()).await {
                     Ok(_) => deleted.push(id),
                     Err(e) => errors.push(format!("{}: {}", id, e)),
                 }
@@ -768,6 +773,7 @@ pub async fn execute_tool(
 
             client
                 .move_file(old_path.clone(), new_path.clone())
+                .await
                 .map_err(|e| e.to_string())?;
 
             Ok(
@@ -782,6 +788,7 @@ pub async fn execute_tool(
 
             client
                 .move_folder(old_path.clone(), new_path.clone())
+                .await
                 .map_err(|e| e.to_string())?;
 
             Ok(
@@ -801,6 +808,7 @@ pub async fn execute_tool(
 
             client
                 .create_folder(path.clone(), name, depth)
+                .await
                 .map_err(|e| e.to_string())?;
 
             Ok(json!({"content": [{"type": "text", "text": format!("Created folder: {}", path)}]}))
@@ -811,6 +819,7 @@ pub async fn execute_tool(
 
             client
                 .delete_folder(path.clone())
+                .await
                 .map_err(|e| e.to_string())?;
 
             Ok(json!({"content": [{"type": "text", "text": format!("Deleted folder: {}", path)}]}))
@@ -823,6 +832,7 @@ pub async fn execute_tool(
 
             client
                 .append_to_file(path.clone(), content)
+                .await
                 .map_err(|e| e.to_string())?;
 
             Ok(json!({"content": [{"type": "text", "text": format!("Appended to note: {}", path)}]}))
@@ -835,6 +845,7 @@ pub async fn execute_tool(
 
             client
                 .prepend_to_file(path.clone(), content)
+                .await
                 .map_err(|e| e.to_string())?;
 
             Ok(json!({"content": [{"type": "text", "text": format!("Prepended to note: {}", path)}]}))
@@ -879,7 +890,9 @@ pub async fn execute_tool(
                 ));
             }
 
-            client.find_replace_in_file(path.clone(), old_string, new_string, replace_all)
+            client
+                .find_replace_in_file(path.clone(), old_string, new_string, replace_all)
+                .await
                 .map_err(|e| e.to_string())?;
             let summary = if replace_all && occurrences > 1 {
                 format!("Edited note: {} ({} occurrences submitted)", path, occurrences)
@@ -909,7 +922,7 @@ pub async fn execute_tool(
                 let filename = old_path.split('/').last().unwrap_or(&old_path);
                 let new_path = format!("{}{}", dest, filename);
 
-                match client.move_file(old_path.clone(), new_path.clone()) {
+                match client.move_file(old_path.clone(), new_path.clone()).await {
                     Ok(_) => moved.push(format!("{} -> {}", old_path, new_path)),
                     Err(e) => errors.push(format!("{}: {}", old_path, e)),
                 }
@@ -956,6 +969,7 @@ pub async fn execute_tool(
 
             client
                 .update_file_content(current_file.id, new_content.clone())
+                .await
                 .map_err(|e| e.to_string())?;
 
             Ok(json!({"content": [{"type": "text", "text": format!("Replaced {} matches in {}\n\n---\n\n{}", match_count, path, new_content)}]}))

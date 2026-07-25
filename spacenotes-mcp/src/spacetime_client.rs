@@ -3,7 +3,11 @@ use regex::Regex;
 use serde::Serialize;
 use spacetimedb_sdk::{DbContext, Table, TableWithPrimaryKey};
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::OnceLock;
+use std::time::Duration;
+use tokio::sync::oneshot;
+use tokio::sync::watch;
+use tokio::time::timeout;
 
 fn spacenote_link_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
@@ -34,34 +38,46 @@ use crate::bindings::{
     DbConnection,
 };
 
+// A reducer panic arrives as the OUTER error; a returned Err as the inner one.
+fn flatten_outcome(
+    outcome: Result<Result<(), String>, spacetimedb_sdk::__codegen::InternalError>,
+) -> Result<(), String> {
+    match outcome {
+        Ok(inner) => inner,
+        Err(panicked) => Err(panicked.to_string()),
+    }
+}
+
+const READINESS_TIMEOUT: Duration = Duration::from_secs(30);
+const REDUCER_TIMEOUT: Duration = Duration::from_secs(10);
+
 pub struct SpacetimeClient {
     conn: DbConnection,
-    synced: Arc<Mutex<bool>>,
+    ready: watch::Sender<bool>,
 }
 
 impl SpacetimeClient {
     pub fn connect(host: &str, db_name: &str) -> Result<Self> {
         tracing::info!("Connecting to SpacetimeDB at {} (db: {})", host, db_name);
 
-        let synced = Arc::new(Mutex::new(false));
+        let (ready, _) = watch::channel(false);
 
         let conn = DbConnection::builder()
             .with_uri(host)
             .with_database_name(db_name)
             .build()?;
 
-        // Start the background thread
         conn.run_threaded();
 
-        // Subscribe to all files and folders
-        let synced_clone = synced.clone();
+        let applied = ready.clone();
+        let dropped = ready.clone();
         conn.subscription_builder()
             .on_applied(move |_ctx| {
-                let mut s = synced_clone.lock().unwrap();
-                *s = true;
+                let _ = applied.send(true);
                 tracing::info!("SpacetimeDB subscription sync complete");
             })
-            .on_error(|_ctx, err| {
+            .on_error(move |_ctx, err| {
+                let _ = dropped.send(false);
                 tracing::error!("SpacetimeDB subscription error: {:?}", err);
             })
             .subscribe(vec![
@@ -73,34 +89,93 @@ impl SpacetimeClient {
 
         tracing::info!("SpacetimeDB connection established");
 
-        Ok(Self { conn, synced })
+        Ok(Self { conn, ready })
     }
 
-    pub fn rename_file(&self, id: String, new_path: String) -> Result<()> {
+    // Reducers are submitted asynchronously: the socket accepting a call says nothing about
+    // whether it committed. Callers that need the truth await the reducer's own Result here.
+    //
+    // A timeout means UNKNOWN, not failure — the write may have committed after we stopped
+    // waiting, so retrying blindly can duplicate content.
+    async fn await_reducer(
+        &self,
+        what: &str,
+        outcome: oneshot::Receiver<Result<(), String>>,
+    ) -> Result<()> {
+        match timeout(REDUCER_TIMEOUT, outcome).await {
+            Ok(Ok(Ok(()))) => Ok(()),
+            Ok(Ok(Err(reducer_error))) => anyhow::bail!("{} failed: {}", what, reducer_error),
+            Ok(Err(_)) => anyhow::bail!(
+                "{}: outcome unknown (connection closed before it was confirmed). \
+                 Re-read the note before retrying.",
+                what
+            ),
+            Err(_) => anyhow::bail!(
+                "{}: outcome unknown (no confirmation within {}s). \
+                 Re-read the note before retrying.",
+                what,
+                REDUCER_TIMEOUT.as_secs()
+            ),
+        }
+    }
+
+    // Reads come from the subscription cache, so an unsynced cache answers "not found" for
+    // notes that exist. Callers must await this before touching it.
+    pub async fn await_ready(&self) -> Result<()> {
+        if *self.ready.borrow() {
+            return Ok(());
+        }
+        let mut rx = self.ready.subscribe();
+        match timeout(READINESS_TIMEOUT, async {
+            while !*rx.borrow_and_update() {
+                if rx.changed().await.is_err() {
+                    return false;
+                }
+            }
+            true
+        })
+        .await
+        {
+            Ok(true) => Ok(()),
+            Ok(false) => anyhow::bail!("SpacetimeDB connection closed while syncing; retry"),
+            Err(_) => anyhow::bail!(
+                "SpacetimeDB still syncing after {}s; retry shortly",
+                READINESS_TIMEOUT.as_secs()
+            ),
+        }
+    }
+
+    pub async fn rename_file(&self, id: String, new_path: String) -> Result<()> {
         tracing::info!("Renaming note {} to {}", id, new_path);
 
         // Call the rename_file reducer
-        self.conn.reducers().rename_file(id, new_path)?;
-
-        Ok(())
+        let (tx, rx) = oneshot::channel();
+        self.conn.reducers().rename_file_then(id, new_path, move |_ctx, outcome| {
+            let _ = tx.send(flatten_outcome(outcome));
+        })?;
+        self.await_reducer("rename_file", rx).await
     }
 
-    pub fn delete_file(&self, id: String) -> Result<()> {
+    pub async fn delete_file(&self, id: String) -> Result<()> {
         tracing::info!("Deleting note {}", id);
 
         // Call the delete_file reducer
-        self.conn.reducers().delete_file(id)?;
-
-        Ok(())
+        let (tx, rx) = oneshot::channel();
+        self.conn.reducers().delete_file_then(id, move |_ctx, outcome| {
+            let _ = tx.send(flatten_outcome(outcome));
+        })?;
+        self.await_reducer("delete_file", rx).await
     }
 
-    pub fn create_folder(&self, path: String, name: String, depth: u32) -> Result<()> {
+    pub async fn create_folder(&self, path: String, name: String, depth: u32) -> Result<()> {
         tracing::info!("Creating folder {} at depth {}", path, depth);
 
         // Call the create_folder reducer
-        self.conn.reducers().create_folder(path, name, depth)?;
-
-        Ok(())
+        let (tx, rx) = oneshot::channel();
+        self.conn.reducers().create_folder_then(path, name, depth, move |_ctx, outcome| {
+            let _ = tx.send(flatten_outcome(outcome));
+        })?;
+        self.await_reducer("create_folder", rx).await
     }
 
     pub fn list_folder(&self, folder_path: &str) -> Result<Vec<FolderEntry>> {
@@ -244,7 +319,7 @@ impl SpacetimeClient {
         Ok(files)
     }
 
-    pub fn create_file(
+    pub async fn create_file(
         &self,
         id: String,
         path: String,
@@ -261,9 +336,8 @@ impl SpacetimeClient {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_millis() as u64;
-
-        self.conn.reducers().create_file(
-            id,
+        let (tx, rx) = oneshot::channel();
+        self.conn.reducers().create_file_then(id,
             path,
             name,
             content,
@@ -272,13 +346,13 @@ impl SpacetimeClient {
             extension,
             size,
             now,
-            now,
-        )?;
-
-        Ok(())
+            now, move |_ctx, outcome| {
+            let _ = tx.send(flatten_outcome(outcome));
+        })?;
+        self.await_reducer("create_file", rx).await
     }
 
-    pub fn update_file_content(&self, id: String, content: String) -> Result<()> {
+    pub async fn update_file_content(&self, id: String, content: String) -> Result<()> {
         tracing::info!("Updating note content: {}", id);
 
         let size = content.len() as u64;
@@ -286,48 +360,62 @@ impl SpacetimeClient {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_millis() as u64;
-
-        self.conn.reducers().update_file_content(
-            id,
+        let (tx, rx) = oneshot::channel();
+        self.conn.reducers().update_file_content_then(id,
             content,
             size,
-            now,
-        )?;
-
-        Ok(())
+            now, move |_ctx, outcome| {
+            let _ = tx.send(flatten_outcome(outcome));
+        })?;
+        self.await_reducer("update_file_content", rx).await
     }
 
-    pub fn move_file(&self, old_path: String, new_path: String) -> Result<()> {
+    pub async fn move_file(&self, old_path: String, new_path: String) -> Result<()> {
         tracing::info!("Moving note from {} to {}", old_path, new_path);
-        self.conn.reducers().move_file(old_path, new_path)?;
-        Ok(())
+        let (tx, rx) = oneshot::channel();
+        self.conn.reducers().move_file_then(old_path, new_path, move |_ctx, outcome| {
+            let _ = tx.send(flatten_outcome(outcome));
+        })?;
+        self.await_reducer("move_file", rx).await
     }
 
-    pub fn move_folder(&self, old_path: String, new_path: String) -> Result<()> {
+    pub async fn move_folder(&self, old_path: String, new_path: String) -> Result<()> {
         tracing::info!("Moving folder from {} to {}", old_path, new_path);
-        self.conn.reducers().move_folder(old_path, new_path)?;
-        Ok(())
+        let (tx, rx) = oneshot::channel();
+        self.conn.reducers().move_folder_then(old_path, new_path, move |_ctx, outcome| {
+            let _ = tx.send(flatten_outcome(outcome));
+        })?;
+        self.await_reducer("move_folder", rx).await
     }
 
-    pub fn delete_folder(&self, path: String) -> Result<()> {
+    pub async fn delete_folder(&self, path: String) -> Result<()> {
         tracing::info!("Deleting folder: {}", path);
-        self.conn.reducers().delete_folder(path)?;
-        Ok(())
+        let (tx, rx) = oneshot::channel();
+        self.conn.reducers().delete_folder_then(path, move |_ctx, outcome| {
+            let _ = tx.send(flatten_outcome(outcome));
+        })?;
+        self.await_reducer("delete_folder", rx).await
     }
 
-    pub fn append_to_file(&self, path: String, content: String) -> Result<()> {
+    pub async fn append_to_file(&self, path: String, content: String) -> Result<()> {
         tracing::info!("Appending to note: {}", path);
-        self.conn.reducers().append_to_file(path, content)?;
-        Ok(())
+        let (tx, rx) = oneshot::channel();
+        self.conn.reducers().append_to_file_then(path, content, move |_ctx, outcome| {
+            let _ = tx.send(flatten_outcome(outcome));
+        })?;
+        self.await_reducer("append_to_file", rx).await
     }
 
-    pub fn prepend_to_file(&self, path: String, content: String) -> Result<()> {
+    pub async fn prepend_to_file(&self, path: String, content: String) -> Result<()> {
         tracing::info!("Prepending to note: {}", path);
-        self.conn.reducers().prepend_to_file(path, content)?;
-        Ok(())
+        let (tx, rx) = oneshot::channel();
+        self.conn.reducers().prepend_to_file_then(path, content, move |_ctx, outcome| {
+            let _ = tx.send(flatten_outcome(outcome));
+        })?;
+        self.await_reducer("prepend_to_file", rx).await
     }
 
-    pub fn find_replace_in_file(
+    pub async fn find_replace_in_file(
         &self,
         path: String,
         old_text: String,
@@ -335,10 +423,17 @@ impl SpacetimeClient {
         replace_all: bool,
     ) -> Result<()> {
         tracing::info!("Find/replace in note: {}", path);
-        self.conn
-            .reducers()
-            .find_replace_in_file(path, old_text, new_text, replace_all)?;
-        Ok(())
+        let (tx, rx) = oneshot::channel();
+        self.conn.reducers().find_replace_in_file_then(
+            path.clone(),
+            old_text,
+            new_text,
+            replace_all,
+            move |_ctx, outcome| {
+                let _ = tx.send(flatten_outcome(outcome));
+            },
+        )?;
+        self.await_reducer(&format!("edit of '{}'", path), rx).await
     }
 
     pub fn search_files(&self, query: &str, context_lines: Option<u32>) -> Result<Vec<SearchResult>> {

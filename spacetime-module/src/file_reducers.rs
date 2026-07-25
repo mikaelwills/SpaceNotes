@@ -42,17 +42,15 @@ pub fn create_file(
     size: u64,
     created_time: u64,
     modified_time: u64,
-) {
+) -> Result<(), String> {
     // Check if file already exists by ID
     if ctx.db.space_file().id().find(&id).is_some() {
-        log::warn!("File already exists with ID: {}", id);
-        return;
+        return Err(format!("File already exists with ID: {}", id));
     }
 
     // Check if path already exists (unique constraint)
     if ctx.db.space_file().path().find(&path).is_some() {
-        log::warn!("File already exists with path: {}", path);
-        return;
+        return Err(format!("File already exists with path: {}", path));
     }
 
     ctx.db.space_file().insert(SpaceFile {
@@ -69,6 +67,7 @@ pub fn create_file(
         db_updated_at: ctx.timestamp,
     });
     log::info!("Created file: {}", path);
+    Ok(())
 }
 
 /// Update only the content of a file (path stays the same)
@@ -79,7 +78,7 @@ pub fn update_file_content(
     content: String,
     size: u64,
     modified_time: u64,
-) {
+) -> Result<(), String> {
     if let Some(existing) = ctx.db.space_file().id().find(&id) {
         // Only update content-related fields, path remains unchanged
         ctx.db.space_file().id().delete(&id);
@@ -98,8 +97,9 @@ pub fn update_file_content(
         });
         log::info!("Updated content for file: {} (ID: {})", existing.path, id);
     } else {
-        log::warn!("File not found for content update: {}", id);
+        return Err(format!("File not found for content update: {}", id));
     }
+    Ok(())
 }
 
 /// Rename/move a file (path changes, content stays the same)
@@ -108,13 +108,12 @@ pub fn rename_file(
     ctx: &ReducerContext,
     id: String,
     new_path: String,
-) {
+) -> Result<(), String> {
     if let Some(existing) = ctx.db.space_file().id().find(&id) {
         // Check if new path already exists
         if let Some(collision) = ctx.db.space_file().path().find(&new_path) {
             if collision.id != id {
-                log::error!("Cannot rename: Path '{}' already exists", new_path);
-                return;
+                return Err(format!("Cannot rename: path '{}' already exists", new_path));
             }
         }
 
@@ -140,24 +139,31 @@ pub fn rename_file(
         });
         log::info!("Renamed file: {} -> {} (ID: {})", existing.path, new_path, id);
     } else {
-        log::warn!("File not found for rename: {}", id);
+        return Err(format!("File not found for rename: {}", id));
     }
+    Ok(())
 }
 
 #[spacetimedb::reducer]
-pub fn delete_file(ctx: &ReducerContext, id: String) {
+pub fn delete_file(ctx: &ReducerContext, id: String) -> Result<(), String> {
     if ctx.db.space_file().id().find(&id).is_some() {
         ctx.db.space_file().id().delete(&id);
         log::info!("Deleted file with ID: {}", id);
     } else {
-        log::warn!("File not found for deletion: {}", id);
+        return Err(format!("File not found for deletion: {}", id));
     }
+    Ok(())
 }
 
 #[spacetimedb::reducer]
-pub fn update_file_path(ctx: &ReducerContext, id: String, new_path: String) {
+pub fn update_file_path(ctx: &ReducerContext, id: String, new_path: String) -> Result<(), String> {
     if let Some(existing) = ctx.db.space_file().id().find(&id) {
-        // Calculate new metadata from new path
+        if let Some(collision) = ctx.db.space_file().path().find(&new_path) {
+            if collision.id != id {
+                return Err(format!("Cannot move: path '{}' already exists", new_path));
+            }
+        }
+
         let new_name = name_from_path(&new_path);
         let new_folder_path = folder_path_of(&new_path);
         let new_depth = new_path.matches('/').count() as u32;
@@ -179,16 +185,21 @@ pub fn update_file_path(ctx: &ReducerContext, id: String, new_path: String) {
         });
         log::info!("Updated path for file {}: {}", id, new_path);
     } else {
-        log::warn!("File not found for path update: {}", id);
+        return Err(format!("File not found for path update: {}", id));
     }
+    Ok(())
 }
 
-// DEPRECATED: Use update_file_path instead
-// Kept for backwards compatibility during migration
 #[spacetimedb::reducer]
-pub fn move_file(ctx: &ReducerContext, old_path: String, new_path: String) {
+pub fn move_file(ctx: &ReducerContext, old_path: String, new_path: String) -> Result<(), String> {
     if let Some(existing) = ctx.db.space_file().path().find(&old_path) {
-        // Calculate new metadata
+        // Without this the delete+insert below violates the unique path constraint and panics.
+        if let Some(collision) = ctx.db.space_file().path().find(&new_path) {
+            if collision.id != existing.id {
+                return Err(format!("Cannot move: path '{}' already exists", new_path));
+            }
+        }
+
         let new_name = name_from_path(&new_path);
         let new_folder_path = folder_path_of(&new_path);
         let new_depth = new_path.matches('/').count() as u32;
@@ -211,8 +222,9 @@ pub fn move_file(ctx: &ReducerContext, old_path: String, new_path: String) {
         });
         log::info!("Moved file: {} -> {}", old_path, new_path);
     } else {
-        log::warn!("File not found for move: {}", old_path);
+        return Err(format!("File not found for move: {}", old_path));
     }
+    Ok(())
 }
 
 #[spacetimedb::reducer]
@@ -228,7 +240,7 @@ pub fn upsert_file(
     size: u64,
     created_time: u64,
     modified_time: u64,
-) {
+) -> Result<(), String> {
     if let Some(existing) = ctx.db.space_file().id().find(&id) {
         if existing.path == path
             && existing.content == content
@@ -237,7 +249,7 @@ pub fn upsert_file(
             && existing.size == size
             && existing.modified_time == modified_time
         {
-            return;
+            return Ok(());
         }
         ctx.db.space_file().id().delete(&id);
     }
@@ -254,11 +266,12 @@ pub fn upsert_file(
         modified_time,
         db_updated_at: ctx.timestamp,
     });
+    Ok(())
 }
 
 /// Append content to an existing file (by path)
 #[spacetimedb::reducer]
-pub fn append_to_file(ctx: &ReducerContext, path: String, content: String) {
+pub fn append_to_file(ctx: &ReducerContext, path: String, content: String) -> Result<(), String> {
     if let Some(existing) = ctx.db.space_file().path().find(&path) {
         let new_content = format!("{}{}", existing.content, content);
         let new_size = new_content.len() as u64;
@@ -280,13 +293,14 @@ pub fn append_to_file(ctx: &ReducerContext, path: String, content: String) {
         });
         log::info!("Appended {} bytes to file: {}", content.len(), path);
     } else {
-        log::warn!("File not found for append: {}", path);
+        return Err(format!("File not found for append: {}", path));
     }
+    Ok(())
 }
 
 /// Prepend content to an existing file (by path)
 #[spacetimedb::reducer]
-pub fn prepend_to_file(ctx: &ReducerContext, path: String, content: String) {
+pub fn prepend_to_file(ctx: &ReducerContext, path: String, content: String) -> Result<(), String> {
     if let Some(existing) = ctx.db.space_file().path().find(&path) {
         let new_content = format!("{}{}", content, existing.content);
         let new_size = new_content.len() as u64;
@@ -308,8 +322,9 @@ pub fn prepend_to_file(ctx: &ReducerContext, path: String, content: String) {
         });
         log::info!("Prepended {} bytes to file: {}", content.len(), path);
     } else {
-        log::warn!("File not found for prepend: {}", path);
+        return Err(format!("File not found for prepend: {}", path));
     }
+    Ok(())
 }
 
 /// Find and replace text in a file (by path)
@@ -320,7 +335,7 @@ pub fn find_replace_in_file(
     old_text: String,
     new_text: String,
     replace_all: bool,
-) {
+) -> Result<(), String> {
     if let Some(existing) = ctx.db.space_file().path().find(&path) {
         let new_content = if replace_all {
             existing.content.replace(&old_text, &new_text)
@@ -330,8 +345,7 @@ pub fn find_replace_in_file(
 
         // Check if anything changed
         if new_content == existing.content {
-            log::warn!("No match found for replacement in file: {}", path);
-            return;
+            return Err(format!("No match found for replacement in file: {}", path));
         }
 
         let new_size = new_content.len() as u64;
@@ -353,6 +367,7 @@ pub fn find_replace_in_file(
         });
         log::info!("REDUCER_EXECUTED: find_replace_in_file path={}, new_size={}", path, new_size);
     } else {
-        log::warn!("File not found for find/replace: {}", path);
+        return Err(format!("File not found for find/replace: {}", path));
     }
+    Ok(())
 }

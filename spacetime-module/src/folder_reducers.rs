@@ -7,13 +7,12 @@ use crate::{Folder, folder, space_file};
 // =============================================================================
 
 #[spacetimedb::reducer]
-pub fn create_folder(ctx: &ReducerContext, path: String, name: String, depth: u32) {
+pub fn create_folder(ctx: &ReducerContext, path: String, name: String, depth: u32) -> Result<(), String> {
     // Normalize: strip trailing slash to match storage standard
     let normalized_path = path.trim_end_matches('/').to_string();
 
     if ctx.db.folder().path().find(&normalized_path).is_some() {
-        log::warn!("Folder already exists: {}", normalized_path);
-        return;
+        return Err(format!("Folder already exists: {}", normalized_path));
     }
 
     ctx.db.folder().insert(Folder {
@@ -22,16 +21,16 @@ pub fn create_folder(ctx: &ReducerContext, path: String, name: String, depth: u3
         depth,
     });
     log::info!("Created folder: {}", normalized_path);
+    Ok(())
 }
 
 #[spacetimedb::reducer]
-pub fn delete_folder(ctx: &ReducerContext, path: String) {
+pub fn delete_folder(ctx: &ReducerContext, path: String) -> Result<(), String> {
     // Normalize: strip trailing slash to match storage standard
     let normalized_path = path.trim_end_matches('/').to_string();
 
     if ctx.db.folder().path().find(&normalized_path).is_none() {
-        log::warn!("Folder not found for deletion: {}", normalized_path);
-        return;
+        return Err(format!("Folder not found for deletion: {}", normalized_path));
     }
 
     // For cascade operations, use path with slash to match space_file.folder_path
@@ -59,7 +58,7 @@ pub fn delete_folder(ctx: &ReducerContext, path: String) {
         .db
         .folder()
         .iter()
-        .filter(|f| f.path.starts_with(&normalized_path) && f.path != normalized_path)
+        .filter(|f| f.path.starts_with(&path_with_slash))
         .map(|f| f.path.clone())
         .collect();
 
@@ -74,24 +73,23 @@ pub fn delete_folder(ctx: &ReducerContext, path: String) {
     // Delete the folder itself
     ctx.db.folder().path().delete(&normalized_path);
     log::info!("Deleted folder: {}", normalized_path);
+    Ok(())
 }
 
 #[spacetimedb::reducer]
-pub fn move_folder(ctx: &ReducerContext, old_path: String, new_path: String) {
+pub fn move_folder(ctx: &ReducerContext, old_path: String, new_path: String) -> Result<(), String> {
     // Normalize: strip trailing slashes
     let old_normalized = old_path.trim_end_matches('/').to_string();
     let new_normalized = new_path.trim_end_matches('/').to_string();
 
     // Verify source folder exists
     if ctx.db.folder().path().find(&old_normalized).is_none() {
-        log::warn!("Folder not found for move: {}", old_normalized);
-        return;
+        return Err(format!("Folder not found for move: {}", old_normalized));
     }
 
     // Check if destination already exists
     if ctx.db.folder().path().find(&new_normalized).is_some() {
-        log::error!("Cannot move: Destination folder already exists: {}", new_normalized);
-        return;
+        return Err(format!("Cannot move: destination folder already exists: {}", new_normalized));
     }
 
     // Calculate new metadata for the folder
@@ -147,13 +145,17 @@ pub fn move_folder(ctx: &ReducerContext, old_path: String, new_path: String) {
         .db
         .folder()
         .iter()
-        .filter(|f| f.path.starts_with(&old_normalized) && f.path != old_normalized)
+        .filter(|f| f.path.starts_with(&old_path_with_slash))
         .collect();
 
     let subfolders_count = subfolders_to_update.len();
     for subfolder in subfolders_to_update {
         // Calculate new path for subfolder
-        let new_subfolder_path = subfolder.path.replacen(&old_normalized, &new_normalized, 1);
+        let new_subfolder_path = format!(
+            "{}{}",
+            new_normalized,
+            &subfolder.path[old_normalized.len()..]
+        );
         let new_subfolder_name = new_subfolder_path
             .rsplit('/')
             .next()
@@ -184,15 +186,16 @@ pub fn move_folder(ctx: &ReducerContext, old_path: String, new_path: String) {
 
     log::info!("Moved folder: {} -> {} (with {} files, {} subfolders)",
                old_normalized, new_normalized, files_count, subfolders_count);
+    Ok(())
 }
 
 #[spacetimedb::reducer]
-pub fn upsert_folder(ctx: &ReducerContext, path: String, name: String, depth: u32) {
+pub fn upsert_folder(ctx: &ReducerContext, path: String, name: String, depth: u32) -> Result<(), String> {
     let normalized_path = path.trim_end_matches('/').to_string();
 
     if let Some(existing) = ctx.db.folder().path().find(&normalized_path) {
         if existing.name == name && existing.depth == depth {
-            return;
+            return Ok(());
         }
         ctx.db.folder().path().delete(&normalized_path);
     }
@@ -201,4 +204,5 @@ pub fn upsert_folder(ctx: &ReducerContext, path: String, name: String, depth: u3
         name,
         depth
     });
+    Ok(())
 }
