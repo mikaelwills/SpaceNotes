@@ -260,13 +260,14 @@ async fn main() -> Result<()> {
     tracing::info!("Two-way sync initialized.");
 
     // Start file watcher
-    watcher::start_watcher(absolute_vault_path, client, tracker).await?;
+    let watcher_journal = opened_journal.as_ref().map(|o| o.journal.clone());
+    watcher::start_watcher(absolute_vault_path, client, tracker, watcher_journal).await?;
 
     Ok(())
 }
 
 struct OpenedJournal {
-    journal: journal::Journal,
+    journal: Arc<journal::Journal>,
     vault_id: String,
 }
 
@@ -304,7 +305,10 @@ fn open_journal(vault_path: &Path, data_dir: &Path) -> Result<OpenedJournal> {
     journal.set_meta_if_absent("created_at", &journal::now_ms().to_string())?;
 
     tracing::info!("Journal open: {:?}", db_path);
-    Ok(OpenedJournal { journal, vault_id })
+    Ok(OpenedJournal {
+        journal: Arc::new(journal),
+        vault_id,
+    })
 }
 
 fn resolve_vault_id(vault_path: &Path, journals_dir: &Path) -> Result<String> {

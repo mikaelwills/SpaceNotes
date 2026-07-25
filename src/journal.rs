@@ -174,6 +174,10 @@ impl Journal {
     }
 
     pub fn seed(&self, record: &FileRecord) -> Result<bool> {
+        self.observe(record, "seed")
+    }
+
+    pub fn observe(&self, record: &FileRecord, op: &str) -> Result<bool> {
         let conn = self.conn();
         let existing: Option<String> = conn
             .query_row(
@@ -209,7 +213,7 @@ impl Journal {
             insert_event(
                 &conn,
                 record.last_seen_at,
-                "seed",
+                op,
                 Some(&record.uuid),
                 None,
                 Some(&record.path),
@@ -236,6 +240,42 @@ impl Journal {
         )?;
         insert_event(&conn, ts, "rename", Some(uuid), Some(&from_path), Some(to_path))?;
         Ok(())
+    }
+
+    pub fn rekey_prefix(
+        &self,
+        from_prefix: &str,
+        to_prefix: &str,
+        ts: i64,
+    ) -> Result<Vec<(String, String)>> {
+        let conn = self.conn();
+        let prefix = format!("{}/", from_prefix);
+        let rows = query_records(
+            &conn,
+            &format!(
+                "{} WHERE deleted_at IS NULL AND substr(path, 1, ?1) = ?2",
+                SELECT_FILES
+            ),
+            params![prefix.len() as i64, prefix],
+        )?;
+        let mut moved = Vec::new();
+        for record in rows {
+            let new_path = format!("{}/{}", to_prefix, &record.path[prefix.len()..]);
+            conn.execute(
+                "UPDATE files SET path = ?1, last_seen_at = ?2 WHERE uuid = ?3",
+                params![new_path, ts, record.uuid],
+            )?;
+            insert_event(
+                &conn,
+                ts,
+                "rename",
+                Some(&record.uuid),
+                Some(&record.path),
+                Some(&new_path),
+            )?;
+            moved.push((record.uuid, new_path));
+        }
+        Ok(moved)
     }
 
     pub fn tombstone(&self, uuid: &str, ts: i64) -> Result<()> {
@@ -323,7 +363,7 @@ impl Journal {
     }
 
     #[cfg(test)]
-    fn event_count(&self, op: &str) -> i64 {
+    pub fn event_count(&self, op: &str) -> i64 {
         self.conn()
             .query_row(
                 "SELECT COUNT(*) FROM events WHERE op = ?1",
@@ -502,6 +542,21 @@ fn seed_one(journal: &Journal, vault_path: &Path, abs_path: &Path) -> Result<Opt
         return Ok(None);
     };
 
+    let record = build_record(vault_path, abs_path, &bytes, uuid)?;
+    Ok(Some(journal.seed(&record)?))
+}
+
+pub fn record_from_disk(vault_path: &Path, abs_path: &Path, uuid: String) -> Result<FileRecord> {
+    let bytes = std::fs::read(abs_path)?;
+    build_record(vault_path, abs_path, &bytes, uuid)
+}
+
+fn build_record(
+    vault_path: &Path,
+    abs_path: &Path,
+    bytes: &[u8],
+    uuid: String,
+) -> Result<FileRecord> {
     let rel_path = sanitize_path(&abs_path.strip_prefix(vault_path)?.to_string_lossy());
     let metadata = std::fs::metadata(abs_path)?;
     let modified = metadata
@@ -518,11 +573,11 @@ fn seed_one(journal: &Journal, vault_path: &Path, abs_path: &Path) -> Result<Opt
         .unwrap_or(modified);
     let (device, inode) = device_inode(&metadata);
 
-    let record = FileRecord {
+    Ok(FileRecord {
         uuid,
         path: rel_path,
         kind: "md".to_string(),
-        content_hash: hash_bytes(&bytes),
+        content_hash: hash_bytes(bytes),
         size: metadata.len() as i64,
         device,
         inode,
@@ -530,9 +585,7 @@ fn seed_one(journal: &Journal, vault_path: &Path, abs_path: &Path) -> Result<Opt
         modified_time: modified,
         last_seen_at: now_ms(),
         deleted_at: None,
-    };
-
-    Ok(Some(journal.seed(&record)?))
+    })
 }
 
 #[cfg(unix)]
