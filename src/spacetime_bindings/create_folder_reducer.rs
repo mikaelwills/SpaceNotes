@@ -26,8 +26,6 @@ impl __sdk::InModule for CreateFolderArgs {
     type Module = super::RemoteModule;
 }
 
-pub struct CreateFolderCallbackId(__sdk::CallbackId);
-
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the reducer `create_folder`.
 ///
@@ -37,72 +35,42 @@ pub trait create_folder {
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
-    ///  and its status can be observed by listening for [`Self::on_create_folder`] callbacks.
-    fn create_folder(&self, path: String, name: String, depth: u32) -> __sdk::Result<()>;
-    /// Register a callback to run whenever we are notified of an invocation of the reducer `create_folder`.
+    ///  and this method provides no way to listen for its completion status.
+    /// /// Use [`create_folder:create_folder_then`] to run a callback after the reducer completes.
+    fn create_folder(&self, path: String, name: String, depth: u32) -> __sdk::Result<()> {
+        self.create_folder_then(path, name, depth, |_, _| {})
+    }
+
+    /// Request that the remote module invoke the reducer `create_folder` to run as soon as possible,
+    /// registering `callback` to run when we are notified that the reducer completed.
     ///
-    /// Callbacks should inspect the [`__sdk::ReducerEvent`] contained in the [`super::ReducerEventContext`]
-    /// to determine the reducer's status.
-    ///
-    /// The returned [`CreateFolderCallbackId`] can be passed to [`Self::remove_on_create_folder`]
-    /// to cancel the callback.
-    fn on_create_folder(
+    /// This method returns immediately, and errors only if we are unable to send the request.
+    /// The reducer will run asynchronously in the future,
+    ///  and its status can be observed with the `callback`.
+    fn create_folder_then(
         &self,
-        callback: impl FnMut(&super::ReducerEventContext, &String, &String, &u32) + Send + 'static,
-    ) -> CreateFolderCallbackId;
-    /// Cancel a callback previously registered by [`Self::on_create_folder`],
-    /// causing it not to run in the future.
-    fn remove_on_create_folder(&self, callback: CreateFolderCallbackId);
+        path: String,
+        name: String,
+        depth: u32,
+
+        callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
+            + Send
+            + 'static,
+    ) -> __sdk::Result<()>;
 }
 
 impl create_folder for super::RemoteReducers {
-    fn create_folder(&self, path: String, name: String, depth: u32) -> __sdk::Result<()> {
-        self.imp
-            .call_reducer("create_folder", CreateFolderArgs { path, name, depth })
-    }
-    fn on_create_folder(
+    fn create_folder_then(
         &self,
-        mut callback: impl FnMut(&super::ReducerEventContext, &String, &String, &u32) + Send + 'static,
-    ) -> CreateFolderCallbackId {
-        CreateFolderCallbackId(self.imp.on_reducer(
-            "create_folder",
-            Box::new(move |ctx: &super::ReducerEventContext| {
-                let super::ReducerEventContext {
-                    event:
-                        __sdk::ReducerEvent {
-                            reducer: super::Reducer::CreateFolder { path, name, depth },
-                            ..
-                        },
-                    ..
-                } = ctx
-                else {
-                    unreachable!()
-                };
-                callback(ctx, path, name, depth)
-            }),
-        ))
-    }
-    fn remove_on_create_folder(&self, callback: CreateFolderCallbackId) {
-        self.imp.remove_on_reducer("create_folder", callback.0)
-    }
-}
+        path: String,
+        name: String,
+        depth: u32,
 
-#[allow(non_camel_case_types)]
-#[doc(hidden)]
-/// Extension trait for setting the call-flags for the reducer `create_folder`.
-///
-/// Implemented for [`super::SetReducerFlags`].
-///
-/// This type is currently unstable and may be removed without a major version bump.
-pub trait set_flags_for_create_folder {
-    /// Set the call-reducer flags for the reducer `create_folder` to `flags`.
-    ///
-    /// This type is currently unstable and may be removed without a major version bump.
-    fn create_folder(&self, flags: __ws::CallReducerFlags);
-}
-
-impl set_flags_for_create_folder for super::SetReducerFlags {
-    fn create_folder(&self, flags: __ws::CallReducerFlags) {
-        self.imp.set_call_reducer_flags("create_folder", flags);
+        callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
+            + Send
+            + 'static,
+    ) -> __sdk::Result<()> {
+        self.imp
+            .invoke_reducer_with_callback(CreateFolderArgs { path, name, depth }, callback)
     }
 }

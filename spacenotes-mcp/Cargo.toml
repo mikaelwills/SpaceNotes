@@ -13,7 +13,7 @@ anyhow = "1.0"
 tower-http = { version = "0.5", features = ["cors", "trace"] }
 
 # SpacetimeDB integration
-spacetimedb-sdk = "2.0"
+spacetimedb-sdk = "2.7"
 openssl = { version = "0.10", features = ["vendored"] }
 
 # Utilities

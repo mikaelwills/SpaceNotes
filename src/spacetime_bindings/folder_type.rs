@@ -15,3 +15,41 @@ pub struct Folder {
 impl __sdk::InModule for Folder {
     type Module = super::RemoteModule;
 }
+
+/// Column accessor struct for the table `Folder`.
+///
+/// Provides typed access to columns for query building.
+pub struct FolderCols {
+    pub path: __sdk::__query_builder::Col<Folder, String>,
+    pub name: __sdk::__query_builder::Col<Folder, String>,
+    pub depth: __sdk::__query_builder::Col<Folder, u32>,
+}
+
+impl __sdk::__query_builder::HasCols for Folder {
+    type Cols = FolderCols;
+    fn cols(table_name: &'static str) -> Self::Cols {
+        FolderCols {
+            path: __sdk::__query_builder::Col::new(table_name, "path"),
+            name: __sdk::__query_builder::Col::new(table_name, "name"),
+            depth: __sdk::__query_builder::Col::new(table_name, "depth"),
+        }
+    }
+}
+
+/// Indexed column accessor struct for the table `Folder`.
+///
+/// Provides typed access to indexed columns for query building.
+pub struct FolderIxCols {
+    pub path: __sdk::__query_builder::IxCol<Folder, String>,
+}
+
+impl __sdk::__query_builder::HasIxCols for Folder {
+    type IxCols = FolderIxCols;
+    fn ix_cols(table_name: &'static str) -> Self::IxCols {
+        FolderIxCols {
+            path: __sdk::__query_builder::IxCol::new(table_name, "path"),
+        }
+    }
+}
+
+impl __sdk::__query_builder::CanBeLookupTable for Folder {}
