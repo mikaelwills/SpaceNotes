@@ -19,14 +19,14 @@ fn numbered(content: &str) -> String {
         .join("\n")
 }
 
-fn format_note(n: &crate::spacetime_client::FullNote) -> String {
+fn format_file(n: &crate::spacetime_client::FullSpaceFile) -> String {
     format!(
         "id: {}\npath: {}\nname: {}\nfolder_path: {}\n\n{}",
         n.id, n.path, n.name, n.folder_path, numbered(&n.content)
     )
 }
 
-// The latest session note for a workflow, formatted, or a "no sessions" line.
+// The latest session file for a workflow, formatted, or a "no sessions" line.
 // Newest = max date, then lowest N within that date (create_session makes the
 // new file `-1-` and bumps older ones up).
 fn latest_session_block(
@@ -52,8 +52,8 @@ fn latest_session_block(
     let Some((_, _, id)) = latest else {
         return Ok(format!("No sessions found in {}", folder));
     };
-    match client.get_note_by_id(id).map_err(|e| e.to_string())? {
-        Some(note) => Ok(format_note(&note)),
+    match client.get_file_by_id(id).map_err(|e| e.to_string())? {
+        Some(file) => Ok(format_file(&file)),
         None => Ok("Latest session note vanished between list and fetch".to_string()),
     }
 }
@@ -402,12 +402,12 @@ pub async fn execute_tool(
             let query: String = serde_json::from_value(params.arguments["query"].clone())
                 .map_err(|e| e.to_string())?;
 
-            let notes = client.search_notes(&query, None).map_err(|e| e.to_string())?;
+            let files = client.search_files(&query, None).map_err(|e| e.to_string())?;
 
             Ok(json!({
                 "content": [{
                     "type": "text",
-                    "text": serde_json::to_string_pretty(&notes).unwrap_or_else(|_| "[]".to_string())
+                    "text": serde_json::to_string_pretty(&files).unwrap_or_else(|_| "[]".to_string())
                 }]
             }))
         }
@@ -423,13 +423,13 @@ pub async fn execute_tool(
                 .map(|v| v as usize)
                 .unwrap_or(10);
 
-            let mut notes = client.search_notes(&query, Some(context_lines)).map_err(|e| e.to_string())?;
-            notes.truncate(limit);
+            let mut files = client.search_files(&query, Some(context_lines)).map_err(|e| e.to_string())?;
+            files.truncate(limit);
 
             Ok(json!({
                 "content": [{
                     "type": "text",
-                    "text": serde_json::to_string_pretty(&notes).unwrap_or_else(|_| "[]".to_string())
+                    "text": serde_json::to_string_pretty(&files).unwrap_or_else(|_| "[]".to_string())
                 }]
             }))
         }
@@ -450,16 +450,16 @@ pub async fn execute_tool(
             }))
         }
         "get_note" => {
-            let note = if let Some(id) = params.arguments.get("id").and_then(|v| v.as_str()) {
-                client.get_note_by_id(id).map_err(|e| e.to_string())?
+            let file = if let Some(id) = params.arguments.get("id").and_then(|v| v.as_str()) {
+                client.get_file_by_id(id).map_err(|e| e.to_string())?
             } else if let Some(path) = params.arguments.get("path").and_then(|v| v.as_str()) {
-                client.get_note_by_path(path).map_err(|e| e.to_string())?
+                client.get_file_by_path(path).map_err(|e| e.to_string())?
             } else {
                 return Err("Must provide either 'id' or 'path'".to_string());
             };
 
             let raw = params.arguments.get("raw").and_then(|v| v.as_bool()).unwrap_or(false);
-            match note {
+            match file {
                 Some(n) => {
                     let body = if raw { n.content.clone() } else { numbered(&n.content) };
                     let text = format!(
@@ -472,29 +472,29 @@ pub async fn execute_tool(
             }
         }
         "get_notes" => {
-            let notes = if let Some(ids) = params.arguments.get("ids").and_then(|v| v.as_array()) {
+            let files = if let Some(ids) = params.arguments.get("ids").and_then(|v| v.as_array()) {
                 let ids: Vec<String> = ids
                     .iter()
                     .filter_map(|v| v.as_str().map(|s| s.to_string()))
                     .collect();
-                client.get_notes_by_ids(&ids).map_err(|e| e.to_string())?
+                client.get_files_by_ids(&ids).map_err(|e| e.to_string())?
             } else if let Some(paths) = params.arguments.get("paths").and_then(|v| v.as_array()) {
                 let paths: Vec<String> = paths
                     .iter()
                     .filter_map(|v| v.as_str().map(|s| s.to_string()))
                     .collect();
-                client.get_notes_by_paths(&paths).map_err(|e| e.to_string())?
+                client.get_files_by_paths(&paths).map_err(|e| e.to_string())?
             } else {
                 return Err("Must provide either 'ids' or 'paths' array".to_string());
             };
 
-            if notes.is_empty() {
+            if files.is_empty() {
                 return Ok(json!({"content": [{"type": "text", "text": "No notes found"}]}));
             }
 
             let mut result = String::new();
-            for note in &notes {
-                let numbered_content: String = note.content.lines()
+            for file in &files {
+                let numbered_content: String = file.content.lines()
                     .enumerate()
                     .map(|(i, line)| format!("{:>4}| {}", i + 1, line))
                     .collect::<Vec<_>>()
@@ -502,11 +502,11 @@ pub async fn execute_tool(
 
                 result.push_str(&format!(
                     "---\nid: {}\npath: {}\nname: {}\nfolder_path: {}\n\n{}\n\n",
-                    note.id, note.path, note.name, note.folder_path, numbered_content
+                    file.id, file.path, file.name, file.folder_path, numbered_content
                 ));
             }
 
-            Ok(json!({"content": [{"type": "text", "text": format!("Found {} notes:\n\n{}", notes.len(), result)}]}))
+            Ok(json!({"content": [{"type": "text", "text": format!("Found {} notes:\n\n{}", files.len(), result)}]}))
         }
         "create_note" => {
             let path: String = serde_json::from_value(params.arguments["path"].clone())
@@ -534,7 +534,7 @@ pub async fn execute_tool(
             let id = uuid::Uuid::new_v4().to_string();
 
             client
-                .create_note(id.clone(), path.clone(), name, content, folder_path)
+                .create_file(id.clone(), path.clone(), name, content, folder_path)
                 .map_err(|e| e.to_string())?;
 
             Ok(
@@ -579,7 +579,7 @@ pub async fn execute_tool(
                 let old_path = format!("{}{}.md", folder, name);
                 let new_path = format!("{}{}-{}-{}.md", folder, date, num + 1, rest);
                 client
-                    .move_note(old_path.clone(), new_path.clone())
+                    .move_file(old_path.clone(), new_path.clone())
                     .map_err(|e| e.to_string())?;
                 bumped.push(format!("{} -> {}-{}-{}", name, date, num + 1, rest));
             }
@@ -588,7 +588,7 @@ pub async fn execute_tool(
             let new_path = format!("{}{}.md", folder, new_name);
             let new_id = uuid::Uuid::new_v4().to_string();
             client
-                .create_note(new_id.clone(), new_path.clone(), new_name, content, folder)
+                .create_file(new_id.clone(), new_path.clone(), new_name, content, folder)
                 .map_err(|e| e.to_string())?;
 
             let mut text = format!("Created session: {} (id: {})", new_path, new_id);
@@ -608,8 +608,8 @@ pub async fn execute_tool(
                 .map_err(|e| e.to_string())?;
 
             let section = |title: &str, path: &str| -> String {
-                match client.get_note_by_path(path) {
-                    Ok(Some(n)) => format!("## {}\n\n{}", title, format_note(&n)),
+                match client.get_file_by_path(path) {
+                    Ok(Some(n)) => format!("## {}\n\n{}", title, format_file(&n)),
                     Ok(None) => format!("## {}\n\n(not found: {})", title, path),
                     Err(e) => format!("## {}\n\n(error: {})", title, e),
                 }
@@ -628,7 +628,7 @@ pub async fn execute_tool(
             let id: String = serde_json::from_value(params.arguments["id"].clone())
                 .map_err(|e| e.to_string())?;
 
-            client.delete_note(id.clone()).map_err(|e| e.to_string())?;
+            client.delete_file(id.clone()).map_err(|e| e.to_string())?;
 
             Ok(json!({"content": [{"type": "text", "text": format!("Deleted note: {}", id)}]}))
         }
@@ -640,7 +640,7 @@ pub async fn execute_tool(
             let mut errors = Vec::new();
 
             for id in ids {
-                match client.delete_note(id.clone()) {
+                match client.delete_file(id.clone()) {
                     Ok(_) => deleted.push(id),
                     Err(e) => errors.push(format!("{}: {}", id, e)),
                 }
@@ -660,7 +660,7 @@ pub async fn execute_tool(
                 .map_err(|e| e.to_string())?;
 
             client
-                .move_note(old_path.clone(), new_path.clone())
+                .move_file(old_path.clone(), new_path.clone())
                 .map_err(|e| e.to_string())?;
 
             Ok(
@@ -715,7 +715,7 @@ pub async fn execute_tool(
                 .map_err(|e| e.to_string())?;
 
             client
-                .append_to_note(path.clone(), content)
+                .append_to_file(path.clone(), content)
                 .map_err(|e| e.to_string())?;
 
             Ok(json!({"content": [{"type": "text", "text": format!("Appended to note: {}", path)}]}))
@@ -727,7 +727,7 @@ pub async fn execute_tool(
                 .map_err(|e| e.to_string())?;
 
             client
-                .prepend_to_note(path.clone(), content)
+                .prepend_to_file(path.clone(), content)
                 .map_err(|e| e.to_string())?;
 
             Ok(json!({"content": [{"type": "text", "text": format!("Prepended to note: {}", path)}]}))
@@ -750,16 +750,16 @@ pub async fn execute_tool(
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
 
-            let note = client.get_note_by_path(&path)
+            let file = client.get_file_by_path(&path)
                 .map_err(|e| e.to_string())?
                 .ok_or_else(|| format!("Note not found: {}", path))?;
 
-            if note.content.contains(&old_string) {
-                client.find_replace_in_note(path.clone(), old_string, new_string, replace_all)
+            if file.content.contains(&old_string) {
+                client.find_replace_in_file(path.clone(), old_string, new_string, replace_all)
                     .map_err(|e| e.to_string())?;
                 Ok(json!({"content": [{"type": "text", "text": format!("Edited note: {}", path)}]}))
             } else {
-                let norm_content = normalize_for_matching(&note.content);
+                let norm_content = normalize_for_matching(&file.content);
                 let norm_old = normalize_for_matching(&old_string);
 
                 if norm_content.contains(&norm_old) {
@@ -770,7 +770,7 @@ pub async fn execute_tool(
                     };
 
                     client
-                        .update_note_content(note.id, new_content)
+                        .update_file_content(file.id, new_content)
                         .map_err(|e| e.to_string())?;
 
                     tracing::info!("edit_note used normalized fallback for path={}", path);
@@ -778,7 +778,7 @@ pub async fn execute_tool(
                     Ok(json!({"content": [{"type": "text", "text": format!("Edited note: {}", path)}]}))
                 } else {
                     let old_preview: String = old_string.chars().take(80).collect();
-                    let content_preview: String = note.content.chars().take(200).collect();
+                    let content_preview: String = file.content.chars().take(200).collect();
                     tracing::warn!(
                         "EDIT_NOTE FAILED: old_string not found even after normalization. old_preview={:?}, content_preview={:?}",
                         old_preview, content_preview
@@ -811,7 +811,7 @@ pub async fn execute_tool(
                 let filename = old_path.split('/').last().unwrap_or(&old_path);
                 let new_path = format!("{}{}", dest, filename);
 
-                match client.move_note(old_path.clone(), new_path.clone()) {
+                match client.move_file(old_path.clone(), new_path.clone()) {
                     Ok(_) => moved.push(format!("{} -> {}", old_path, new_path)),
                     Err(e) => errors.push(format!("{}: {}", old_path, e)),
                 }
@@ -838,7 +838,7 @@ pub async fn execute_tool(
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
 
-            let current_note = client.get_note_by_path(&path)
+            let current_file = client.get_file_by_path(&path)
                 .map_err(|e| e.to_string())?
                 .ok_or_else(|| format!("Note not found: {}", path))?;
 
@@ -848,22 +848,22 @@ pub async fn execute_tool(
                 .build()
                 .map_err(|e| format!("Invalid regex pattern: {}", e))?;
 
-            let new_content = re.replace_all(&current_note.content, replacement.as_str()).to_string();
+            let new_content = re.replace_all(&current_file.content, replacement.as_str()).to_string();
 
-            if new_content == current_note.content {
+            if new_content == current_file.content {
                 return Ok(json!({"content": [{"type": "text", "text": "No matches found - note unchanged"}]}));
             }
 
-            let match_count = re.find_iter(&current_note.content).count();
+            let match_count = re.find_iter(&current_file.content).count();
 
             client
-                .update_note_content(current_note.id, new_content.clone())
+                .update_file_content(current_file.id, new_content.clone())
                 .map_err(|e| e.to_string())?;
 
             Ok(json!({"content": [{"type": "text", "text": format!("Replaced {} matches in {}\n\n---\n\n{}", match_count, path, new_content)}]}))
         }
         "get_outbound_links" => {
-            let id = resolve_note_id(client, &params.arguments)?;
+            let id = resolve_file_id(client, &params.arguments)?;
             let links = client.get_outbound_links(&id).map_err(|e| e.to_string())?;
             Ok(json!({
                 "content": [{
@@ -874,7 +874,7 @@ pub async fn execute_tool(
             }))
         }
         "get_backlinks" => {
-            let id = resolve_note_id(client, &params.arguments)?;
+            let id = resolve_file_id(client, &params.arguments)?;
             let links = client.get_backlinks(&id).map_err(|e| e.to_string())?;
             Ok(json!({
                 "content": [{
@@ -908,7 +908,7 @@ pub async fn execute_tool(
     }
 }
 
-fn resolve_note_id(
+fn resolve_file_id(
     client: &crate::spacetime_client::SpacetimeClient,
     args: &Value,
 ) -> Result<String, String> {
@@ -916,11 +916,11 @@ fn resolve_note_id(
         return Ok(id.to_string());
     }
     if let Some(path) = args.get("path").and_then(|v| v.as_str()) {
-        let note = client
-            .get_note_by_path(path)
+        let file = client
+            .get_file_by_path(path)
             .map_err(|e| e.to_string())?
             .ok_or_else(|| format!("Note not found: {}", path))?;
-        return Ok(note.id);
+        return Ok(file.id);
     }
     Err("Must provide either 'id' or 'path'".to_string())
 }

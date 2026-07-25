@@ -14,23 +14,23 @@ fn spacenote_link_re() -> &'static Regex {
 }
 
 use crate::bindings::{
-    append_to_note_reducer::append_to_note,
+    append_to_file_reducer::append_to_file,
     clear_all_sessions_reducer::clear_all_sessions,
     create_folder_reducer::create_folder,
-    create_note_reducer::create_note,
+    create_file_reducer::create_file,
     delete_folder_reducer::delete_folder,
-    delete_note_reducer::delete_note,
+    delete_file_reducer::delete_file,
     delete_session_reducer::delete_session as delete_session_reducer_fn,
-    find_replace_in_note_reducer::find_replace_in_note,
+    find_replace_in_file_reducer::find_replace_in_file,
     folder_table::FolderTableAccess,
     move_folder_reducer::move_folder,
-    move_note_reducer::move_note,
-    note_table::NoteTableAccess,
-    prepend_to_note_reducer::prepend_to_note,
-    rename_note_reducer::rename_note,
+    move_file_reducer::move_file,
+    space_file_table::SpaceFileTableAccess,
+    prepend_to_file_reducer::prepend_to_file,
+    rename_file_reducer::rename_file,
     session_activity_table::SessionActivityTableAccess,
     session_table::SessionTableAccess,
-    update_note_content_reducer::update_note_content,
+    update_file_content_reducer::update_file_content,
     DbConnection,
 };
 
@@ -53,7 +53,7 @@ impl SpacetimeClient {
         // Start the background thread
         conn.run_threaded();
 
-        // Subscribe to all notes and folders
+        // Subscribe to all files and folders
         let synced_clone = synced.clone();
         conn.subscription_builder()
             .on_applied(move |_ctx| {
@@ -65,7 +65,7 @@ impl SpacetimeClient {
                 tracing::error!("SpacetimeDB subscription error: {:?}", err);
             })
             .subscribe(vec![
-                "SELECT * FROM note",
+                "SELECT * FROM space_file",
                 "SELECT * FROM folder",
                 "SELECT * FROM session",
                 "SELECT * FROM session_activity",
@@ -76,20 +76,20 @@ impl SpacetimeClient {
         Ok(Self { conn, synced })
     }
 
-    pub fn rename_note(&self, id: String, new_path: String) -> Result<()> {
+    pub fn rename_file(&self, id: String, new_path: String) -> Result<()> {
         tracing::info!("Renaming note {} to {}", id, new_path);
 
-        // Call the rename_note reducer
-        self.conn.reducers().rename_note(id, new_path)?;
+        // Call the rename_file reducer
+        self.conn.reducers().rename_file(id, new_path)?;
 
         Ok(())
     }
 
-    pub fn delete_note(&self, id: String) -> Result<()> {
+    pub fn delete_file(&self, id: String) -> Result<()> {
         tracing::info!("Deleting note {}", id);
 
-        // Call the delete_note reducer
-        self.conn.reducers().delete_note(id)?;
+        // Call the delete_file reducer
+        self.conn.reducers().delete_file(id)?;
 
         Ok(())
     }
@@ -106,10 +106,10 @@ impl SpacetimeClient {
     pub fn list_folder(&self, folder_path: &str) -> Result<Vec<FolderEntry>> {
         tracing::info!("Listing folder: {}", folder_path);
 
-        // Folder paths are stored WITHOUT a trailing slash; note.folder_path is
+        // Folder paths are stored WITHOUT a trailing slash; file.folder_path is
         // stored WITH one. Normalize the input to match each.
         let parent = folder_path.trim_end_matches('/');
-        let note_folder = if parent.is_empty() {
+        let file_folder = if parent.is_empty() {
             String::new()
         } else {
             format!("{}/", parent)
@@ -132,14 +132,14 @@ impl SpacetimeClient {
         entries.extend(
             self.conn
                 .db()
-                .note()
+                .space_file()
                 .iter()
-                .filter(|note| note.folder_path == note_folder)
-                .map(|note| FolderEntry {
+                .filter(|file| file.folder_path == file_folder)
+                .map(|file| FolderEntry {
                     entry_type: "note".to_string(),
-                    name: note.name.clone(),
-                    path: note.path.clone(),
-                    id: Some(note.id.clone()),
+                    name: file.name.clone(),
+                    path: file.path.clone(),
+                    id: Some(file.id.clone()),
                 }),
         );
 
@@ -154,97 +154,97 @@ impl SpacetimeClient {
         Ok(entries)
     }
 
-    pub fn get_note_by_id(&self, id: &str) -> Result<Option<FullNote>> {
+    pub fn get_file_by_id(&self, id: &str) -> Result<Option<FullSpaceFile>> {
         tracing::info!("Getting note by id: {}", id);
 
-        let note = self
+        let file = self
             .conn
             .db()
-            .note()
+            .space_file()
             .id()
             .find(&id.to_string())
-            .map(|note| FullNote {
-                id: note.id.clone(),
-                path: note.path.clone(),
-                name: note.name.clone(),
-                content: note.content.clone(),
-                folder_path: note.folder_path.clone(),
+            .map(|file| FullSpaceFile {
+                id: file.id.clone(),
+                path: file.path.clone(),
+                name: file.name.clone(),
+                content: file.content.clone(),
+                folder_path: file.folder_path.clone(),
             });
 
-        Ok(note)
+        Ok(file)
     }
 
-    pub fn get_note_by_path(&self, path: &str) -> Result<Option<FullNote>> {
+    pub fn get_file_by_path(&self, path: &str) -> Result<Option<FullSpaceFile>> {
         tracing::info!("Getting note by path: {}", path);
 
-        let note = self
+        let file = self
             .conn
             .db()
-            .note()
+            .space_file()
             .path()
             .find(&path.to_string())
-            .map(|note| FullNote {
-                id: note.id.clone(),
-                path: note.path.clone(),
-                name: note.name.clone(),
-                content: note.content.clone(),
-                folder_path: note.folder_path.clone(),
+            .map(|file| FullSpaceFile {
+                id: file.id.clone(),
+                path: file.path.clone(),
+                name: file.name.clone(),
+                content: file.content.clone(),
+                folder_path: file.folder_path.clone(),
             });
 
-        Ok(note)
+        Ok(file)
     }
 
-    pub fn get_notes_by_paths(&self, paths: &[String]) -> Result<Vec<FullNote>> {
+    pub fn get_files_by_paths(&self, paths: &[String]) -> Result<Vec<FullSpaceFile>> {
         tracing::info!("Getting {} notes by paths", paths.len());
 
-        let notes: Vec<FullNote> = paths
+        let files: Vec<FullSpaceFile> = paths
             .iter()
             .filter_map(|path| {
                 self.conn
                     .db()
-                    .note()
+                    .space_file()
                     .path()
                     .find(path)
-                    .map(|note| FullNote {
-                        id: note.id.clone(),
-                        path: note.path.clone(),
-                        name: note.name.clone(),
-                        content: note.content.clone(),
-                        folder_path: note.folder_path.clone(),
+                    .map(|file| FullSpaceFile {
+                        id: file.id.clone(),
+                        path: file.path.clone(),
+                        name: file.name.clone(),
+                        content: file.content.clone(),
+                        folder_path: file.folder_path.clone(),
                     })
             })
             .collect();
 
-        tracing::info!("Found {} of {} requested notes", notes.len(), paths.len());
-        Ok(notes)
+        tracing::info!("Found {} of {} requested notes", files.len(), paths.len());
+        Ok(files)
     }
 
-    pub fn get_notes_by_ids(&self, ids: &[String]) -> Result<Vec<FullNote>> {
+    pub fn get_files_by_ids(&self, ids: &[String]) -> Result<Vec<FullSpaceFile>> {
         tracing::info!("Getting {} notes by ids", ids.len());
 
-        let notes: Vec<FullNote> = ids
+        let files: Vec<FullSpaceFile> = ids
             .iter()
             .filter_map(|id| {
                 self.conn
                     .db()
-                    .note()
+                    .space_file()
                     .id()
                     .find(id)
-                    .map(|note| FullNote {
-                        id: note.id.clone(),
-                        path: note.path.clone(),
-                        name: note.name.clone(),
-                        content: note.content.clone(),
-                        folder_path: note.folder_path.clone(),
+                    .map(|file| FullSpaceFile {
+                        id: file.id.clone(),
+                        path: file.path.clone(),
+                        name: file.name.clone(),
+                        content: file.content.clone(),
+                        folder_path: file.folder_path.clone(),
                     })
             })
             .collect();
 
-        tracing::info!("Found {} of {} requested notes", notes.len(), ids.len());
-        Ok(notes)
+        tracing::info!("Found {} of {} requested notes", files.len(), ids.len());
+        Ok(files)
     }
 
-    pub fn create_note(
+    pub fn create_file(
         &self,
         id: String,
         path: String,
@@ -256,14 +256,13 @@ impl SpacetimeClient {
 
         let depth = path.matches('/').count() as u32;
         let extension = extension_of(&path);
-        let kind = kind_of(&extension);
         let size = content.len() as u64;
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_millis() as u64;
 
-        self.conn.reducers().create_note(
+        self.conn.reducers().create_file(
             id,
             path,
             name,
@@ -271,7 +270,6 @@ impl SpacetimeClient {
             folder_path,
             depth,
             extension,
-            kind,
             size,
             now,
             now,
@@ -280,7 +278,7 @@ impl SpacetimeClient {
         Ok(())
     }
 
-    pub fn update_note_content(&self, id: String, content: String) -> Result<()> {
+    pub fn update_file_content(&self, id: String, content: String) -> Result<()> {
         tracing::info!("Updating note content: {}", id);
 
         let size = content.len() as u64;
@@ -289,7 +287,7 @@ impl SpacetimeClient {
             .unwrap()
             .as_millis() as u64;
 
-        self.conn.reducers().update_note_content(
+        self.conn.reducers().update_file_content(
             id,
             content,
             size,
@@ -299,9 +297,9 @@ impl SpacetimeClient {
         Ok(())
     }
 
-    pub fn move_note(&self, old_path: String, new_path: String) -> Result<()> {
+    pub fn move_file(&self, old_path: String, new_path: String) -> Result<()> {
         tracing::info!("Moving note from {} to {}", old_path, new_path);
-        self.conn.reducers().move_note(old_path, new_path)?;
+        self.conn.reducers().move_file(old_path, new_path)?;
         Ok(())
     }
 
@@ -317,19 +315,19 @@ impl SpacetimeClient {
         Ok(())
     }
 
-    pub fn append_to_note(&self, path: String, content: String) -> Result<()> {
+    pub fn append_to_file(&self, path: String, content: String) -> Result<()> {
         tracing::info!("Appending to note: {}", path);
-        self.conn.reducers().append_to_note(path, content)?;
+        self.conn.reducers().append_to_file(path, content)?;
         Ok(())
     }
 
-    pub fn prepend_to_note(&self, path: String, content: String) -> Result<()> {
+    pub fn prepend_to_file(&self, path: String, content: String) -> Result<()> {
         tracing::info!("Prepending to note: {}", path);
-        self.conn.reducers().prepend_to_note(path, content)?;
+        self.conn.reducers().prepend_to_file(path, content)?;
         Ok(())
     }
 
-    pub fn find_replace_in_note(
+    pub fn find_replace_in_file(
         &self,
         path: String,
         old_text: String,
@@ -339,11 +337,11 @@ impl SpacetimeClient {
         tracing::info!("Find/replace in note: {}", path);
         self.conn
             .reducers()
-            .find_replace_in_note(path, old_text, new_text, replace_all)?;
+            .find_replace_in_file(path, old_text, new_text, replace_all)?;
         Ok(())
     }
 
-    pub fn search_notes(&self, query: &str, context_lines: Option<u32>) -> Result<Vec<SearchResult>> {
+    pub fn search_files(&self, query: &str, context_lines: Option<u32>) -> Result<Vec<SearchResult>> {
         tracing::info!("Searching notes for: {} (context_lines: {:?})", query, context_lines);
 
         let tokens: Vec<String> = query
@@ -352,15 +350,15 @@ impl SpacetimeClient {
             .map(|s| s.to_string())
             .collect();
 
-        let mut notes: Vec<(usize, SearchResult)> = self
+        let mut files: Vec<(usize, SearchResult)> = self
             .conn
             .db()
-            .note()
+            .space_file()
             .iter()
-            .filter_map(|note| {
-                let name_lower = note.name.to_lowercase();
-                let path_lower = note.path.to_lowercase();
-                let content_lower = note.content.to_lowercase();
+            .filter_map(|file| {
+                let name_lower = file.name.to_lowercase();
+                let path_lower = file.path.to_lowercase();
+                let content_lower = file.content.to_lowercase();
 
                 let match_count = tokens
                     .iter()
@@ -376,7 +374,7 @@ impl SpacetimeClient {
                 }
 
                 let excerpts = context_lines.map(|ctx| {
-                    let lines: Vec<&str> = note.content.lines().collect();
+                    let lines: Vec<&str> = file.content.lines().collect();
                     let total = lines.len();
                     let ctx = ctx as usize;
                     let mut matched_ranges: Vec<(usize, usize)> = Vec::new();
@@ -409,31 +407,31 @@ impl SpacetimeClient {
                 Some((
                     match_count,
                     SearchResult {
-                        id: note.id.clone(),
-                        path: note.path.clone(),
-                        name: note.name.clone(),
+                        id: file.id.clone(),
+                        path: file.path.clone(),
+                        name: file.name.clone(),
                         excerpts,
                     },
                 ))
             })
             .collect();
 
-        notes.sort_by(|a, b| b.0.cmp(&a.0));
+        files.sort_by(|a, b| b.0.cmp(&a.0));
 
-        let notes: Vec<SearchResult> = notes.into_iter().map(|(_, note)| note).collect();
+        let files: Vec<SearchResult> = files.into_iter().map(|(_, file)| file).collect();
 
-        tracing::info!("Found {} notes matching '{}'", notes.len(), query);
+        tracing::info!("Found {} notes matching '{}'", files.len(), query);
 
-        Ok(notes)
+        Ok(files)
     }
 
     pub fn get_outbound_links(&self, id: &str) -> Result<Vec<Link>> {
         tracing::info!("Getting outbound links for note {}", id);
 
-        let Some(note) = self
+        let Some(file) = self
             .conn
             .db()
-            .note()
+            .space_file()
             .id()
             .find(&id.to_string())
         else {
@@ -443,14 +441,14 @@ impl SpacetimeClient {
         let id_to_meta: HashMap<String, (String, String)> = self
             .conn
             .db()
-            .note()
+            .space_file()
             .iter()
             .map(|n| (n.id.clone(), (n.name.clone(), n.path.clone())))
             .collect();
 
         let mut seen = HashSet::new();
         let mut links = Vec::new();
-        for cap in spacenote_link_re().captures_iter(&note.content) {
+        for cap in spacenote_link_re().captures_iter(&file.content) {
             let target_id = cap.get(2).unwrap().as_str().to_string();
             if !seen.insert(target_id.clone()) {
                 continue;
@@ -477,29 +475,29 @@ impl SpacetimeClient {
         let target_exists = self
             .conn
             .db()
-            .note()
+            .space_file()
             .id()
             .find(&id.to_string())
             .is_some();
 
         let mut seen = HashSet::new();
         let mut links = Vec::new();
-        for note in self.conn.db().note().iter() {
-            if note.id == id {
+        for file in self.conn.db().space_file().iter() {
+            if file.id == id {
                 continue;
             }
             let mut references_target = false;
-            for cap in spacenote_link_re().captures_iter(&note.content) {
+            for cap in spacenote_link_re().captures_iter(&file.content) {
                 if cap.get(2).unwrap().as_str() == id {
                     references_target = true;
                     break;
                 }
             }
-            if references_target && seen.insert(note.id.clone()) {
+            if references_target && seen.insert(file.id.clone()) {
                 links.push(Link {
-                    id: note.id.clone(),
-                    name: note.name.clone(),
-                    path: note.path.clone(),
+                    id: file.id.clone(),
+                    name: file.name.clone(),
+                    path: file.path.clone(),
                     broken: !target_exists,
                 });
             }
@@ -598,7 +596,7 @@ pub struct SearchResult {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct FullNote {
+pub struct FullSpaceFile {
     pub id: String,
     pub path: String,
     pub name: String,
@@ -611,14 +609,6 @@ fn extension_of(path: &str) -> String {
     match base.rsplit_once('.') {
         Some((stem, ext)) if !stem.is_empty() => ext.to_lowercase(),
         _ => String::new(),
-    }
-}
-
-fn kind_of(extension: &str) -> String {
-    if extension == "md" {
-        "md".to_string()
-    } else {
-        "file".to_string()
     }
 }
 

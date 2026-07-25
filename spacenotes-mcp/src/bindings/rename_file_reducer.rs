@@ -6,44 +6,49 @@ use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
-pub(super) struct GetRecentNotesArgs {
-    pub limit: u32,
+pub(super) struct RenameFileArgs {
+    pub id: String,
+    pub new_path: String,
 }
 
-impl From<GetRecentNotesArgs> for super::Reducer {
-    fn from(args: GetRecentNotesArgs) -> Self {
-        Self::GetRecentNotes { limit: args.limit }
+impl From<RenameFileArgs> for super::Reducer {
+    fn from(args: RenameFileArgs) -> Self {
+        Self::RenameFile {
+            id: args.id,
+            new_path: args.new_path,
+        }
     }
 }
 
-impl __sdk::InModule for GetRecentNotesArgs {
+impl __sdk::InModule for RenameFileArgs {
     type Module = super::RemoteModule;
 }
 
 #[allow(non_camel_case_types)]
-/// Extension trait for access to the reducer `get_recent_notes`.
+/// Extension trait for access to the reducer `rename_file`.
 ///
 /// Implemented for [`super::RemoteReducers`].
-pub trait get_recent_notes {
-    /// Request that the remote module invoke the reducer `get_recent_notes` to run as soon as possible.
+pub trait rename_file {
+    /// Request that the remote module invoke the reducer `rename_file` to run as soon as possible.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
-    /// /// Use [`get_recent_notes:get_recent_notes_then`] to run a callback after the reducer completes.
-    fn get_recent_notes(&self, limit: u32) -> __sdk::Result<()> {
-        self.get_recent_notes_then(limit, |_, _| {})
+    /// /// Use [`rename_file:rename_file_then`] to run a callback after the reducer completes.
+    fn rename_file(&self, id: String, new_path: String) -> __sdk::Result<()> {
+        self.rename_file_then(id, new_path, |_, _| {})
     }
 
-    /// Request that the remote module invoke the reducer `get_recent_notes` to run as soon as possible,
+    /// Request that the remote module invoke the reducer `rename_file` to run as soon as possible,
     /// registering `callback` to run when we are notified that the reducer completed.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and its status can be observed with the `callback`.
-    fn get_recent_notes_then(
+    fn rename_file_then(
         &self,
-        limit: u32,
+        id: String,
+        new_path: String,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -51,16 +56,17 @@ pub trait get_recent_notes {
     ) -> __sdk::Result<()>;
 }
 
-impl get_recent_notes for super::RemoteReducers {
-    fn get_recent_notes_then(
+impl rename_file for super::RemoteReducers {
+    fn rename_file_then(
         &self,
-        limit: u32,
+        id: String,
+        new_path: String,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
             + 'static,
     ) -> __sdk::Result<()> {
         self.imp
-            .invoke_reducer_with_callback(GetRecentNotesArgs { limit }, callback)
+            .invoke_reducer_with_callback(RenameFileArgs { id, new_path }, callback)
     }
 }

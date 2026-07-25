@@ -6,49 +6,44 @@ use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
-pub(super) struct AppendToNoteArgs {
-    pub path: String,
-    pub content: String,
+pub(super) struct DeleteFileArgs {
+    pub id: String,
 }
 
-impl From<AppendToNoteArgs> for super::Reducer {
-    fn from(args: AppendToNoteArgs) -> Self {
-        Self::AppendToNote {
-            path: args.path,
-            content: args.content,
-        }
+impl From<DeleteFileArgs> for super::Reducer {
+    fn from(args: DeleteFileArgs) -> Self {
+        Self::DeleteFile { id: args.id }
     }
 }
 
-impl __sdk::InModule for AppendToNoteArgs {
+impl __sdk::InModule for DeleteFileArgs {
     type Module = super::RemoteModule;
 }
 
 #[allow(non_camel_case_types)]
-/// Extension trait for access to the reducer `append_to_note`.
+/// Extension trait for access to the reducer `delete_file`.
 ///
 /// Implemented for [`super::RemoteReducers`].
-pub trait append_to_note {
-    /// Request that the remote module invoke the reducer `append_to_note` to run as soon as possible.
+pub trait delete_file {
+    /// Request that the remote module invoke the reducer `delete_file` to run as soon as possible.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
-    /// /// Use [`append_to_note:append_to_note_then`] to run a callback after the reducer completes.
-    fn append_to_note(&self, path: String, content: String) -> __sdk::Result<()> {
-        self.append_to_note_then(path, content, |_, _| {})
+    /// /// Use [`delete_file:delete_file_then`] to run a callback after the reducer completes.
+    fn delete_file(&self, id: String) -> __sdk::Result<()> {
+        self.delete_file_then(id, |_, _| {})
     }
 
-    /// Request that the remote module invoke the reducer `append_to_note` to run as soon as possible,
+    /// Request that the remote module invoke the reducer `delete_file` to run as soon as possible,
     /// registering `callback` to run when we are notified that the reducer completed.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and its status can be observed with the `callback`.
-    fn append_to_note_then(
+    fn delete_file_then(
         &self,
-        path: String,
-        content: String,
+        id: String,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -56,17 +51,16 @@ pub trait append_to_note {
     ) -> __sdk::Result<()>;
 }
 
-impl append_to_note for super::RemoteReducers {
-    fn append_to_note_then(
+impl delete_file for super::RemoteReducers {
+    fn delete_file_then(
         &self,
-        path: String,
-        content: String,
+        id: String,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
             + 'static,
     ) -> __sdk::Result<()> {
         self.imp
-            .invoke_reducer_with_callback(AppendToNoteArgs { path, content }, callback)
+            .invoke_reducer_with_callback(DeleteFileArgs { id }, callback)
     }
 }

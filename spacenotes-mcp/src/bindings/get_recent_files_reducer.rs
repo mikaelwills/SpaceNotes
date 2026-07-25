@@ -6,49 +6,44 @@ use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
-pub(super) struct PrependToNoteArgs {
-    pub path: String,
-    pub content: String,
+pub(super) struct GetRecentFilesArgs {
+    pub limit: u32,
 }
 
-impl From<PrependToNoteArgs> for super::Reducer {
-    fn from(args: PrependToNoteArgs) -> Self {
-        Self::PrependToNote {
-            path: args.path,
-            content: args.content,
-        }
+impl From<GetRecentFilesArgs> for super::Reducer {
+    fn from(args: GetRecentFilesArgs) -> Self {
+        Self::GetRecentFiles { limit: args.limit }
     }
 }
 
-impl __sdk::InModule for PrependToNoteArgs {
+impl __sdk::InModule for GetRecentFilesArgs {
     type Module = super::RemoteModule;
 }
 
 #[allow(non_camel_case_types)]
-/// Extension trait for access to the reducer `prepend_to_note`.
+/// Extension trait for access to the reducer `get_recent_files`.
 ///
 /// Implemented for [`super::RemoteReducers`].
-pub trait prepend_to_note {
-    /// Request that the remote module invoke the reducer `prepend_to_note` to run as soon as possible.
+pub trait get_recent_files {
+    /// Request that the remote module invoke the reducer `get_recent_files` to run as soon as possible.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
-    /// /// Use [`prepend_to_note:prepend_to_note_then`] to run a callback after the reducer completes.
-    fn prepend_to_note(&self, path: String, content: String) -> __sdk::Result<()> {
-        self.prepend_to_note_then(path, content, |_, _| {})
+    /// /// Use [`get_recent_files:get_recent_files_then`] to run a callback after the reducer completes.
+    fn get_recent_files(&self, limit: u32) -> __sdk::Result<()> {
+        self.get_recent_files_then(limit, |_, _| {})
     }
 
-    /// Request that the remote module invoke the reducer `prepend_to_note` to run as soon as possible,
+    /// Request that the remote module invoke the reducer `get_recent_files` to run as soon as possible,
     /// registering `callback` to run when we are notified that the reducer completed.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and its status can be observed with the `callback`.
-    fn prepend_to_note_then(
+    fn get_recent_files_then(
         &self,
-        path: String,
-        content: String,
+        limit: u32,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -56,17 +51,16 @@ pub trait prepend_to_note {
     ) -> __sdk::Result<()>;
 }
 
-impl prepend_to_note for super::RemoteReducers {
-    fn prepend_to_note_then(
+impl get_recent_files for super::RemoteReducers {
+    fn get_recent_files_then(
         &self,
-        path: String,
-        content: String,
+        limit: u32,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
             + 'static,
     ) -> __sdk::Result<()> {
         self.imp
-            .invoke_reducer_with_callback(PrependToNoteArgs { path, content }, callback)
+            .invoke_reducer_with_callback(GetRecentFilesArgs { limit }, callback)
     }
 }

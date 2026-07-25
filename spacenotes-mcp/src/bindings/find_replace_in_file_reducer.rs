@@ -6,16 +6,16 @@ use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
-pub(super) struct FindReplaceInNoteArgs {
+pub(super) struct FindReplaceInFileArgs {
     pub path: String,
     pub old_text: String,
     pub new_text: String,
     pub replace_all: bool,
 }
 
-impl From<FindReplaceInNoteArgs> for super::Reducer {
-    fn from(args: FindReplaceInNoteArgs) -> Self {
-        Self::FindReplaceInNote {
+impl From<FindReplaceInFileArgs> for super::Reducer {
+    fn from(args: FindReplaceInFileArgs) -> Self {
+        Self::FindReplaceInFile {
             path: args.path,
             old_text: args.old_text,
             new_text: args.new_text,
@@ -24,38 +24,38 @@ impl From<FindReplaceInNoteArgs> for super::Reducer {
     }
 }
 
-impl __sdk::InModule for FindReplaceInNoteArgs {
+impl __sdk::InModule for FindReplaceInFileArgs {
     type Module = super::RemoteModule;
 }
 
 #[allow(non_camel_case_types)]
-/// Extension trait for access to the reducer `find_replace_in_note`.
+/// Extension trait for access to the reducer `find_replace_in_file`.
 ///
 /// Implemented for [`super::RemoteReducers`].
-pub trait find_replace_in_note {
-    /// Request that the remote module invoke the reducer `find_replace_in_note` to run as soon as possible.
+pub trait find_replace_in_file {
+    /// Request that the remote module invoke the reducer `find_replace_in_file` to run as soon as possible.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
-    /// /// Use [`find_replace_in_note:find_replace_in_note_then`] to run a callback after the reducer completes.
-    fn find_replace_in_note(
+    /// /// Use [`find_replace_in_file:find_replace_in_file_then`] to run a callback after the reducer completes.
+    fn find_replace_in_file(
         &self,
         path: String,
         old_text: String,
         new_text: String,
         replace_all: bool,
     ) -> __sdk::Result<()> {
-        self.find_replace_in_note_then(path, old_text, new_text, replace_all, |_, _| {})
+        self.find_replace_in_file_then(path, old_text, new_text, replace_all, |_, _| {})
     }
 
-    /// Request that the remote module invoke the reducer `find_replace_in_note` to run as soon as possible,
+    /// Request that the remote module invoke the reducer `find_replace_in_file` to run as soon as possible,
     /// registering `callback` to run when we are notified that the reducer completed.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and its status can be observed with the `callback`.
-    fn find_replace_in_note_then(
+    fn find_replace_in_file_then(
         &self,
         path: String,
         old_text: String,
@@ -68,8 +68,8 @@ pub trait find_replace_in_note {
     ) -> __sdk::Result<()>;
 }
 
-impl find_replace_in_note for super::RemoteReducers {
-    fn find_replace_in_note_then(
+impl find_replace_in_file for super::RemoteReducers {
+    fn find_replace_in_file_then(
         &self,
         path: String,
         old_text: String,
@@ -81,7 +81,7 @@ impl find_replace_in_note for super::RemoteReducers {
             + 'static,
     ) -> __sdk::Result<()> {
         self.imp.invoke_reducer_with_callback(
-            FindReplaceInNoteArgs {
+            FindReplaceInFileArgs {
                 path,
                 old_text,
                 new_text,

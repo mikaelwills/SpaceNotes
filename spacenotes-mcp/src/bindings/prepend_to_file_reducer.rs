@@ -6,49 +6,49 @@ use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
-pub(super) struct UpdateNotePathArgs {
-    pub id: String,
-    pub new_path: String,
+pub(super) struct PrependToFileArgs {
+    pub path: String,
+    pub content: String,
 }
 
-impl From<UpdateNotePathArgs> for super::Reducer {
-    fn from(args: UpdateNotePathArgs) -> Self {
-        Self::UpdateNotePath {
-            id: args.id,
-            new_path: args.new_path,
+impl From<PrependToFileArgs> for super::Reducer {
+    fn from(args: PrependToFileArgs) -> Self {
+        Self::PrependToFile {
+            path: args.path,
+            content: args.content,
         }
     }
 }
 
-impl __sdk::InModule for UpdateNotePathArgs {
+impl __sdk::InModule for PrependToFileArgs {
     type Module = super::RemoteModule;
 }
 
 #[allow(non_camel_case_types)]
-/// Extension trait for access to the reducer `update_note_path`.
+/// Extension trait for access to the reducer `prepend_to_file`.
 ///
 /// Implemented for [`super::RemoteReducers`].
-pub trait update_note_path {
-    /// Request that the remote module invoke the reducer `update_note_path` to run as soon as possible.
+pub trait prepend_to_file {
+    /// Request that the remote module invoke the reducer `prepend_to_file` to run as soon as possible.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
-    /// /// Use [`update_note_path:update_note_path_then`] to run a callback after the reducer completes.
-    fn update_note_path(&self, id: String, new_path: String) -> __sdk::Result<()> {
-        self.update_note_path_then(id, new_path, |_, _| {})
+    /// /// Use [`prepend_to_file:prepend_to_file_then`] to run a callback after the reducer completes.
+    fn prepend_to_file(&self, path: String, content: String) -> __sdk::Result<()> {
+        self.prepend_to_file_then(path, content, |_, _| {})
     }
 
-    /// Request that the remote module invoke the reducer `update_note_path` to run as soon as possible,
+    /// Request that the remote module invoke the reducer `prepend_to_file` to run as soon as possible,
     /// registering `callback` to run when we are notified that the reducer completed.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and its status can be observed with the `callback`.
-    fn update_note_path_then(
+    fn prepend_to_file_then(
         &self,
-        id: String,
-        new_path: String,
+        path: String,
+        content: String,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -56,17 +56,17 @@ pub trait update_note_path {
     ) -> __sdk::Result<()>;
 }
 
-impl update_note_path for super::RemoteReducers {
-    fn update_note_path_then(
+impl prepend_to_file for super::RemoteReducers {
+    fn prepend_to_file_then(
         &self,
-        id: String,
-        new_path: String,
+        path: String,
+        content: String,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
             + 'static,
     ) -> __sdk::Result<()> {
         self.imp
-            .invoke_reducer_with_callback(UpdateNotePathArgs { id, new_path }, callback)
+            .invoke_reducer_with_callback(PrependToFileArgs { path, content }, callback)
     }
 }

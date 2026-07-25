@@ -6,48 +6,48 @@ use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
-pub(super) struct RenameNoteArgs {
-    pub id: String,
+pub(super) struct MoveFileArgs {
+    pub old_path: String,
     pub new_path: String,
 }
 
-impl From<RenameNoteArgs> for super::Reducer {
-    fn from(args: RenameNoteArgs) -> Self {
-        Self::RenameNote {
-            id: args.id,
+impl From<MoveFileArgs> for super::Reducer {
+    fn from(args: MoveFileArgs) -> Self {
+        Self::MoveFile {
+            old_path: args.old_path,
             new_path: args.new_path,
         }
     }
 }
 
-impl __sdk::InModule for RenameNoteArgs {
+impl __sdk::InModule for MoveFileArgs {
     type Module = super::RemoteModule;
 }
 
 #[allow(non_camel_case_types)]
-/// Extension trait for access to the reducer `rename_note`.
+/// Extension trait for access to the reducer `move_file`.
 ///
 /// Implemented for [`super::RemoteReducers`].
-pub trait rename_note {
-    /// Request that the remote module invoke the reducer `rename_note` to run as soon as possible.
+pub trait move_file {
+    /// Request that the remote module invoke the reducer `move_file` to run as soon as possible.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
-    /// /// Use [`rename_note:rename_note_then`] to run a callback after the reducer completes.
-    fn rename_note(&self, id: String, new_path: String) -> __sdk::Result<()> {
-        self.rename_note_then(id, new_path, |_, _| {})
+    /// /// Use [`move_file:move_file_then`] to run a callback after the reducer completes.
+    fn move_file(&self, old_path: String, new_path: String) -> __sdk::Result<()> {
+        self.move_file_then(old_path, new_path, |_, _| {})
     }
 
-    /// Request that the remote module invoke the reducer `rename_note` to run as soon as possible,
+    /// Request that the remote module invoke the reducer `move_file` to run as soon as possible,
     /// registering `callback` to run when we are notified that the reducer completed.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and its status can be observed with the `callback`.
-    fn rename_note_then(
+    fn move_file_then(
         &self,
-        id: String,
+        old_path: String,
         new_path: String,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
@@ -56,10 +56,10 @@ pub trait rename_note {
     ) -> __sdk::Result<()>;
 }
 
-impl rename_note for super::RemoteReducers {
-    fn rename_note_then(
+impl move_file for super::RemoteReducers {
+    fn move_file_then(
         &self,
-        id: String,
+        old_path: String,
         new_path: String,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
@@ -67,6 +67,6 @@ impl rename_note for super::RemoteReducers {
             + 'static,
     ) -> __sdk::Result<()> {
         self.imp
-            .invoke_reducer_with_callback(RenameNoteArgs { id, new_path }, callback)
+            .invoke_reducer_with_callback(MoveFileArgs { old_path, new_path }, callback)
     }
 }

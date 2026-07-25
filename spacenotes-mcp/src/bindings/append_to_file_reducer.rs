@@ -6,61 +6,49 @@ use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
-pub(super) struct UpdateNoteContentArgs {
-    pub id: String,
+pub(super) struct AppendToFileArgs {
+    pub path: String,
     pub content: String,
-    pub size: u64,
-    pub modified_time: u64,
 }
 
-impl From<UpdateNoteContentArgs> for super::Reducer {
-    fn from(args: UpdateNoteContentArgs) -> Self {
-        Self::UpdateNoteContent {
-            id: args.id,
+impl From<AppendToFileArgs> for super::Reducer {
+    fn from(args: AppendToFileArgs) -> Self {
+        Self::AppendToFile {
+            path: args.path,
             content: args.content,
-            size: args.size,
-            modified_time: args.modified_time,
         }
     }
 }
 
-impl __sdk::InModule for UpdateNoteContentArgs {
+impl __sdk::InModule for AppendToFileArgs {
     type Module = super::RemoteModule;
 }
 
 #[allow(non_camel_case_types)]
-/// Extension trait for access to the reducer `update_note_content`.
+/// Extension trait for access to the reducer `append_to_file`.
 ///
 /// Implemented for [`super::RemoteReducers`].
-pub trait update_note_content {
-    /// Request that the remote module invoke the reducer `update_note_content` to run as soon as possible.
+pub trait append_to_file {
+    /// Request that the remote module invoke the reducer `append_to_file` to run as soon as possible.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
-    /// /// Use [`update_note_content:update_note_content_then`] to run a callback after the reducer completes.
-    fn update_note_content(
-        &self,
-        id: String,
-        content: String,
-        size: u64,
-        modified_time: u64,
-    ) -> __sdk::Result<()> {
-        self.update_note_content_then(id, content, size, modified_time, |_, _| {})
+    /// /// Use [`append_to_file:append_to_file_then`] to run a callback after the reducer completes.
+    fn append_to_file(&self, path: String, content: String) -> __sdk::Result<()> {
+        self.append_to_file_then(path, content, |_, _| {})
     }
 
-    /// Request that the remote module invoke the reducer `update_note_content` to run as soon as possible,
+    /// Request that the remote module invoke the reducer `append_to_file` to run as soon as possible,
     /// registering `callback` to run when we are notified that the reducer completed.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and its status can be observed with the `callback`.
-    fn update_note_content_then(
+    fn append_to_file_then(
         &self,
-        id: String,
+        path: String,
         content: String,
-        size: u64,
-        modified_time: u64,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -68,26 +56,17 @@ pub trait update_note_content {
     ) -> __sdk::Result<()>;
 }
 
-impl update_note_content for super::RemoteReducers {
-    fn update_note_content_then(
+impl append_to_file for super::RemoteReducers {
+    fn append_to_file_then(
         &self,
-        id: String,
+        path: String,
         content: String,
-        size: u64,
-        modified_time: u64,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
             + 'static,
     ) -> __sdk::Result<()> {
-        self.imp.invoke_reducer_with_callback(
-            UpdateNoteContentArgs {
-                id,
-                content,
-                size,
-                modified_time,
-            },
-            callback,
-        )
+        self.imp
+            .invoke_reducer_with_callback(AppendToFileArgs { path, content }, callback)
     }
 }
