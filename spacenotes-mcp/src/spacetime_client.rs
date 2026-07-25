@@ -48,6 +48,16 @@ fn flatten_outcome(
     }
 }
 
+fn full_file(file: crate::bindings::space_file_type::SpaceFile) -> FullSpaceFile {
+    FullSpaceFile {
+        id: file.id.clone(),
+        path: file.path.clone(),
+        name: file.name.clone(),
+        content: file.content.clone(),
+        folder_path: file.folder_path.clone(),
+    }
+}
+
 const READINESS_TIMEOUT: Duration = Duration::from_secs(30);
 const REDUCER_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -441,6 +451,74 @@ impl SpacetimeClient {
             },
         )?;
         self.await_reducer(&format!("edit of '{}'", path), rx).await
+    }
+
+    // The filewatcher creates folder rows as it ingests; MCP-created notes need the same, or
+    // their folders never appear in list_folder on the parent.
+    pub async fn ensure_folder_ancestry(&self, folder_path: &str) -> Result<()> {
+        let trimmed = folder_path.trim_end_matches('/');
+        if trimmed.is_empty() {
+            return Ok(());
+        }
+        let existing: HashSet<String> =
+            self.conn.db().folder().iter().map(|f| f.path.clone()).collect();
+
+        let mut prefix = String::new();
+        for segment in trimmed.split('/') {
+            if !prefix.is_empty() {
+                prefix.push('/');
+            }
+            prefix.push_str(segment);
+            if existing.contains(&prefix) {
+                continue;
+            }
+            let depth = prefix.matches('/').count() as u32;
+            // Racing the filewatcher here is fine: a duplicate is reported and ignored.
+            if let Err(e) = self
+                .create_folder(prefix.clone(), segment.to_string(), depth)
+                .await
+            {
+                tracing::debug!("ancestry backfill skipped {}: {}", prefix, e);
+            }
+        }
+        Ok(())
+    }
+
+    // Every file under a folder prefix, or an explicit path list, for cross-note operations.
+    pub fn files_in_scope(
+        &self,
+        folder: Option<&str>,
+        paths: Option<&[String]>,
+    ) -> Result<Vec<FullSpaceFile>> {
+        let mut out: Vec<FullSpaceFile> = match (folder, paths) {
+            (Some(folder), _) => {
+                let prefix = if folder.is_empty() || folder.ends_with('/') {
+                    folder.to_string()
+                } else {
+                    format!("{}/", folder)
+                };
+                self.conn
+                    .db()
+                    .space_file()
+                    .iter()
+                    .filter(|f| f.path.starts_with(&prefix))
+                    .map(full_file)
+                    .collect()
+            }
+            (None, Some(paths)) => {
+                let wanted: HashSet<&str> = paths.iter().map(|p| p.as_str()).collect();
+                self.conn
+                    .db()
+                    .space_file()
+                    .iter()
+                    .filter(|f| wanted.contains(f.path.as_str()))
+                    .map(full_file)
+                    .collect()
+            }
+            (None, None) => Vec::new(),
+        };
+        out.sort_by(|a, b| a.path.cmp(&b.path));
+        Ok(out)
     }
 
     pub fn search_files(&self, query: &str, context_lines: Option<u32>) -> Result<Vec<SearchResult>> {

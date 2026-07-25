@@ -123,6 +123,75 @@ fn validate_note_path(path: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn numbered_from(content: &str, first_line: usize) -> String {
+    content
+        .lines()
+        .enumerate()
+        .map(|(i, line)| format!("{:>4}| {}", first_line + i, line))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn heading_level(line: &str) -> Option<usize> {
+    let hashes = line.chars().take_while(|c| *c == '#').count();
+    if hashes > 0 && line.chars().nth(hashes) == Some(' ') {
+        Some(hashes)
+    } else {
+        None
+    }
+}
+
+// Returns the requested slice plus the 1-based line number it starts at.
+fn slice_note(
+    content: &str,
+    line_start: Option<usize>,
+    line_end: Option<usize>,
+    heading: Option<&str>,
+) -> Result<(String, usize), String> {
+    let lines: Vec<&str> = content.lines().collect();
+
+    if let Some(wanted) = heading {
+        let target = wanted.trim().trim_start_matches('#').trim().to_lowercase();
+        let start = lines.iter().position(|l| {
+            heading_level(l).is_some()
+                && l.trim_start_matches('#').trim().to_lowercase() == target
+        });
+        let Some(start) = start else {
+            return Err(format!("heading {:?} not found", wanted));
+        };
+        let level = heading_level(lines[start]).unwrap_or(1);
+        let end = lines
+            .iter()
+            .enumerate()
+            .skip(start + 1)
+            .find(|(_, l)| heading_level(l).is_some_and(|lv| lv <= level))
+            .map(|(i, _)| i)
+            .unwrap_or(lines.len());
+        return Ok((lines[start..end].join("\n"), start + 1));
+    }
+
+    if line_start.is_none() && line_end.is_none() {
+        return Ok((content.to_string(), 1));
+    }
+
+    let first = line_start.unwrap_or(1).max(1);
+    let last = line_end.unwrap_or(lines.len()).min(lines.len());
+    if first > lines.len() {
+        return Err(format!("line_start {} is past the end ({} lines)", first, lines.len()));
+    }
+    if last < first {
+        return Err(format!("line_end {} is before line_start {}", last, first));
+    }
+    Ok((lines[first - 1..last].join("\n"), first))
+}
+
+fn dry_run_flag(args: &Value) -> bool {
+    args.get("dry_run")
+        .or_else(|| args.get("dryRun"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+}
+
 fn numbered(content: &str) -> String {
     content
         .lines()
@@ -197,7 +266,9 @@ pub fn get_tools() -> Vec<Tool> {
                     "query": {
                         "type": "string",
                         "description": "Search query (case-insensitive, matches title/path/content)"
-                    }
+                    },
+                    "limit": {"type": "integer", "description": "Max results (default 25)"},
+                    "count_only": {"type": "boolean", "description": "Return just the number of matches"}
                 },
                 "required": ["query"]
             }),
@@ -246,7 +317,10 @@ pub fn get_tools() -> Vec<Tool> {
                 "properties": {
                     "id": {"type": "string", "description": "Note UUID (optional if path provided)"},
                     "path": {"type": "string", "description": "Note path (optional if id provided)"},
-                    "raw": {"type": "boolean", "description": "Omit line-number prefixes (default false)"}
+                    "raw": {"type": "boolean", "description": "Omit line-number prefixes (default false)"},
+                    "line_start": {"type": "integer", "description": "First line to return (1-based)"},
+                    "line_end": {"type": "integer", "description": "Last line to return (inclusive)"},
+                    "heading": {"type": "string", "description": "Return only this markdown section"}
                 }
             }),
         },
@@ -379,6 +453,22 @@ pub fn get_tools() -> Vec<Tool> {
             }),
         },
         Tool {
+            name: "replace_across_notes".to_string(),
+            description: "Find and replace the same text across many notes at once. Previews by default; pass dry_run: false to commit.".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "old_string": {"type": "string", "description": "Text to find in each note"},
+                    "new_string": {"type": "string", "description": "Replacement text"},
+                    "folder": {"type": "string", "description": "Limit to notes under this folder (recursive)"},
+                    "paths": {"type": "array", "items": {"type": "string"}, "description": "Limit to these exact note paths"},
+                    "dry_run": {"type": "boolean", "description": "Preview only. Defaults TRUE — pass false to write."},
+                    "max_notes": {"type": "integer", "description": "Refuse if more notes than this would change (default 50)"}
+                },
+                "required": ["old_string", "new_string"]
+            }),
+        },
+        Tool {
             name: "delete_folder".to_string(),
             description: "Delete a folder and everything inside it, recursively.".to_string(),
             input_schema: json!({
@@ -425,9 +515,22 @@ pub fn get_tools() -> Vec<Tool> {
                     "replace_all": {"type": "boolean", "description": "Replace every occurrence (default false)"},
                     "occurrence": {"type": "integer", "description": "Replace only the Nth match (1-based)"},
                     "dry_run": {"type": "boolean", "description": "Report what would change without writing"},
-                    "allow_fuzzy": {"type": "boolean", "description": "Permit an ambiguous whitespace-folded match"}
+                    "allow_fuzzy": {"type": "boolean", "description": "Permit an ambiguous whitespace-folded match"},
+                    "edits": {
+                        "type": "array",
+                        "description": "Apply several edits to this note in ONE commit, in order. Replaces old_string/new_string. All-or-nothing: if any edit fails, none are written.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "old_string": {"type": "string"},
+                                "new_string": {"type": "string"},
+                                "replace_all": {"type": "boolean"}
+                            },
+                            "required": ["old_string", "new_string"]
+                        }
+                    }
                 },
-                "required": ["path", "old_string", "new_string"]
+                "required": ["path"]
             }),
         },
         Tool {
@@ -520,13 +623,37 @@ pub async fn execute_tool(
         "search_notes" => {
             let query: String = serde_json::from_value(params.arguments["query"].clone())
                 .map_err(|e| e.to_string())?;
+            let limit = params
+                .arguments
+                .get("limit")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(25) as usize;
+            let count_only = params
+                .arguments
+                .get("count_only")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
 
             let files = client.search_files(&query, None).map_err(|e| e.to_string())?;
+            let total = files.len();
+
+            if count_only {
+                return Ok(json!({"content": [{"type": "text", "text": format!(
+                    "{} note(s) match {:?}.", total, query
+                )}]}));
+            }
+
+            let shown: Vec<_> = files.into_iter().take(limit).collect();
+            let header = if total > shown.len() {
+                format!("{} total, showing {}\n\n", total, shown.len())
+            } else {
+                format!("{} total\n\n", total)
+            };
 
             Ok(json!({
                 "content": [{
                     "type": "text",
-                    "text": serde_json::to_string_pretty(&files).unwrap_or_else(|_| "[]".to_string())
+                    "text": format!("{}{}", header, serde_json::to_string_pretty(&shown).map_err(|e| e.to_string())?)
                 }]
             }))
         }
@@ -578,13 +705,32 @@ pub async fn execute_tool(
             };
 
             let raw = params.arguments.get("raw").and_then(|v| v.as_bool()).unwrap_or(false);
+            let line_start = params.arguments.get("line_start").and_then(|v| v.as_u64()).map(|n| n as usize);
+            let line_end = params.arguments.get("line_end").and_then(|v| v.as_u64()).map(|n| n as usize);
+            let heading = params.arguments.get("heading").and_then(|v| v.as_str());
+
             match file {
                 Some(n) => {
-                    let body = if raw { n.content.clone() } else { numbered(&n.content) };
-                    let text = format!(
-                        "id: {}\npath: {}\nname: {}\nfolder_path: {}\n\n{}",
-                        n.id, n.path, n.name, n.folder_path, body
+                    let total = n.content.lines().count();
+                    let (slice, first) = slice_note(&n.content, line_start, line_end, heading)?;
+                    let body = if raw {
+                        slice.clone()
+                    } else {
+                        numbered_from(&slice, first)
+                    };
+                    let mut text = format!(
+                        "id: {}\npath: {}\nname: {}\nfolder_path: {}\n",
+                        n.id, n.path, n.name, n.folder_path
                     );
+                    let shown = slice.lines().count();
+                    if shown != total {
+                        text.push_str(&format!("lines {}-{} of {}\n", first, first + shown - 1, total));
+                    }
+                    if !n.content.ends_with('\n') && !n.content.is_empty() {
+                        text.push_str("(no final newline)\n");
+                    }
+                    text.push('\n');
+                    text.push_str(&body);
                     Ok(json!({"content": [{"type": "text", "text": text}]}))
                 },
                 None => Ok(json!({"content": [{"type": "text", "text": "Note not found"}]})),
@@ -644,6 +790,10 @@ pub async fn execute_tool(
 
             let name = name_from_path(&path);
             let folder_path = folder_path_of(&path);
+            client
+                .ensure_folder_ancestry(&folder_path)
+                .await
+                .map_err(|e| e.to_string())?;
             let id = uuid::Uuid::new_v4().to_string();
 
             client
@@ -857,11 +1007,71 @@ pub async fn execute_tool(
         "edit_note" => {
             let path: String = serde_json::from_value(params.arguments["path"].clone())
                 .map_err(|e| e.to_string())?;
+            if let Some(edits) = params.arguments.get("edits").and_then(|v| v.as_array()) {
+                if edits.is_empty() {
+                    return Err("edits must not be empty".to_string());
+                }
+                let file = client
+                    .get_file_by_path(&path)
+                    .map_err(|e| e.to_string())?
+                    .ok_or_else(|| format!("Note not found: {}", path))?;
+
+                let mut content = file.content.clone();
+                let mut applied = Vec::new();
+                for (i, edit) in edits.iter().enumerate() {
+                    let old = edit
+                        .get("old_string")
+                        .and_then(|v| v.as_str())
+                        .ok_or_else(|| format!("edits[{}]: old_string is required", i))?;
+                    let new = edit
+                        .get("new_string")
+                        .and_then(|v| v.as_str())
+                        .ok_or_else(|| format!("edits[{}]: new_string is required", i))?;
+                    if old.is_empty() {
+                        return Err(format!("edits[{}]: old_string must not be empty", i));
+                    }
+                    let all = edit
+                        .get("replace_all")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+
+                    let found = matcher::find(&content, old).ok_or_else(|| {
+                        format!("edits[{}]: {}", i, edit_no_match_error(&path, old, &content))
+                    })?;
+                    let count = found.matches.len();
+                    if count > 1 && !all {
+                        return Err(format!(
+                            "edits[{}]: old_string appears {} times in '{}'. Add context or pass \
+                             replace_all.",
+                            i, count, path
+                        ));
+                    }
+                    let targets: Vec<usize> = if all { (0..count).collect() } else { vec![0] };
+                    content = matcher::apply(&content, old, new, &found, &targets);
+                    applied.push(format!("edits[{}]: {} at {}", i, targets.len(), found.tier.label()));
+                }
+
+                if dry_run_flag(&params.arguments) {
+                    return Ok(json!({"content": [{"type": "text", "text": format!(
+                        "dry run: {} edit(s) would apply to {} ({}). No changes written.",
+                        applied.len(), path, applied.join("; ")
+                    )}]}));
+                }
+
+                client
+                    .update_file_content(file.id, content)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                return Ok(json!({"content": [{"type": "text", "text": format!(
+                    "Edited note: {} ({} edits in one commit)", path, applied.len()
+                )}]}));
+            }
+
             let old_string: String = params.arguments.get("old_string")
                 .or_else(|| params.arguments.get("oldString"))
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string())
-                .ok_or_else(|| "old_string is required".to_string())?;
+                .ok_or_else(|| "old_string is required (or pass edits: [...])".to_string())?;
             let new_string: String = params.arguments.get("new_string")
                 .or_else(|| params.arguments.get("newString"))
                 .and_then(|v| v.as_str())
@@ -977,6 +1187,108 @@ pub async fn execute_tool(
             );
             Ok(json!({"content": [{"type": "text", "text": summary}]}))
         }
+        "replace_across_notes" => {
+            let old_string: String = params.arguments.get("old_string")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .ok_or_else(|| "old_string is required".to_string())?;
+            let new_string: String = params.arguments.get("new_string")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .ok_or_else(|| "new_string is required (pass \"\" to delete)".to_string())?;
+            if old_string.is_empty() {
+                return Err("old_string must not be empty".to_string());
+            }
+
+            let folder = params.arguments.get("folder").and_then(|v| v.as_str());
+            let paths: Option<Vec<String>> = params
+                .arguments
+                .get("paths")
+                .and_then(|v| v.as_array())
+                .map(|a| a.iter().filter_map(|p| p.as_str().map(String::from)).collect());
+            if folder.is_none() && paths.is_none() {
+                return Err("provide either folder or paths".to_string());
+            }
+            let max_notes = params
+                .arguments
+                .get("max_notes")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(50) as usize;
+            // Cross-note blast radius: preview unless the caller explicitly opts out.
+            let dry_run = params
+                .arguments
+                .get("dry_run")
+                .or_else(|| params.arguments.get("dryRun"))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
+
+            let candidates = client
+                .files_in_scope(folder, paths.as_deref())
+                .map_err(|e| e.to_string())?;
+
+            let mut planned = Vec::new();
+            for file in candidates {
+                let Some(found) = matcher::find(&file.content, &old_string) else {
+                    continue;
+                };
+                // Fuzzy tiers are not safe to fan out across notes unattended.
+                if found.tier.needs_opt_in() {
+                    continue;
+                }
+                let targets: Vec<usize> = (0..found.matches.len()).collect();
+                let updated = matcher::apply(&file.content, &old_string, &new_string, &found, &targets);
+                planned.push((file, found.matches.len(), updated));
+            }
+
+            if planned.is_empty() {
+                return Ok(json!({"content": [{"type": "text", "text": format!(
+                    "No notes contain {:?} in scope.", old_string
+                )}]}));
+            }
+            if planned.len() > max_notes {
+                return Err(format!(
+                    "{} notes would change, over the max_notes limit of {}. Narrow the scope or \
+                     raise max_notes.",
+                    planned.len(), max_notes
+                ));
+            }
+
+            let total: usize = planned.iter().map(|(_, n, _)| n).sum();
+            if dry_run {
+                let lines: Vec<String> = planned
+                    .iter()
+                    .map(|(f, n, _)| format!("  {} ({} match(es))", f.path, n))
+                    .collect();
+                return Ok(json!({"content": [{"type": "text", "text": format!(
+                    "dry run: {} replacement(s) across {} note(s). No changes written. \
+                     Re-run with dry_run: false to commit.\n{}",
+                    total, planned.len(), lines.join("\n")
+                )}]}));
+            }
+
+            let mut committed = Vec::new();
+            let mut failed = Vec::new();
+            for (file, n, updated) in planned {
+                match client.update_file_content(file.id.clone(), updated).await {
+                    Ok(()) => committed.push(format!("{} ({})", file.path, n)),
+                    Err(e) => failed.push(format!("{}: {}", file.path, e)),
+                }
+            }
+
+            let mut text = format!(
+                "Replaced across {} note(s): {}",
+                committed.len(),
+                committed.join(", ")
+            );
+            if !failed.is_empty() {
+                text.push_str(&format!(
+                    "\n{} note(s) FAILED and were not changed: {}",
+                    failed.len(),
+                    failed.join("; ")
+                ));
+            }
+            Ok(json!({"content": [{"type": "text", "text": text}]}))
+        }
         "move_notes_to_folder" => {
             let paths: Vec<String> = serde_json::from_value(params.arguments["paths"].clone())
                 .map_err(|e| e.to_string())?;
@@ -1048,7 +1360,7 @@ pub async fn execute_tool(
                 .await
                 .map_err(|e| e.to_string())?;
 
-            Ok(json!({"content": [{"type": "text", "text": format!("Replaced {} matches in {}\n\n---\n\n{}", match_count, path, new_content)}]}))
+            Ok(json!({"content": [{"type": "text", "text": format!("Replaced {} match(es) in {}", match_count, path)}]}))
         }
         "get_outbound_links" => {
             let id = resolve_file_id(client, &params.arguments)?;
@@ -1254,10 +1566,117 @@ mod tests {
     }
 
     #[test]
-    fn edit_note_schema_requires_new_string() {
+    fn edit_note_declares_both_single_and_multi_edit_shapes() {
+        // new_string cannot be schema-required now that `edits` is an alternative; the
+        // single-edit path still enforces it at runtime.
         let edit = get_tools().into_iter().find(|t| t.name == "edit_note").unwrap();
-        let required = edit.input_schema["required"].as_array().unwrap().clone();
-        assert!(required.contains(&json!("new_string")));
+        let props = edit.input_schema["properties"].as_object().unwrap();
+        assert!(props.contains_key("new_string"));
+        assert!(props.contains_key("edits"));
+        assert!(props.contains_key("occurrence"));
+        assert!(props.contains_key("dry_run"));
+        let required = edit.input_schema["required"].as_array().unwrap();
+        assert!(required.contains(&json!("path")));
+    }
+
+    #[test]
+    fn slice_note_returns_whole_note_by_default() {
+        let (slice, first) = slice_note("a\nb\nc\n", None, None, None).unwrap();
+        assert_eq!(slice, "a\nb\nc\n");
+        assert_eq!(first, 1);
+    }
+
+    #[test]
+    fn slice_note_honours_a_line_range() {
+        let (slice, first) = slice_note("a\nb\nc\nd\n", Some(2), Some(3), None).unwrap();
+        assert_eq!(slice, "b\nc");
+        assert_eq!(first, 2);
+    }
+
+    #[test]
+    fn slice_note_clamps_line_end_to_the_note() {
+        let (slice, _) = slice_note("a\nb\n", Some(1), Some(99), None).unwrap();
+        assert_eq!(slice, "a\nb");
+    }
+
+    #[test]
+    fn slice_note_rejects_a_start_past_the_end() {
+        assert!(slice_note("a\n", Some(5), None, None).is_err());
+    }
+
+    #[test]
+    fn slice_note_rejects_an_inverted_range() {
+        assert!(slice_note("a\nb\nc\n", Some(3), Some(2), None).is_err());
+    }
+
+    #[test]
+    fn slice_note_extracts_a_heading_section() {
+        let content = "# Top\nintro\n\n## One\nbody one\n\n## Two\nbody two\n";
+        let (slice, first) = slice_note(content, None, None, Some("## One")).unwrap();
+        assert_eq!(slice, "## One\nbody one\n");
+        assert_eq!(first, 4);
+    }
+
+    #[test]
+    fn slice_note_heading_runs_to_the_next_same_or_higher_level() {
+        let content = "## A\na\n### A1\na1\n## B\nb\n";
+        let (slice, _) = slice_note(content, None, None, Some("A")).unwrap();
+        assert!(slice.contains("### A1"));
+        assert!(!slice.contains("## B"));
+    }
+
+    #[test]
+    fn slice_note_reports_a_missing_heading() {
+        assert!(slice_note("# Top\n", None, None, Some("Nope")).is_err());
+    }
+
+    #[test]
+    fn numbered_from_starts_at_the_given_line() {
+        assert_eq!(numbered_from("x\ny", 7), "   7| x\n   8| y");
+    }
+
+    #[test]
+    fn heading_level_counts_hashes_and_needs_a_space() {
+        assert_eq!(heading_level("## Two"), Some(2));
+        assert_eq!(heading_level("#NoSpace"), None);
+        assert_eq!(heading_level("plain"), None);
+    }
+
+    #[test]
+    fn replace_across_notes_is_registered_and_defaults_to_preview() {
+        let tool = get_tools()
+            .into_iter()
+            .find(|t| t.name == "replace_across_notes")
+            .expect("tool missing");
+        let props = tool.input_schema["properties"].as_object().unwrap();
+        assert!(props.contains_key("dry_run"));
+        assert!(props.contains_key("folder"));
+        assert!(props.contains_key("paths"));
+        assert!(props.contains_key("max_notes"));
+    }
+
+    #[test]
+    fn search_notes_declares_caps() {
+        let tool = get_tools().into_iter().find(|t| t.name == "search_notes").unwrap();
+        let props = tool.input_schema["properties"].as_object().unwrap();
+        assert!(props.contains_key("limit"));
+        assert!(props.contains_key("count_only"));
+    }
+
+    #[test]
+    fn get_note_declares_range_and_heading_reads() {
+        let tool = get_tools().into_iter().find(|t| t.name == "get_note").unwrap();
+        let props = tool.input_schema["properties"].as_object().unwrap();
+        assert!(props.contains_key("line_start"));
+        assert!(props.contains_key("line_end"));
+        assert!(props.contains_key("heading"));
+    }
+
+    #[test]
+    fn dry_run_flag_reads_both_spellings() {
+        assert!(dry_run_flag(&json!({"dry_run": true})));
+        assert!(dry_run_flag(&json!({"dryRun": true})));
+        assert!(!dry_run_flag(&json!({})));
     }
 
     #[test]
