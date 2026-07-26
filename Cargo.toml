@@ -1,6 +1,6 @@
 [workspace]
 members = [".", "spacenotes-mcp"]
-exclude = ["spacetime-module", "space-channel-server"]
+exclude = ["spacetime-module"]
 resolver = "2"
 
 [package]
