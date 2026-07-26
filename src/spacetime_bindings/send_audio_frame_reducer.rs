@@ -7,7 +7,7 @@ use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct SendAudioFrameArgs {
-    pub agent_id: u64,
+    pub call_id: u64,
     pub seq: u32,
     pub pcm: Vec<u8>,
 }
@@ -15,7 +15,7 @@ pub(super) struct SendAudioFrameArgs {
 impl From<SendAudioFrameArgs> for super::Reducer {
     fn from(args: SendAudioFrameArgs) -> Self {
         Self::SendAudioFrame {
-            agent_id: args.agent_id,
+            call_id: args.call_id,
             seq: args.seq,
             pcm: args.pcm,
         }
@@ -37,8 +37,8 @@ pub trait send_audio_frame {
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
     /// /// Use [`send_audio_frame:send_audio_frame_then`] to run a callback after the reducer completes.
-    fn send_audio_frame(&self, agent_id: u64, seq: u32, pcm: Vec<u8>) -> __sdk::Result<()> {
-        self.send_audio_frame_then(agent_id, seq, pcm, |_, _| {})
+    fn send_audio_frame(&self, call_id: u64, seq: u32, pcm: Vec<u8>) -> __sdk::Result<()> {
+        self.send_audio_frame_then(call_id, seq, pcm, |_, _| {})
     }
 
     /// Request that the remote module invoke the reducer `send_audio_frame` to run as soon as possible,
@@ -49,7 +49,7 @@ pub trait send_audio_frame {
     ///  and its status can be observed with the `callback`.
     fn send_audio_frame_then(
         &self,
-        agent_id: u64,
+        call_id: u64,
         seq: u32,
         pcm: Vec<u8>,
 
@@ -62,7 +62,7 @@ pub trait send_audio_frame {
 impl send_audio_frame for super::RemoteReducers {
     fn send_audio_frame_then(
         &self,
-        agent_id: u64,
+        call_id: u64,
         seq: u32,
         pcm: Vec<u8>,
 
@@ -71,6 +71,6 @@ impl send_audio_frame for super::RemoteReducers {
             + 'static,
     ) -> __sdk::Result<()> {
         self.imp
-            .invoke_reducer_with_callback(SendAudioFrameArgs { agent_id, seq, pcm }, callback)
+            .invoke_reducer_with_callback(SendAudioFrameArgs { call_id, seq, pcm }, callback)
     }
 }

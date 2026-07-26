@@ -11,5 +11,5 @@ import {
 } from "spacetimedb";
 
 export default {
-  agentId: __t.u64(),
+  callId: __t.u64(),
 };

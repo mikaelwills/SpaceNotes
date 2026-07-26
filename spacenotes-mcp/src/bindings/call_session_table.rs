@@ -96,30 +96,30 @@ impl<'ctx> __sdk::TableWithPrimaryKey for CallSessionTableHandle<'ctx> {
     }
 }
 
-/// Access to the `agent_id` unique index on the table `call_session`,
+/// Access to the `call_id` unique index on the table `call_session`,
 /// which allows point queries on the field of the same name
-/// via the [`CallSessionAgentIdUnique::find`] method.
+/// via the [`CallSessionCallIdUnique::find`] method.
 ///
 /// Users are encouraged not to explicitly reference this type,
 /// but to directly chain method calls,
-/// like `ctx.db.call_session().agent_id().find(...)`.
-pub struct CallSessionAgentIdUnique<'ctx> {
+/// like `ctx.db.call_session().call_id().find(...)`.
+pub struct CallSessionCallIdUnique<'ctx> {
     imp: __sdk::UniqueConstraintHandle<CallSession, u64>,
     phantom: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
 impl<'ctx> CallSessionTableHandle<'ctx> {
-    /// Get a handle on the `agent_id` unique index on the table `call_session`.
-    pub fn agent_id(&self) -> CallSessionAgentIdUnique<'ctx> {
-        CallSessionAgentIdUnique {
-            imp: self.imp.get_unique_constraint::<u64>("agent_id"),
+    /// Get a handle on the `call_id` unique index on the table `call_session`.
+    pub fn call_id(&self) -> CallSessionCallIdUnique<'ctx> {
+        CallSessionCallIdUnique {
+            imp: self.imp.get_unique_constraint::<u64>("call_id"),
             phantom: std::marker::PhantomData,
         }
     }
 }
 
-impl<'ctx> CallSessionAgentIdUnique<'ctx> {
-    /// Find the subscribed row whose `agent_id` column value is equal to `col_val`,
+impl<'ctx> CallSessionCallIdUnique<'ctx> {
+    /// Find the subscribed row whose `call_id` column value is equal to `col_val`,
     /// if such a row is present in the client cache.
     pub fn find(&self, col_val: &u64) -> Option<CallSession> {
         self.imp.find(col_val)
@@ -129,7 +129,7 @@ impl<'ctx> CallSessionAgentIdUnique<'ctx> {
 #[doc(hidden)]
 pub(super) fn register_table(client_cache: &mut __sdk::ClientCache<super::RemoteModule>) {
     let _table = client_cache.get_or_make_table::<CallSession>("call_session");
-    _table.add_unique_constraint::<u64>("agent_id", |row| &row.agent_id);
+    _table.add_unique_constraint::<u64>("call_id", |row| &row.call_id);
 }
 
 #[doc(hidden)]

@@ -31,7 +31,7 @@ export const AgentActivity = __t.object("AgentActivity", {
 export type AgentActivity = __Infer<typeof AgentActivity>;
 
 export const AudioFrame = __t.object("AudioFrame", {
-  agentId: __t.u64(),
+  callId: __t.u64(),
   from: __t.identity(),
   seq: __t.u32(),
   pcm: __t.byteArray(),
@@ -39,7 +39,7 @@ export const AudioFrame = __t.object("AudioFrame", {
 export type AudioFrame = __Infer<typeof AudioFrame>;
 
 export const CallSession = __t.object("CallSession", {
-  agentId: __t.u64(),
+  callId: __t.u64(),
   caller: __t.identity(),
   callee: __t.identity(),
   get state() {
@@ -142,7 +142,7 @@ export const UserProfile = __t.object("UserProfile", {
 export type UserProfile = __Infer<typeof UserProfile>;
 
 export const VideoFrame = __t.object("VideoFrame", {
-  agentId: __t.u64(),
+  callId: __t.u64(),
   from: __t.identity(),
   seq: __t.u32(),
   codec: __t.u8(),

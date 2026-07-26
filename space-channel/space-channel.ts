@@ -41,10 +41,10 @@ const HOST_ALIASES: Record<string, string> = {
 };
 const HOST = HOST_ALIASES[RAW_HOST] ?? RAW_HOST;
 const CLIENT_ID = randomUUID();
-const SESSION_ID = `${args.session}@${HOST}`;
+const AGENT_ID = `${args.agent}@${HOST}`;
 const HEARTBEAT_MS = 20_000;
 const TOOL_USE_STUCK_MS = 30_000;
-const LOG_FILE = `/tmp/space-channel-${args.session}.log`;
+const LOG_FILE = `/tmp/space-channel-${args.agent}.log`;
 const INBOX_DIR = join(homedir(), ".claude", "channels", "space-channel", "inbox");
 const INBOX_TTL_MS = 48 * 60 * 60 * 1000;
 
@@ -130,10 +130,10 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
     const { text } = req.params.arguments as { text: string };
     const id = `reply-${Date.now()}`;
     try {
-      await conn.reducers.pushMessage({ id, sessionId: SESSION_ID, role: "assistant", text, source: "mcp" });
+      await conn.reducers.pushMessage({ id, agentId: AGENT_ID, role: "assistant", text, source: "mcp" });
       markActivity();
       lastKnownState = "idle";
-      await conn.reducers.pushStatus({ sessionId: SESSION_ID, state: "idle" });
+      await conn.reducers.pushStatus({ agentId: AGENT_ID, state: "idle" });
       return { content: [{ type: "text" as const, text: `sent (id: ${id})` }] };
     } catch (e) {
       return { content: [{ type: "text" as const, text: `FAILED: ${e}` }], isError: true };
@@ -175,7 +175,7 @@ mcp.setNotificationHandler(PermissionRequestSchema, async (notification) => {
   try {
     await conn.reducers.requestPermission({
       id: requestId,
-      sessionId: SESSION_ID,
+      agentId: AGENT_ID,
       tool: params.tool_name || "unknown",
       input,
     });
@@ -193,9 +193,16 @@ startHookServer();
 function parseArgs() {
   const stdbUri = getArg("--stdb-uri") || process.env.SPACE_CHANNEL_STDB_URI || "ws://127.0.0.1:5050";
   const stdbDb = getArg("--stdb-db") || process.env.SPACE_CHANNEL_STDB_DB || "spacenotes";
-  const session = getArg("--session") || process.env.SPACE_CHANNEL_SESSION || `session-${Date.now()}`;
+  // --session / SPACE_CHANNEL_SESSION are still accepted so a machine that hasn't pulled the
+  // renamed dotfiles keeps working instead of silently spawning a junk-named agent.
+  const agent =
+    getArg("--agent") ||
+    getArg("--session") ||
+    process.env.SPACE_CHANNEL_AGENT ||
+    process.env.SPACE_CHANNEL_SESSION ||
+    `agent-${Date.now()}`;
   const hookPort = parseInt(getArg("--hook-port") ?? process.env.SPACE_CHANNEL_HOOK_PORT ?? "0", 10);
-  return { stdbUri, stdbDb, session, hookPort };
+  return { stdbUri, stdbDb, agent, hookPort };
 }
 
 function getArg(name: string): string | undefined {
@@ -224,15 +231,15 @@ function connectToStdb() {
       log(`Connected to SpacetimeDB ${args.stdbUri}/${args.stdbDb} as ${identity.toHexString().slice(0, 12)}…`);
 
       try {
-        await conn.reducers.registerSession({
-          id: SESSION_ID,
-          baseName: args.session,
+        await conn.reducers.registerAgent({
+          id: AGENT_ID,
+          baseName: args.agent,
           host: HOST,
           clientId: CLIENT_ID,
         });
-        log(`Registered session ${SESSION_ID}`);
+        log(`Registered agent ${AGENT_ID}`);
       } catch (e) {
-        log(`registerSession failed: ${e}`);
+        log(`registerAgent failed: ${e}`);
         return;
       }
 
@@ -240,10 +247,10 @@ function connectToStdb() {
         .onApplied(() => log("Subscriptions applied"))
         .onError((_ctx) => log("Subscription error"))
         .subscribe([
-          `SELECT * FROM permission_request WHERE session_id = '${SESSION_ID}'`,
-          `SELECT * FROM question_request WHERE session_id = '${SESSION_ID}'`,
-          `SELECT * FROM message WHERE session_id = '${SESSION_ID}' AND role = 'user' AND source = 'flutter'`,
-          `SELECT message_image.* FROM message_image JOIN message ON message.id = message_image.message_id WHERE message.session_id = '${SESSION_ID}' AND message.role = 'user' AND message.source = 'flutter'`,
+          `SELECT * FROM permission_request WHERE agent_id = '${AGENT_ID}'`,
+          `SELECT * FROM question_request WHERE agent_id = '${AGENT_ID}'`,
+          `SELECT * FROM message WHERE agent_id = '${AGENT_ID}' AND role = 'user' AND source = 'flutter'`,
+          `SELECT message_image.* FROM message_image JOIN message ON message.id = message_image.message_id WHERE message.agent_id = '${AGENT_ID}' AND message.role = 'user' AND message.source = 'flutter'`,
         ]);
 
       conn.db.permission_request.onUpdate((_ctx, _oldRow, newRow) => {
@@ -269,7 +276,7 @@ function connectToStdb() {
 
       conn.db.message.onInsert((ctx, row) => {
         const tag = (ctx as any).event?.tag;
-        log(`message.onInsert id=${row.id} session_id=${row.sessionId} role=${row.role} source=${row.source} event_tag=${tag}`);
+        log(`message.onInsert id=${row.id} agent_id=${row.agentId} role=${row.role} source=${row.source} event_tag=${tag}`);
         if (tag === "SubscribeApplied") return;
         handleIncomingMessage(row);
       });
@@ -282,7 +289,7 @@ function connectToStdb() {
       let heartbeatCount = 0;
       heartbeatTimer = setInterval(async () => {
         try {
-          await conn?.reducers.heartbeat({ sessionId: SESSION_ID });
+          await conn?.reducers.heartbeat({ agentId: AGENT_ID });
           heartbeatCount++;
           if (heartbeatCount === 1 || heartbeatCount % 15 === 0) {
             log(`heartbeat ok (count=${heartbeatCount})`);
@@ -430,7 +437,7 @@ async function sweepStaleToolCalls() {
   if (sweptAny && openToolCalls.size === 0 && lastKnownState === "tool_use") {
     try {
       lastKnownState = "thinking";
-      await conn.reducers.pushStatus({ sessionId: SESSION_ID, state: "thinking" });
+      await conn.reducers.pushStatus({ agentId: AGENT_ID, state: "thinking" });
       log("Watchdog cleared stuck tool_use → thinking");
     } catch (e) {
       log(`Watchdog state reset failed: ${e}`);
@@ -558,13 +565,13 @@ async function handleAskUserQuestion(
     try {
       await conn.reducers.requestQuestion({
         id,
-        sessionId: SESSION_ID,
+        agentId: AGENT_ID,
         question: questionText,
         header: q.header ?? "",
         options: JSON.stringify(labels),
         multiSelect: q.multiSelect === true,
       });
-      log(`requestQuestion inserted id=${id} session=${SESSION_ID}`);
+      log(`requestQuestion inserted id=${id} agent=${AGENT_ID}`);
     } catch (e) {
       log(`requestQuestion failed: ${e}`);
       continue;
@@ -655,13 +662,13 @@ function startHookServer() {
             lastInputSource = "terminal";
           }
           lastKnownState = "thinking";
-          await conn.reducers.pushStatus({ sessionId: SESSION_ID, state: "thinking" });
+          await conn.reducers.pushStatus({ agentId: AGENT_ID, state: "thinking" });
         } else if (hookEvent === "Stop") {
           const usage = readContextUsage(body.transcript_path, body.model);
           if (usage) {
             try {
               await conn.reducers.pushContextUsage({
-                sessionId: SESSION_ID,
+                agentId: AGENT_ID,
                 used: BigInt(usage.used),
                 window: BigInt(usage.window),
               });
@@ -671,7 +678,7 @@ function startHookServer() {
           }
           openToolCalls.clear();
           lastKnownState = "idle";
-          await conn.reducers.pushStatus({ sessionId: SESSION_ID, state: "idle" });
+          await conn.reducers.pushStatus({ agentId: AGENT_ID, state: "idle" });
         } else if (hookEvent === "PreToolUse") {
           const toolName: string = body.tool_name ?? "unknown";
           const toolEventId = `tool-${Date.now()}-${randomUUID().slice(0, 8)}`;
@@ -681,7 +688,7 @@ function startHookServer() {
           });
           await conn.reducers.pushToolEvent({
             id: toolEventId,
-            sessionId: SESSION_ID,
+            agentId: AGENT_ID,
             tool: toolName,
             detail,
           });
@@ -691,7 +698,7 @@ function startHookServer() {
           if (!isOwnReplyTool) {
             openToolCalls.set(toolEventId, { tool: toolName, startedAt: Date.now() });
             lastKnownState = "tool_use";
-            await conn.reducers.pushStatus({ sessionId: SESSION_ID, state: "tool_use" });
+            await conn.reducers.pushStatus({ agentId: AGENT_ID, state: "tool_use" });
           }
         } else if (hookEvent === "PostToolUse" || hookEvent === "PostToolUseFailure") {
           const toolName: string = body.tool_name ?? "";
@@ -709,17 +716,17 @@ function startHookServer() {
           const nextState = isOwnReplyTool ? "idle" : "thinking";
           lastKnownState = nextState;
           await conn.reducers.pushStatus({
-            sessionId: SESSION_ID,
+            agentId: AGENT_ID,
             state: nextState,
           });
         } else if (hookEvent === "SessionEnd") {
-          await conn.reducers.endSession({ sessionId: SESSION_ID });
+          await conn.reducers.endAgent({ agentId: AGENT_ID });
         } else if (hookEvent === "Notification") {
           const text: string = (body.message || "").trim();
           if (text) {
             await conn.reducers.pushMessage({
               id: `notice-${Date.now()}`,
-              sessionId: SESSION_ID,
+              agentId: AGENT_ID,
               role: "assistant",
               text,
               source: "notice",
@@ -733,14 +740,14 @@ function startHookServer() {
               "turn failed").toString().trim();
           await conn.reducers.pushMessage({
             id: `error-${Date.now()}`,
-            sessionId: SESSION_ID,
+            agentId: AGENT_ID,
             role: "assistant",
             text: `⚠️ ${detail}`,
             source: "error",
           });
           openToolCalls.clear();
           lastKnownState = "idle";
-          await conn.reducers.pushStatus({ sessionId: SESSION_ID, state: "idle" });
+          await conn.reducers.pushStatus({ agentId: AGENT_ID, state: "idle" });
         }
        } catch (e) {
         log(`Hook reducer failed (${hookEvent}): ${e}`);
@@ -764,10 +771,10 @@ async function shutdown(code = 0) {
   if (reconnectTimer) clearTimeout(reconnectTimer);
   if (conn) {
     try {
-      await conn.reducers.endSession({ sessionId: SESSION_ID });
-      log(`Session ended: ${SESSION_ID}`);
+      await conn.reducers.endAgent({ agentId: AGENT_ID });
+      log(`Agent ended: ${AGENT_ID}`);
     } catch (e) {
-      log(`endSession on shutdown failed: ${e}`);
+      log(`endAgent on shutdown failed: ${e}`);
     }
     try { conn.disconnect(); } catch {}
   }
@@ -848,8 +855,8 @@ async function runLaunch(rawArgs: string[]) {
     process.stderr.write("usage: space-channel launch <workflow> [args...]\n");
     process.exit(2);
   }
-  const session = rawArgs[0]!;
-  const skill = session;
+  const agent = rawArgs[0]!;
+  const skill = agent;
   const rest = rawArgs.slice(1);
 
   if (!commandExists("claude")) {
@@ -924,8 +931,9 @@ async function runLaunch(rawArgs: string[]) {
     "claude",
     [
       "mcp", "add", "space-channel", "--scope", "project",
-      "-e", `SPACE_CHANNEL_SESSION=${session}`,
-      "-e", `SPACE_CHANNEL_PROJECT=${session}`,
+      "-e", `SPACE_CHANNEL_AGENT=${agent}`,
+      "-e", `SPACE_CHANNEL_SESSION=${agent}`,
+      "-e", `SPACE_CHANNEL_PROJECT=${agent}`,
       "-e", `SPACE_CHANNEL_STDB_URI=${stdbUri}`,
       "-e", `SPACE_CHANNEL_STDB_DB=${stdbDb}`,
       "-e", `SPACE_CHANNEL_HOOK_PORT=${hookPort}`,
@@ -937,7 +945,7 @@ async function runLaunch(rawArgs: string[]) {
     process.stderr.write("space-channel setup FAILED\n");
     process.exit(1);
   }
-  process.stderr.write(`space-channel ready (session: ${session}, hook: ${hookPort})\n`);
+  process.stderr.write(`space-channel ready (agent: ${agent}, hook: ${hookPort})\n`);
 
   const claude = spawn(
     "claude",
@@ -947,7 +955,7 @@ async function runLaunch(rawArgs: string[]) {
       `/${skill}`,
       ...rest,
     ],
-    { stdio: "inherit", env: { ...process.env, WORKFLOW_NAME: session } }
+    { stdio: "inherit", env: { ...process.env, WORKFLOW_NAME: agent } }
   );
   const code: number = await new Promise((resolve) => {
     claude.on("exit", (c) => resolve(c ?? 0));

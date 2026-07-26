@@ -15,7 +15,7 @@ import {
 
 
 export default __t.row({
-  agentId: __t.u64().primaryKey().name("agent_id"),
+  callId: __t.u64().primaryKey().name("call_id"),
   caller: __t.identity(),
   callee: __t.identity(),
   get state() {

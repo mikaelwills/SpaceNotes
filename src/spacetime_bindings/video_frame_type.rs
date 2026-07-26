@@ -7,7 +7,7 @@ use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub struct VideoFrame {
-    pub agent_id: u64,
+    pub call_id: u64,
     pub from: __sdk::Identity,
     pub seq: u32,
     pub codec: u8,
@@ -23,7 +23,7 @@ impl __sdk::InModule for VideoFrame {
 ///
 /// Provides typed access to columns for query building.
 pub struct VideoFrameCols {
-    pub agent_id: __sdk::__query_builder::Col<VideoFrame, u64>,
+    pub call_id: __sdk::__query_builder::Col<VideoFrame, u64>,
     pub from: __sdk::__query_builder::Col<VideoFrame, __sdk::Identity>,
     pub seq: __sdk::__query_builder::Col<VideoFrame, u32>,
     pub codec: __sdk::__query_builder::Col<VideoFrame, u8>,
@@ -35,7 +35,7 @@ impl __sdk::__query_builder::HasCols for VideoFrame {
     type Cols = VideoFrameCols;
     fn cols(table_name: &'static str) -> Self::Cols {
         VideoFrameCols {
-            agent_id: __sdk::__query_builder::Col::new(table_name, "agent_id"),
+            call_id: __sdk::__query_builder::Col::new(table_name, "call_id"),
             from: __sdk::__query_builder::Col::new(table_name, "from"),
             seq: __sdk::__query_builder::Col::new(table_name, "seq"),
             codec: __sdk::__query_builder::Col::new(table_name, "codec"),

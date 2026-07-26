@@ -151,7 +151,7 @@ pub use video_frame_type::VideoFrame;
 
 pub enum Reducer {
     AcceptCall {
-        agent_id: u64,
+        call_id: u64,
     },
     AppendToFile {
         path: String,
@@ -193,7 +193,7 @@ pub enum Reducer {
         agent_id: String,
     },
     EndCall {
-        agent_id: u64,
+        call_id: u64,
     },
     FindReplaceInFile {
         path: String,
@@ -283,12 +283,12 @@ pub enum Reducer {
         response: String,
     },
     SendAudioFrame {
-        agent_id: u64,
+        call_id: u64,
         seq: u32,
         pcm: Vec<u8>,
     },
     SendVideoFrame {
-        agent_id: u64,
+        call_id: u64,
         seq: u32,
         codec: u8,
         is_keyframe: bool,
@@ -378,9 +378,9 @@ impl __sdk::Reducer for Reducer {
     #[allow(clippy::clone_on_copy)]
     fn args_bsatn(&self) -> Result<Vec<u8>, __sats::bsatn::EncodeError> {
         match self {
-            Reducer::AcceptCall { agent_id } => {
+            Reducer::AcceptCall { call_id } => {
                 __sats::bsatn::to_vec(&accept_call_reducer::AcceptCallArgs {
-                    agent_id: agent_id.clone(),
+                    call_id: call_id.clone(),
                 })
             }
             Reducer::AppendToFile { path, content } => {
@@ -447,11 +447,9 @@ impl __sdk::Reducer for Reducer {
                     agent_id: agent_id.clone(),
                 })
             }
-            Reducer::EndCall { agent_id } => {
-                __sats::bsatn::to_vec(&end_call_reducer::EndCallArgs {
-                    agent_id: agent_id.clone(),
-                })
-            }
+            Reducer::EndCall { call_id } => __sats::bsatn::to_vec(&end_call_reducer::EndCallArgs {
+                call_id: call_id.clone(),
+            }),
             Reducer::FindReplaceInFile {
                 path,
                 old_text,
@@ -601,21 +599,21 @@ impl __sdk::Reducer for Reducer {
                     response: response.clone(),
                 })
             }
-            Reducer::SendAudioFrame { agent_id, seq, pcm } => {
+            Reducer::SendAudioFrame { call_id, seq, pcm } => {
                 __sats::bsatn::to_vec(&send_audio_frame_reducer::SendAudioFrameArgs {
-                    agent_id: agent_id.clone(),
+                    call_id: call_id.clone(),
                     seq: seq.clone(),
                     pcm: pcm.clone(),
                 })
             }
             Reducer::SendVideoFrame {
-                agent_id,
+                call_id,
                 seq,
                 codec,
                 is_keyframe,
                 data,
             } => __sats::bsatn::to_vec(&send_video_frame_reducer::SendVideoFrameArgs {
-                agent_id: agent_id.clone(),
+                call_id: call_id.clone(),
                 seq: seq.clone(),
                 codec: codec.clone(),
                 is_keyframe: is_keyframe.clone(),
@@ -784,7 +782,7 @@ impl __sdk::DbUpdate for DbUpdate {
         diff.audio_frame = self.audio_frame.into_event_diff();
         diff.call_session = cache
             .apply_diff_to_table::<CallSession>("call_session", &self.call_session)
-            .with_updates_by_pk(|row| &row.agent_id);
+            .with_updates_by_pk(|row| &row.call_id);
         diff.connected_user = cache
             .apply_diff_to_table::<ConnectedUser>("connected_user", &self.connected_user)
             .with_updates_by_pk(|row| &row.identity);

@@ -11,7 +11,7 @@ import {
 } from "spacetimedb";
 
 export default __t.row({
-  agentId: __t.u64().name("agent_id"),
+  callId: __t.u64().name("call_id"),
   from: __t.identity(),
   seq: __t.u32(),
   codec: __t.u8(),

@@ -128,12 +128,12 @@ const tablesSchema = __schema({
   call_session: __table({
     name: 'call_session',
     indexes: [
-      { accessor: 'agent_id', name: 'call_session_agent_id_idx_btree', algorithm: 'btree', columns: [
-        'agentId',
+      { accessor: 'call_id', name: 'call_session_call_id_idx_btree', algorithm: 'btree', columns: [
+        'callId',
       ] },
     ],
     constraints: [
-      { name: 'call_session_agent_id_key', constraint: 'unique', columns: ['agentId'] },
+      { name: 'call_session_call_id_key', constraint: 'unique', columns: ['callId'] },
     ],
   }, CallSessionRow),
   connected_user: __table({

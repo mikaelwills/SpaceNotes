@@ -11,7 +11,7 @@ import {
 } from "spacetimedb";
 
 export default {
-  agentId: __t.u64(),
+  callId: __t.u64(),
   seq: __t.u32(),
   codec: __t.u8(),
   isKeyframe: __t.bool(),
