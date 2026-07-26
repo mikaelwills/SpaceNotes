@@ -26,3 +26,4 @@ build-and-push.sh
 deploy-mcp-local.sh
 deploy-filewatcher-local.sh
 deploy-image-local.sh
+ensure-orbstack-running.sh
