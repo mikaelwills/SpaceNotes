@@ -868,7 +868,7 @@ async function runLaunch(rawArgs: string[]) {
     ? (process.argv[1] ?? process.execPath)
     : process.execPath;
 
-  const lockDir = ".claude/.spacechannel-sessions";
+  const lockDir = ".claude/.spacechannel-agents";
   mkdirSync(lockDir, { recursive: true });
   const lockFile = join(lockDir, String(process.pid));
   writeFileSync(lockFile, "");
@@ -904,7 +904,7 @@ async function runLaunch(rawArgs: string[]) {
 
   const cleanup = () => {
     try { unlinkSync(lockFile); } catch {}
-    if (countActiveSessions(lockDir) === 0) {
+    if (countActiveAgents(lockDir) === 0) {
       if (existsSync(settingsFile)) {
         try {
           const s = JSON.parse(readFileSync(settingsFile, "utf8"));
@@ -963,7 +963,7 @@ async function runLaunch(rawArgs: string[]) {
   process.exit(code);
 }
 
-function countActiveSessions(lockDir: string): number {
+function countActiveAgents(lockDir: string): number {
   let count = 0;
   try {
     const entries = readdirSync(lockDir);

@@ -2014,7 +2014,7 @@ mod tests {
             "get_note", "get_notes", "create_note", "edit_note", "delete_note", "delete_notes",
             "move_note", "move_notes_to_folder", "append_to_note", "prepend_to_note",
             "search_notes", "search_notes_content", "list_folder",
-            "log_session", "get_latest_session", "list_agents", "delete_agent",
+            "log_session", "get_latest_session", "list_agents", "delete_agent", "clear_all_agents",
         ] {
             assert!(names.contains(&expected.to_string()), "missing tool: {}", expected);
         }
