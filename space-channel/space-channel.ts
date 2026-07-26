@@ -93,17 +93,33 @@ const mcp = new Server(
   }
 );
 
+function describeZodError(error: z.ZodError): string {
+  return error.issues
+    .map((i) => {
+      const path = i.path.join(".");
+      return path ? `${path}: ${i.message}` : i.message;
+    })
+    .join("; ");
+}
+
+const ReplyArgsSchema = z.object({ text: z.string().min(1) }).strict();
+const EditMessageArgsSchema = z
+  .object({ id: z.string().min(1), text: z.string().min(1) })
+  .strict();
+
 mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
     {
       name: "reply",
-      description: "Send a message back to the user via SpaceNotes",
+      description:
+        "Send a message back to the user via SpaceNotes. Takes only `text`; the reply goes to the chat this agent belongs to.",
       inputSchema: {
         type: "object" as const,
         properties: {
           text: { type: "string", description: "The message to send" },
         },
         required: ["text"],
+        additionalProperties: false,
       },
     },
     {
@@ -116,6 +132,7 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
           text: { type: "string", description: "The new message text" },
         },
         required: ["id", "text"],
+        additionalProperties: false,
       },
     },
   ],
@@ -127,7 +144,14 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
   }
 
   if (req.params.name === "reply") {
-    const { text } = req.params.arguments as { text: string };
+    const parsed = ReplyArgsSchema.safeParse(req.params.arguments);
+    if (!parsed.success) {
+      return {
+        content: [{ type: "text" as const, text: `FAILED: invalid arguments for reply — ${describeZodError(parsed.error)}` }],
+        isError: true,
+      };
+    }
+    const { text } = parsed.data;
     const id = `reply-${Date.now()}`;
     try {
       await conn.reducers.pushMessage({ id, agentId: AGENT_ID, role: "assistant", text, source: "mcp" });
@@ -141,7 +165,14 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
   }
 
   if (req.params.name === "edit_message") {
-    const { id, text } = req.params.arguments as { id: string; text: string };
+    const parsed = EditMessageArgsSchema.safeParse(req.params.arguments);
+    if (!parsed.success) {
+      return {
+        content: [{ type: "text" as const, text: `FAILED: invalid arguments for edit_message — ${describeZodError(parsed.error)}` }],
+        isError: true,
+      };
+    }
+    const { id, text } = parsed.data;
     try {
       await conn.reducers.editMessage({ id, text });
       return { content: [{ type: "text" as const, text: "edited" }] };
