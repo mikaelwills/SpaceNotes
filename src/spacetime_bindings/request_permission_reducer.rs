@@ -8,7 +8,7 @@ use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 #[sats(crate = __lib)]
 pub(super) struct RequestPermissionArgs {
     pub id: String,
-    pub session_id: String,
+    pub agent_id: String,
     pub tool: String,
     pub input: String,
 }
@@ -17,7 +17,7 @@ impl From<RequestPermissionArgs> for super::Reducer {
     fn from(args: RequestPermissionArgs) -> Self {
         Self::RequestPermission {
             id: args.id,
-            session_id: args.session_id,
+            agent_id: args.agent_id,
             tool: args.tool,
             input: args.input,
         }
@@ -42,11 +42,11 @@ pub trait request_permission {
     fn request_permission(
         &self,
         id: String,
-        session_id: String,
+        agent_id: String,
         tool: String,
         input: String,
     ) -> __sdk::Result<()> {
-        self.request_permission_then(id, session_id, tool, input, |_, _| {})
+        self.request_permission_then(id, agent_id, tool, input, |_, _| {})
     }
 
     /// Request that the remote module invoke the reducer `request_permission` to run as soon as possible,
@@ -58,7 +58,7 @@ pub trait request_permission {
     fn request_permission_then(
         &self,
         id: String,
-        session_id: String,
+        agent_id: String,
         tool: String,
         input: String,
 
@@ -72,7 +72,7 @@ impl request_permission for super::RemoteReducers {
     fn request_permission_then(
         &self,
         id: String,
-        session_id: String,
+        agent_id: String,
         tool: String,
         input: String,
 
@@ -83,7 +83,7 @@ impl request_permission for super::RemoteReducers {
         self.imp.invoke_reducer_with_callback(
             RequestPermissionArgs {
                 id,
-                session_id,
+                agent_id,
                 tool,
                 input,
             },

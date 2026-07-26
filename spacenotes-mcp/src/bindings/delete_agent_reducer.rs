@@ -6,41 +6,46 @@ use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
-pub(super) struct ClearAllSessionsArgs {}
+pub(super) struct DeleteAgentArgs {
+    pub agent_id: String,
+}
 
-impl From<ClearAllSessionsArgs> for super::Reducer {
-    fn from(args: ClearAllSessionsArgs) -> Self {
-        Self::ClearAllSessions
+impl From<DeleteAgentArgs> for super::Reducer {
+    fn from(args: DeleteAgentArgs) -> Self {
+        Self::DeleteAgent {
+            agent_id: args.agent_id,
+        }
     }
 }
 
-impl __sdk::InModule for ClearAllSessionsArgs {
+impl __sdk::InModule for DeleteAgentArgs {
     type Module = super::RemoteModule;
 }
 
 #[allow(non_camel_case_types)]
-/// Extension trait for access to the reducer `clear_all_sessions`.
+/// Extension trait for access to the reducer `delete_agent`.
 ///
 /// Implemented for [`super::RemoteReducers`].
-pub trait clear_all_sessions {
-    /// Request that the remote module invoke the reducer `clear_all_sessions` to run as soon as possible.
+pub trait delete_agent {
+    /// Request that the remote module invoke the reducer `delete_agent` to run as soon as possible.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
-    /// /// Use [`clear_all_sessions:clear_all_sessions_then`] to run a callback after the reducer completes.
-    fn clear_all_sessions(&self) -> __sdk::Result<()> {
-        self.clear_all_sessions_then(|_, _| {})
+    /// /// Use [`delete_agent:delete_agent_then`] to run a callback after the reducer completes.
+    fn delete_agent(&self, agent_id: String) -> __sdk::Result<()> {
+        self.delete_agent_then(agent_id, |_, _| {})
     }
 
-    /// Request that the remote module invoke the reducer `clear_all_sessions` to run as soon as possible,
+    /// Request that the remote module invoke the reducer `delete_agent` to run as soon as possible,
     /// registering `callback` to run when we are notified that the reducer completed.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and its status can be observed with the `callback`.
-    fn clear_all_sessions_then(
+    fn delete_agent_then(
         &self,
+        agent_id: String,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -48,15 +53,16 @@ pub trait clear_all_sessions {
     ) -> __sdk::Result<()>;
 }
 
-impl clear_all_sessions for super::RemoteReducers {
-    fn clear_all_sessions_then(
+impl delete_agent for super::RemoteReducers {
+    fn delete_agent_then(
         &self,
+        agent_id: String,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
             + 'static,
     ) -> __sdk::Result<()> {
         self.imp
-            .invoke_reducer_with_callback(ClearAllSessionsArgs {}, callback)
+            .invoke_reducer_with_callback(DeleteAgentArgs { agent_id }, callback)
     }
 }

@@ -6,46 +6,46 @@ use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
-pub(super) struct EndSessionArgs {
-    pub session_id: String,
+pub(super) struct EndAgentArgs {
+    pub agent_id: String,
 }
 
-impl From<EndSessionArgs> for super::Reducer {
-    fn from(args: EndSessionArgs) -> Self {
-        Self::EndSession {
-            session_id: args.session_id,
+impl From<EndAgentArgs> for super::Reducer {
+    fn from(args: EndAgentArgs) -> Self {
+        Self::EndAgent {
+            agent_id: args.agent_id,
         }
     }
 }
 
-impl __sdk::InModule for EndSessionArgs {
+impl __sdk::InModule for EndAgentArgs {
     type Module = super::RemoteModule;
 }
 
 #[allow(non_camel_case_types)]
-/// Extension trait for access to the reducer `end_session`.
+/// Extension trait for access to the reducer `end_agent`.
 ///
 /// Implemented for [`super::RemoteReducers`].
-pub trait end_session {
-    /// Request that the remote module invoke the reducer `end_session` to run as soon as possible.
+pub trait end_agent {
+    /// Request that the remote module invoke the reducer `end_agent` to run as soon as possible.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
-    /// /// Use [`end_session:end_session_then`] to run a callback after the reducer completes.
-    fn end_session(&self, session_id: String) -> __sdk::Result<()> {
-        self.end_session_then(session_id, |_, _| {})
+    /// /// Use [`end_agent:end_agent_then`] to run a callback after the reducer completes.
+    fn end_agent(&self, agent_id: String) -> __sdk::Result<()> {
+        self.end_agent_then(agent_id, |_, _| {})
     }
 
-    /// Request that the remote module invoke the reducer `end_session` to run as soon as possible,
+    /// Request that the remote module invoke the reducer `end_agent` to run as soon as possible,
     /// registering `callback` to run when we are notified that the reducer completed.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and its status can be observed with the `callback`.
-    fn end_session_then(
+    fn end_agent_then(
         &self,
-        session_id: String,
+        agent_id: String,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -53,16 +53,16 @@ pub trait end_session {
     ) -> __sdk::Result<()>;
 }
 
-impl end_session for super::RemoteReducers {
-    fn end_session_then(
+impl end_agent for super::RemoteReducers {
+    fn end_agent_then(
         &self,
-        session_id: String,
+        agent_id: String,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
             + 'static,
     ) -> __sdk::Result<()> {
         self.imp
-            .invoke_reducer_with_callback(EndSessionArgs { session_id }, callback)
+            .invoke_reducer_with_callback(EndAgentArgs { agent_id }, callback)
     }
 }

@@ -15,7 +15,7 @@ import {
 
 
 export default __t.row({
-  sessionId: __t.u64().primaryKey().name("session_id"),
+  agentId: __t.u64().primaryKey().name("agent_id"),
   caller: __t.identity(),
   callee: __t.identity(),
   get state() {

@@ -6,7 +6,7 @@ use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
-pub struct Session {
+pub struct Agent {
     pub id: String,
     pub base_name: String,
     pub host: String,
@@ -17,28 +17,28 @@ pub struct Session {
     pub context_window: u64,
 }
 
-impl __sdk::InModule for Session {
+impl __sdk::InModule for Agent {
     type Module = super::RemoteModule;
 }
 
-/// Column accessor struct for the table `Session`.
+/// Column accessor struct for the table `Agent`.
 ///
 /// Provides typed access to columns for query building.
-pub struct SessionCols {
-    pub id: __sdk::__query_builder::Col<Session, String>,
-    pub base_name: __sdk::__query_builder::Col<Session, String>,
-    pub host: __sdk::__query_builder::Col<Session, String>,
-    pub client_id: __sdk::__query_builder::Col<Session, String>,
-    pub created_at: __sdk::__query_builder::Col<Session, __sdk::Timestamp>,
-    pub last_seen: __sdk::__query_builder::Col<Session, __sdk::Timestamp>,
-    pub context_used: __sdk::__query_builder::Col<Session, u64>,
-    pub context_window: __sdk::__query_builder::Col<Session, u64>,
+pub struct AgentCols {
+    pub id: __sdk::__query_builder::Col<Agent, String>,
+    pub base_name: __sdk::__query_builder::Col<Agent, String>,
+    pub host: __sdk::__query_builder::Col<Agent, String>,
+    pub client_id: __sdk::__query_builder::Col<Agent, String>,
+    pub created_at: __sdk::__query_builder::Col<Agent, __sdk::Timestamp>,
+    pub last_seen: __sdk::__query_builder::Col<Agent, __sdk::Timestamp>,
+    pub context_used: __sdk::__query_builder::Col<Agent, u64>,
+    pub context_window: __sdk::__query_builder::Col<Agent, u64>,
 }
 
-impl __sdk::__query_builder::HasCols for Session {
-    type Cols = SessionCols;
+impl __sdk::__query_builder::HasCols for Agent {
+    type Cols = AgentCols;
     fn cols(table_name: &'static str) -> Self::Cols {
-        SessionCols {
+        AgentCols {
             id: __sdk::__query_builder::Col::new(table_name, "id"),
             base_name: __sdk::__query_builder::Col::new(table_name, "base_name"),
             host: __sdk::__query_builder::Col::new(table_name, "host"),
@@ -51,20 +51,20 @@ impl __sdk::__query_builder::HasCols for Session {
     }
 }
 
-/// Indexed column accessor struct for the table `Session`.
+/// Indexed column accessor struct for the table `Agent`.
 ///
 /// Provides typed access to indexed columns for query building.
-pub struct SessionIxCols {
-    pub id: __sdk::__query_builder::IxCol<Session, String>,
+pub struct AgentIxCols {
+    pub id: __sdk::__query_builder::IxCol<Agent, String>,
 }
 
-impl __sdk::__query_builder::HasIxCols for Session {
-    type IxCols = SessionIxCols;
+impl __sdk::__query_builder::HasIxCols for Agent {
+    type IxCols = AgentIxCols;
     fn ix_cols(table_name: &'static str) -> Self::IxCols {
-        SessionIxCols {
+        AgentIxCols {
             id: __sdk::__query_builder::IxCol::new(table_name, "id"),
         }
     }
 }
 
-impl __sdk::__query_builder::CanBeLookupTable for Session {}
+impl __sdk::__query_builder::CanBeLookupTable for Agent {}

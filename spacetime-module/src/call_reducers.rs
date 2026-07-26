@@ -11,7 +11,7 @@ pub enum CallState {
 pub struct CallSession {
     #[primary_key]
     #[auto_inc]
-    pub session_id: u64,
+    pub agent_id: u64,
     pub caller: Identity,
     pub callee: Identity,
     pub state: CallState,
@@ -19,7 +19,7 @@ pub struct CallSession {
 
 #[spacetimedb::table(accessor = video_frame, public, event)]
 pub struct VideoFrame {
-    pub session_id: u64,
+    pub agent_id: u64,
     pub from: Identity,
     pub seq: u32,
     pub codec: u8,
@@ -29,7 +29,7 @@ pub struct VideoFrame {
 
 #[spacetimedb::table(accessor = audio_frame, public, event)]
 pub struct AudioFrame {
-    pub session_id: u64,
+    pub agent_id: u64,
     pub from: Identity,
     pub seq: u32,
     pub pcm: Vec<u8>,
@@ -39,7 +39,7 @@ pub struct AudioFrame {
 #[spacetimedb::reducer]
 pub fn request_call(ctx: &ReducerContext, callee: Identity) -> Result<(), String> {
     ctx.db.call_session().insert(CallSession {
-        session_id: 0,
+        agent_id: 0,
         caller: ctx.sender(),
         callee,
         state: CallState::Ringing,
@@ -50,17 +50,17 @@ pub fn request_call(ctx: &ReducerContext, callee: Identity) -> Result<(), String
  #[spacetimedb::reducer]
   pub fn accept_call(
       ctx: &ReducerContext,
-      session_id: u64,
+      agent_id: u64,
   ) -> Result<(), String> {
-    let session = ctx.db.call_session().session_id().find(session_id).ok_or("Session Not found")?;
+    let agent = ctx.db.call_session().agent_id().find(agent_id).ok_or("Agent Not found")?;
 
-    if session.callee != ctx.sender() {
+    if agent.callee != ctx.sender() {
         return Err("Not the callee".into());
     }
 
-    ctx.db.call_session().session_id().update(CallSession {
+    ctx.db.call_session().agent_id().update(CallSession {
         state: CallState::Active,
-        ..session
+        ..agent
     });
     Ok(())
   }
@@ -69,12 +69,12 @@ pub fn request_call(ctx: &ReducerContext, callee: Identity) -> Result<(), String
   #[spacetimedb::reducer]
   pub fn end_call(
       ctx: &ReducerContext,
-      session_id: u64,
+      agent_id: u64,
   ) -> Result<(), String> {
-    let session = ctx.db.call_session().session_id().find(session_id).ok_or("Session not found")?;
-    ctx.db.call_session().session_id().update(CallSession {
+    let agent = ctx.db.call_session().agent_id().find(agent_id).ok_or("Agent not found")?;
+    ctx.db.call_session().agent_id().update(CallSession {
         state: CallState::Ended,
-        ..session
+        ..agent
     });
     Ok(())
   }
@@ -82,14 +82,14 @@ pub fn request_call(ctx: &ReducerContext, callee: Identity) -> Result<(), String
 #[spacetimedb::reducer]
 pub fn send_video_frame(
     ctx: &ReducerContext,
-    session_id: u64,
+    agent_id: u64,
     seq: u32,
     codec: u8,
     is_keyframe: bool,
     data: Vec<u8>,
 ) {
     ctx.db.video_frame().insert(VideoFrame {
-        session_id,
+        agent_id,
         from: ctx.sender(),
         seq,
         codec,
@@ -102,13 +102,13 @@ pub fn send_video_frame(
   #[spacetimedb::reducer]
   pub fn send_audio_frame(
       ctx: &ReducerContext,
-      session_id: u64,
+      agent_id: u64,
       seq: u32,
       pcm: Vec<u8>,
   ) {
 
     ctx.db.audio_frame().insert(AudioFrame {
-        session_id,
+        agent_id,
         from: ctx.sender(),
         seq,
         pcm,

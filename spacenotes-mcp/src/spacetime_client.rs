@@ -19,12 +19,12 @@ fn spacenote_link_re() -> &'static Regex {
 
 use crate::bindings::{
     append_to_file_reducer::append_to_file,
-    clear_all_sessions_reducer::clear_all_sessions,
+    clear_all_agents_reducer::clear_all_agents,
     create_folder_reducer::create_folder,
     create_file_reducer::create_file,
     delete_folder_reducer::delete_folder,
     delete_file_reducer::delete_file,
-    delete_session_reducer::delete_session as delete_session_reducer_fn,
+    delete_agent_reducer::delete_agent as delete_agent_reducer_fn,
     find_replace_in_file_reducer::find_replace_in_file,
     folder_table::FolderTableAccess,
     move_folder_reducer::move_folder,
@@ -32,8 +32,8 @@ use crate::bindings::{
     space_file_table::SpaceFileTableAccess,
     prepend_to_file_reducer::prepend_to_file,
     rename_file_reducer::rename_file,
-    session_activity_table::SessionActivityTableAccess,
-    session_table::SessionTableAccess,
+    agent_activity_table::AgentActivityTableAccess,
+    agent_table::AgentTableAccess,
     update_file_content_reducer::update_file_content,
     DbConnection,
 };
@@ -101,8 +101,8 @@ impl SpacetimeClient {
             .subscribe(vec![
                 "SELECT * FROM space_file",
                 "SELECT * FROM folder",
-                "SELECT * FROM session",
-                "SELECT * FROM session_activity",
+                "SELECT * FROM agent",
+                "SELECT * FROM agent_activity",
             ]);
 
         tracing::info!("SpacetimeDB connection established");
@@ -762,30 +762,30 @@ impl SpacetimeClient {
         Ok(links)
     }
 
-    pub fn list_sessions(&self) -> Result<Vec<SessionInfo>> {
-        tracing::info!("Listing all SpaceChannel sessions");
+    pub fn list_agents(&self) -> Result<Vec<AgentInfo>> {
+        tracing::info!("Listing all SpaceChannel agents");
 
         let activity: HashMap<String, (String, i64)> = self
             .conn
             .db()
-            .session_activity()
+            .agent_activity()
             .iter()
             .map(|a| {
                 (
-                    a.session_id.clone(),
+                    a.agent_id.clone(),
                     (a.state.clone(), a.updated_at.to_micros_since_unix_epoch()),
                 )
             })
             .collect();
 
-        let mut sessions: Vec<SessionInfo> = self
+        let mut agents: Vec<AgentInfo> = self
             .conn
             .db()
-            .session()
+            .agent()
             .iter()
             .map(|s| {
                 let act = activity.get(&s.id);
-                SessionInfo {
+                AgentInfo {
                     id: s.id.clone(),
                     base_name: s.base_name.clone(),
                     host: s.host.clone(),
@@ -796,25 +796,25 @@ impl SpacetimeClient {
             })
             .collect();
 
-        sessions.sort_by(|a, b| b.last_seen_us.cmp(&a.last_seen_us));
-        Ok(sessions)
+        agents.sort_by(|a, b| b.last_seen_us.cmp(&a.last_seen_us));
+        Ok(agents)
     }
 
-    pub fn delete_session(&self, session_id: String) -> Result<()> {
-        tracing::info!("Deleting session {}", session_id);
-        self.conn.reducers().delete_session(session_id)?;
+    pub fn delete_agent(&self, agent_id: String) -> Result<()> {
+        tracing::info!("Deleting agent {}", agent_id);
+        self.conn.reducers().delete_agent(agent_id)?;
         Ok(())
     }
 
-    pub fn clear_all_sessions(&self) -> Result<()> {
-        tracing::info!("Clearing all SpaceChannel sessions");
-        self.conn.reducers().clear_all_sessions()?;
+    pub fn clear_all_agents(&self) -> Result<()> {
+        tracing::info!("Clearing all SpaceChannel agents");
+        self.conn.reducers().clear_all_agents()?;
         Ok(())
     }
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct SessionInfo {
+pub struct AgentInfo {
     pub id: String,
     pub base_name: String,
     pub host: String,

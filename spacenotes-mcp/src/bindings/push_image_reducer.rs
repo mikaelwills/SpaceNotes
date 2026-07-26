@@ -8,7 +8,7 @@ use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 #[sats(crate = __lib)]
 pub(super) struct PushImageArgs {
     pub id: String,
-    pub session_id: String,
+    pub agent_id: String,
     pub caption: String,
     pub bytes: Vec<u8>,
 }
@@ -17,7 +17,7 @@ impl From<PushImageArgs> for super::Reducer {
     fn from(args: PushImageArgs) -> Self {
         Self::PushImage {
             id: args.id,
-            session_id: args.session_id,
+            agent_id: args.agent_id,
             caption: args.caption,
             bytes: args.bytes,
         }
@@ -42,11 +42,11 @@ pub trait push_image {
     fn push_image(
         &self,
         id: String,
-        session_id: String,
+        agent_id: String,
         caption: String,
         bytes: Vec<u8>,
     ) -> __sdk::Result<()> {
-        self.push_image_then(id, session_id, caption, bytes, |_, _| {})
+        self.push_image_then(id, agent_id, caption, bytes, |_, _| {})
     }
 
     /// Request that the remote module invoke the reducer `push_image` to run as soon as possible,
@@ -58,7 +58,7 @@ pub trait push_image {
     fn push_image_then(
         &self,
         id: String,
-        session_id: String,
+        agent_id: String,
         caption: String,
         bytes: Vec<u8>,
 
@@ -72,7 +72,7 @@ impl push_image for super::RemoteReducers {
     fn push_image_then(
         &self,
         id: String,
-        session_id: String,
+        agent_id: String,
         caption: String,
         bytes: Vec<u8>,
 
@@ -83,7 +83,7 @@ impl push_image for super::RemoteReducers {
         self.imp.invoke_reducer_with_callback(
             PushImageArgs {
                 id,
-                session_id,
+                agent_id,
                 caption,
                 bytes,
             },

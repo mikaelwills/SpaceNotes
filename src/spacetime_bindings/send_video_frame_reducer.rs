@@ -7,7 +7,7 @@ use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct SendVideoFrameArgs {
-    pub session_id: u64,
+    pub agent_id: u64,
     pub seq: u32,
     pub codec: u8,
     pub is_keyframe: bool,
@@ -17,7 +17,7 @@ pub(super) struct SendVideoFrameArgs {
 impl From<SendVideoFrameArgs> for super::Reducer {
     fn from(args: SendVideoFrameArgs) -> Self {
         Self::SendVideoFrame {
-            session_id: args.session_id,
+            agent_id: args.agent_id,
             seq: args.seq,
             codec: args.codec,
             is_keyframe: args.is_keyframe,
@@ -43,13 +43,13 @@ pub trait send_video_frame {
     /// /// Use [`send_video_frame:send_video_frame_then`] to run a callback after the reducer completes.
     fn send_video_frame(
         &self,
-        session_id: u64,
+        agent_id: u64,
         seq: u32,
         codec: u8,
         is_keyframe: bool,
         data: Vec<u8>,
     ) -> __sdk::Result<()> {
-        self.send_video_frame_then(session_id, seq, codec, is_keyframe, data, |_, _| {})
+        self.send_video_frame_then(agent_id, seq, codec, is_keyframe, data, |_, _| {})
     }
 
     /// Request that the remote module invoke the reducer `send_video_frame` to run as soon as possible,
@@ -60,7 +60,7 @@ pub trait send_video_frame {
     ///  and its status can be observed with the `callback`.
     fn send_video_frame_then(
         &self,
-        session_id: u64,
+        agent_id: u64,
         seq: u32,
         codec: u8,
         is_keyframe: bool,
@@ -75,7 +75,7 @@ pub trait send_video_frame {
 impl send_video_frame for super::RemoteReducers {
     fn send_video_frame_then(
         &self,
-        session_id: u64,
+        agent_id: u64,
         seq: u32,
         codec: u8,
         is_keyframe: bool,
@@ -87,7 +87,7 @@ impl send_video_frame for super::RemoteReducers {
     ) -> __sdk::Result<()> {
         self.imp.invoke_reducer_with_callback(
             SendVideoFrameArgs {
-                session_id,
+                agent_id,
                 seq,
                 codec,
                 is_keyframe,

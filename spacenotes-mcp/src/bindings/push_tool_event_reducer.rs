@@ -8,7 +8,7 @@ use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 #[sats(crate = __lib)]
 pub(super) struct PushToolEventArgs {
     pub id: String,
-    pub session_id: String,
+    pub agent_id: String,
     pub tool: String,
     pub detail: String,
 }
@@ -17,7 +17,7 @@ impl From<PushToolEventArgs> for super::Reducer {
     fn from(args: PushToolEventArgs) -> Self {
         Self::PushToolEvent {
             id: args.id,
-            session_id: args.session_id,
+            agent_id: args.agent_id,
             tool: args.tool,
             detail: args.detail,
         }
@@ -42,11 +42,11 @@ pub trait push_tool_event {
     fn push_tool_event(
         &self,
         id: String,
-        session_id: String,
+        agent_id: String,
         tool: String,
         detail: String,
     ) -> __sdk::Result<()> {
-        self.push_tool_event_then(id, session_id, tool, detail, |_, _| {})
+        self.push_tool_event_then(id, agent_id, tool, detail, |_, _| {})
     }
 
     /// Request that the remote module invoke the reducer `push_tool_event` to run as soon as possible,
@@ -58,7 +58,7 @@ pub trait push_tool_event {
     fn push_tool_event_then(
         &self,
         id: String,
-        session_id: String,
+        agent_id: String,
         tool: String,
         detail: String,
 
@@ -72,7 +72,7 @@ impl push_tool_event for super::RemoteReducers {
     fn push_tool_event_then(
         &self,
         id: String,
-        session_id: String,
+        agent_id: String,
         tool: String,
         detail: String,
 
@@ -83,7 +83,7 @@ impl push_tool_event for super::RemoteReducers {
         self.imp.invoke_reducer_with_callback(
             PushToolEventArgs {
                 id,
-                session_id,
+                agent_id,
                 tool,
                 detail,
             },

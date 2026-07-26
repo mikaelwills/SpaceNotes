@@ -8,7 +8,7 @@ use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 #[sats(crate = __lib)]
 pub(super) struct RequestQuestionArgs {
     pub id: String,
-    pub session_id: String,
+    pub agent_id: String,
     pub question: String,
     pub header: String,
     pub options: String,
@@ -19,7 +19,7 @@ impl From<RequestQuestionArgs> for super::Reducer {
     fn from(args: RequestQuestionArgs) -> Self {
         Self::RequestQuestion {
             id: args.id,
-            session_id: args.session_id,
+            agent_id: args.agent_id,
             question: args.question,
             header: args.header,
             options: args.options,
@@ -46,7 +46,7 @@ pub trait request_question {
     fn request_question(
         &self,
         id: String,
-        session_id: String,
+        agent_id: String,
         question: String,
         header: String,
         options: String,
@@ -54,7 +54,7 @@ pub trait request_question {
     ) -> __sdk::Result<()> {
         self.request_question_then(
             id,
-            session_id,
+            agent_id,
             question,
             header,
             options,
@@ -72,7 +72,7 @@ pub trait request_question {
     fn request_question_then(
         &self,
         id: String,
-        session_id: String,
+        agent_id: String,
         question: String,
         header: String,
         options: String,
@@ -88,7 +88,7 @@ impl request_question for super::RemoteReducers {
     fn request_question_then(
         &self,
         id: String,
-        session_id: String,
+        agent_id: String,
         question: String,
         header: String,
         options: String,
@@ -101,7 +101,7 @@ impl request_question for super::RemoteReducers {
         self.imp.invoke_reducer_with_callback(
             RequestQuestionArgs {
                 id,
-                session_id,
+                agent_id,
                 question,
                 header,
                 options,

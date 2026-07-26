@@ -12,7 +12,7 @@ import {
 
 export default __t.row({
   id: __t.string().primaryKey(),
-  sessionId: __t.string().name("session_id"),
+  agentId: __t.string().name("agent_id"),
   role: __t.string(),
   text: __t.string(),
   source: __t.string(),

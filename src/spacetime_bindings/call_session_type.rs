@@ -9,7 +9,7 @@ use super::call_state_type::CallState;
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub struct CallSession {
-    pub session_id: u64,
+    pub agent_id: u64,
     pub caller: __sdk::Identity,
     pub callee: __sdk::Identity,
     pub state: CallState,
@@ -23,7 +23,7 @@ impl __sdk::InModule for CallSession {
 ///
 /// Provides typed access to columns for query building.
 pub struct CallSessionCols {
-    pub session_id: __sdk::__query_builder::Col<CallSession, u64>,
+    pub agent_id: __sdk::__query_builder::Col<CallSession, u64>,
     pub caller: __sdk::__query_builder::Col<CallSession, __sdk::Identity>,
     pub callee: __sdk::__query_builder::Col<CallSession, __sdk::Identity>,
     pub state: __sdk::__query_builder::Col<CallSession, CallState>,
@@ -33,7 +33,7 @@ impl __sdk::__query_builder::HasCols for CallSession {
     type Cols = CallSessionCols;
     fn cols(table_name: &'static str) -> Self::Cols {
         CallSessionCols {
-            session_id: __sdk::__query_builder::Col::new(table_name, "session_id"),
+            agent_id: __sdk::__query_builder::Col::new(table_name, "agent_id"),
             caller: __sdk::__query_builder::Col::new(table_name, "caller"),
             callee: __sdk::__query_builder::Col::new(table_name, "callee"),
             state: __sdk::__query_builder::Col::new(table_name, "state"),
@@ -45,14 +45,14 @@ impl __sdk::__query_builder::HasCols for CallSession {
 ///
 /// Provides typed access to indexed columns for query building.
 pub struct CallSessionIxCols {
-    pub session_id: __sdk::__query_builder::IxCol<CallSession, u64>,
+    pub agent_id: __sdk::__query_builder::IxCol<CallSession, u64>,
 }
 
 impl __sdk::__query_builder::HasIxCols for CallSession {
     type IxCols = CallSessionIxCols;
     fn ix_cols(table_name: &'static str) -> Self::IxCols {
         CallSessionIxCols {
-            session_id: __sdk::__query_builder::IxCol::new(table_name, "session_id"),
+            agent_id: __sdk::__query_builder::IxCol::new(table_name, "agent_id"),
         }
     }
 }

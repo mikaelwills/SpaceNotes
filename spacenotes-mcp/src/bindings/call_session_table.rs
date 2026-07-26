@@ -96,30 +96,30 @@ impl<'ctx> __sdk::TableWithPrimaryKey for CallSessionTableHandle<'ctx> {
     }
 }
 
-/// Access to the `session_id` unique index on the table `call_session`,
+/// Access to the `agent_id` unique index on the table `call_session`,
 /// which allows point queries on the field of the same name
-/// via the [`CallSessionSessionIdUnique::find`] method.
+/// via the [`CallSessionAgentIdUnique::find`] method.
 ///
 /// Users are encouraged not to explicitly reference this type,
 /// but to directly chain method calls,
-/// like `ctx.db.call_session().session_id().find(...)`.
-pub struct CallSessionSessionIdUnique<'ctx> {
+/// like `ctx.db.call_session().agent_id().find(...)`.
+pub struct CallSessionAgentIdUnique<'ctx> {
     imp: __sdk::UniqueConstraintHandle<CallSession, u64>,
     phantom: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
 impl<'ctx> CallSessionTableHandle<'ctx> {
-    /// Get a handle on the `session_id` unique index on the table `call_session`.
-    pub fn session_id(&self) -> CallSessionSessionIdUnique<'ctx> {
-        CallSessionSessionIdUnique {
-            imp: self.imp.get_unique_constraint::<u64>("session_id"),
+    /// Get a handle on the `agent_id` unique index on the table `call_session`.
+    pub fn agent_id(&self) -> CallSessionAgentIdUnique<'ctx> {
+        CallSessionAgentIdUnique {
+            imp: self.imp.get_unique_constraint::<u64>("agent_id"),
             phantom: std::marker::PhantomData,
         }
     }
 }
 
-impl<'ctx> CallSessionSessionIdUnique<'ctx> {
-    /// Find the subscribed row whose `session_id` column value is equal to `col_val`,
+impl<'ctx> CallSessionAgentIdUnique<'ctx> {
+    /// Find the subscribed row whose `agent_id` column value is equal to `col_val`,
     /// if such a row is present in the client cache.
     pub fn find(&self, col_val: &u64) -> Option<CallSession> {
         self.imp.find(col_val)
@@ -129,7 +129,7 @@ impl<'ctx> CallSessionSessionIdUnique<'ctx> {
 #[doc(hidden)]
 pub(super) fn register_table(client_cache: &mut __sdk::ClientCache<super::RemoteModule>) {
     let _table = client_cache.get_or_make_table::<CallSession>("call_session");
-    _table.add_unique_constraint::<u64>("session_id", |row| &row.session_id);
+    _table.add_unique_constraint::<u64>("agent_id", |row| &row.agent_id);
 }
 
 #[doc(hidden)]

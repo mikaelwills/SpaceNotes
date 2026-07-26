@@ -1,28 +1,28 @@
 use spacetimedb::{ReducerContext, Table};
 
 use crate::space_channel_tables::{
-    message, message_image, permission_request, question_request, session, session_activity,
-    tool_event, Message, MessageImage, PermissionRequest, QuestionRequest, Session,
-    SessionActivity, ToolEvent,
+    message, message_image, permission_request, question_request, agent, agent_activity,
+    tool_event, Message, MessageImage, PermissionRequest, QuestionRequest, Agent,
+    AgentActivity, ToolEvent,
 };
 
 const MESSAGE_TTL_MICROS: i64 = 48 * 60 * 60 * 1_000_000;
 const IMAGE_MAX_BYTES: usize = 4 * 1024 * 1024;
 
-fn ensure_session_exists(ctx: &ReducerContext, session_id: &str) {
-    if ctx.db.session().id().find(&session_id.to_string()).is_some() {
+fn ensure_agent_exists(ctx: &ReducerContext, agent_id: &str) {
+    if ctx.db.agent().id().find(&agent_id.to_string()).is_some() {
         return;
     }
     let now = ctx.timestamp;
-    let (base_name, host) = match session_id.find('@') {
+    let (base_name, host) = match agent_id.find('@') {
         Some(idx) => (
-            session_id[..idx].to_string(),
-            session_id[idx + 1..].to_string(),
+            agent_id[..idx].to_string(),
+            agent_id[idx + 1..].to_string(),
         ),
-        None => (session_id.to_string(), String::new()),
+        None => (agent_id.to_string(), String::new()),
     };
-    ctx.db.session().insert(Session {
-        id: session_id.to_string(),
+    ctx.db.agent().insert(Agent {
+        id: agent_id.to_string(),
         base_name,
         host,
         client_id: String::new(),
@@ -31,11 +31,11 @@ fn ensure_session_exists(ctx: &ReducerContext, session_id: &str) {
         context_used: 0,
         context_window: 0,
     });
-    log::info!("Auto-recreated session row from activity: {}", session_id);
+    log::info!("Auto-recreated agent row from activity: {}", agent_id);
 }
 
 #[spacetimedb::reducer]
-pub fn register_session(
+pub fn register_agent(
     ctx: &ReducerContext,
     id: String,
     base_name: String,
@@ -44,8 +44,8 @@ pub fn register_session(
 ) {
     let now = ctx.timestamp;
 
-    if let Some(existing) = ctx.db.session().id().find(&id) {
-        ctx.db.session().id().update(Session {
+    if let Some(existing) = ctx.db.agent().id().find(&id) {
+        ctx.db.agent().id().update(Agent {
             id: id.clone(),
             base_name,
             host,
@@ -55,9 +55,9 @@ pub fn register_session(
             context_used: existing.context_used,
             context_window: existing.context_window,
         });
-        log::info!("Session re-registered: {}", id);
+        log::info!("Agent re-registered: {}", id);
     } else {
-        ctx.db.session().insert(Session {
+        ctx.db.agent().insert(Agent {
             id: id.clone(),
             base_name,
             host,
@@ -67,52 +67,52 @@ pub fn register_session(
             context_used: 0,
             context_window: 0,
         });
-        log::info!("Session registered: {}", id);
+        log::info!("Agent registered: {}", id);
     }
 }
 
 #[spacetimedb::reducer]
-pub fn heartbeat(ctx: &ReducerContext, session_id: String) {
-    ensure_session_exists(ctx, &session_id);
-    let Some(existing) = ctx.db.session().id().find(&session_id) else {
+pub fn heartbeat(ctx: &ReducerContext, agent_id: String) {
+    ensure_agent_exists(ctx, &agent_id);
+    let Some(existing) = ctx.db.agent().id().find(&agent_id) else {
         return;
     };
-    ctx.db.session().id().update(Session {
+    ctx.db.agent().id().update(Agent {
         last_seen: ctx.timestamp,
         ..existing
     });
 }
 
 #[spacetimedb::reducer]
-pub fn end_session(ctx: &ReducerContext, session_id: String) {
-    ctx.db.session().id().delete(&session_id);
-    ctx.db.session_activity().session_id().delete(&session_id);
-    log::info!("Session ended: {}", session_id);
+pub fn end_agent(ctx: &ReducerContext, agent_id: String) {
+    ctx.db.agent().id().delete(&agent_id);
+    ctx.db.agent_activity().agent_id().delete(&agent_id);
+    log::info!("Agent ended: {}", agent_id);
 }
 
 #[spacetimedb::reducer]
-pub fn push_status(ctx: &ReducerContext, session_id: String, state: String) {
-    ensure_session_exists(ctx, &session_id);
+pub fn push_status(ctx: &ReducerContext, agent_id: String, state: String) {
+    ensure_agent_exists(ctx, &agent_id);
     let now = ctx.timestamp;
 
-    if let Some(existing) = ctx.db.session_activity().session_id().find(&session_id) {
-        ctx.db.session_activity().session_id().update(SessionActivity {
-            session_id: session_id.clone(),
+    if let Some(existing) = ctx.db.agent_activity().agent_id().find(&agent_id) {
+        ctx.db.agent_activity().agent_id().update(AgentActivity {
+            agent_id: agent_id.clone(),
             state,
             last_tool_event: existing.last_tool_event,
             updated_at: now,
         });
     } else {
-        ctx.db.session_activity().insert(SessionActivity {
-            session_id: session_id.clone(),
+        ctx.db.agent_activity().insert(AgentActivity {
+            agent_id: agent_id.clone(),
             state,
             last_tool_event: None,
             updated_at: now,
         });
     }
 
-    if let Some(existing) = ctx.db.session().id().find(&session_id) {
-        ctx.db.session().id().update(Session {
+    if let Some(existing) = ctx.db.agent().id().find(&agent_id) {
+        ctx.db.agent().id().update(Agent {
             last_seen: now,
             ..existing
         });
@@ -122,15 +122,15 @@ pub fn push_status(ctx: &ReducerContext, session_id: String, state: String) {
 #[spacetimedb::reducer]
 pub fn push_context_usage(
     ctx: &ReducerContext,
-    session_id: String,
+    agent_id: String,
     used: u64,
     window: u64,
 ) {
-    ensure_session_exists(ctx, &session_id);
-    let Some(existing) = ctx.db.session().id().find(&session_id) else {
+    ensure_agent_exists(ctx, &agent_id);
+    let Some(existing) = ctx.db.agent().id().find(&agent_id) else {
         return;
     };
-    ctx.db.session().id().update(Session {
+    ctx.db.agent().id().update(Agent {
         last_seen: ctx.timestamp,
         context_used: used,
         context_window: window,
@@ -142,39 +142,39 @@ pub fn push_context_usage(
 pub fn push_tool_event(
     ctx: &ReducerContext,
     id: String,
-    session_id: String,
+    agent_id: String,
     tool: String,
     detail: String,
 ) {
-    ensure_session_exists(ctx, &session_id);
+    ensure_agent_exists(ctx, &agent_id);
     let now = ctx.timestamp;
 
     ctx.db.tool_event().insert(ToolEvent {
         id,
-        session_id: session_id.clone(),
+        agent_id: agent_id.clone(),
         tool,
         detail: detail.clone(),
         started_at: now,
     });
 
-    if ctx.db.session_activity().session_id().find(&session_id).is_some() {
-        ctx.db.session_activity().session_id().update(SessionActivity {
-            session_id: session_id.clone(),
+    if ctx.db.agent_activity().agent_id().find(&agent_id).is_some() {
+        ctx.db.agent_activity().agent_id().update(AgentActivity {
+            agent_id: agent_id.clone(),
             state: "tool_use".to_string(),
             last_tool_event: Some(detail),
             updated_at: now,
         });
     } else {
-        ctx.db.session_activity().insert(SessionActivity {
-            session_id: session_id.clone(),
+        ctx.db.agent_activity().insert(AgentActivity {
+            agent_id: agent_id.clone(),
             state: "tool_use".to_string(),
             last_tool_event: Some(detail),
             updated_at: now,
         });
     }
 
-    if let Some(existing) = ctx.db.session().id().find(&session_id) {
-        ctx.db.session().id().update(Session {
+    if let Some(existing) = ctx.db.agent().id().find(&agent_id) {
+        ctx.db.agent().id().update(Agent {
             last_seen: now,
             ..existing
         });
@@ -185,18 +185,18 @@ pub fn push_tool_event(
 pub fn push_message(
     ctx: &ReducerContext,
     id: String,
-    session_id: String,
+    agent_id: String,
     role: String,
     text: String,
     source: String,
 ) {
-    ensure_session_exists(ctx, &session_id);
+    ensure_agent_exists(ctx, &agent_id);
     let now = ctx.timestamp;
 
     if ctx.db.message().id().find(&id).is_none() {
         ctx.db.message().insert(Message {
             id,
-            session_id: session_id.clone(),
+            agent_id: agent_id.clone(),
             role,
             text,
             source,
@@ -204,8 +204,8 @@ pub fn push_message(
         });
     }
 
-    if let Some(existing) = ctx.db.session().id().find(&session_id) {
-        ctx.db.session().id().update(Session {
+    if let Some(existing) = ctx.db.agent().id().find(&agent_id) {
+        ctx.db.agent().id().update(Agent {
             last_seen: now,
             ..existing
         });
@@ -216,7 +216,7 @@ pub fn push_message(
 pub fn push_image(
     ctx: &ReducerContext,
     id: String,
-    session_id: String,
+    agent_id: String,
     caption: String,
     bytes: Vec<u8>,
 ) -> Result<(), String> {
@@ -228,13 +228,13 @@ pub fn push_image(
         ));
     }
 
-    ensure_session_exists(ctx, &session_id);
+    ensure_agent_exists(ctx, &agent_id);
     let now = ctx.timestamp;
 
     if ctx.db.message().id().find(&id).is_none() {
         ctx.db.message().insert(Message {
             id: id.clone(),
-            session_id: session_id.clone(),
+            agent_id: agent_id.clone(),
             role: "user".to_string(),
             text: caption,
             source: "flutter".to_string(),
@@ -247,8 +247,8 @@ pub fn push_image(
         });
     }
 
-    if let Some(existing) = ctx.db.session().id().find(&session_id) {
-        ctx.db.session().id().update(Session {
+    if let Some(existing) = ctx.db.agent().id().find(&agent_id) {
+        ctx.db.agent().id().update(Agent {
             last_seen: now,
             ..existing
         });
@@ -270,13 +270,13 @@ pub fn edit_message(ctx: &ReducerContext, id: String, text: String) {
 pub fn request_permission(
     ctx: &ReducerContext,
     id: String,
-    session_id: String,
+    agent_id: String,
     tool: String,
     input: String,
 ) {
     ctx.db.permission_request().insert(PermissionRequest {
         id,
-        session_id,
+        agent_id,
         tool,
         input,
         status: "pending".to_string(),
@@ -302,7 +302,7 @@ pub fn resolve_permission(ctx: &ReducerContext, id: String, status: String) {
 pub fn request_question(
     ctx: &ReducerContext,
     id: String,
-    session_id: String,
+    agent_id: String,
     question: String,
     header: String,
     options: String,
@@ -310,7 +310,7 @@ pub fn request_question(
 ) {
     ctx.db.question_request().insert(QuestionRequest {
         id,
-        session_id,
+        agent_id,
         question,
         header,
         options,
@@ -416,12 +416,12 @@ pub fn sweep_old_messages(ctx: &ReducerContext) {
 }
 
 #[spacetimedb::reducer]
-pub fn delete_session(ctx: &ReducerContext, session_id: String) {
+pub fn delete_agent(ctx: &ReducerContext, agent_id: String) {
     let message_ids: Vec<String> = ctx
         .db
         .message()
         .iter()
-        .filter(|m| m.session_id == session_id)
+        .filter(|m| m.agent_id == agent_id)
         .map(|m| m.id.clone())
         .collect();
 
@@ -434,7 +434,7 @@ pub fn delete_session(ctx: &ReducerContext, session_id: String) {
         .db
         .tool_event()
         .iter()
-        .filter(|t| t.session_id == session_id)
+        .filter(|t| t.agent_id == agent_id)
         .map(|t| t.id.clone())
         .collect();
 
@@ -446,7 +446,7 @@ pub fn delete_session(ctx: &ReducerContext, session_id: String) {
         .db
         .permission_request()
         .iter()
-        .filter(|p| p.session_id == session_id)
+        .filter(|p| p.agent_id == agent_id)
         .map(|p| p.id.clone())
         .collect();
 
@@ -458,7 +458,7 @@ pub fn delete_session(ctx: &ReducerContext, session_id: String) {
         .db
         .question_request()
         .iter()
-        .filter(|q| q.session_id == session_id)
+        .filter(|q| q.agent_id == agent_id)
         .map(|q| q.id.clone())
         .collect();
 
@@ -466,12 +466,12 @@ pub fn delete_session(ctx: &ReducerContext, session_id: String) {
         ctx.db.question_request().id().delete(id);
     }
 
-    ctx.db.session_activity().session_id().delete(&session_id);
-    ctx.db.session().id().delete(&session_id);
+    ctx.db.agent_activity().agent_id().delete(&agent_id);
+    ctx.db.agent().id().delete(&agent_id);
 
     log::info!(
-        "delete_session({}): purged {} messages, {} tool_events, {} permissions, {} questions",
-        session_id,
+        "delete_agent({}): purged {} messages, {} tool_events, {} permissions, {} questions",
+        agent_id,
         message_ids.len(),
         tool_event_ids.len(),
         permission_ids.len(),
@@ -480,7 +480,7 @@ pub fn delete_session(ctx: &ReducerContext, session_id: String) {
 }
 
 #[spacetimedb::reducer]
-pub fn clear_all_sessions(ctx: &ReducerContext) {
+pub fn clear_all_agents(ctx: &ReducerContext) {
     let message_ids: Vec<String> = ctx.db.message().iter().map(|m| m.id.clone()).collect();
     for id in &message_ids {
         ctx.db.message().id().delete(id);
@@ -514,22 +514,22 @@ pub fn clear_all_sessions(ctx: &ReducerContext) {
 
     let activity_ids: Vec<String> = ctx
         .db
-        .session_activity()
+        .agent_activity()
         .iter()
-        .map(|a| a.session_id.clone())
+        .map(|a| a.agent_id.clone())
         .collect();
     for id in &activity_ids {
-        ctx.db.session_activity().session_id().delete(id);
+        ctx.db.agent_activity().agent_id().delete(id);
     }
 
-    let session_ids: Vec<String> = ctx.db.session().iter().map(|s| s.id.clone()).collect();
-    for id in &session_ids {
-        ctx.db.session().id().delete(id);
+    let agent_ids: Vec<String> = ctx.db.agent().iter().map(|s| s.id.clone()).collect();
+    for id in &agent_ids {
+        ctx.db.agent().id().delete(id);
     }
 
     log::info!(
-        "clear_all_sessions: purged {} sessions, {} activities, {} messages, {} tool_events, {} permissions, {} questions",
-        session_ids.len(),
+        "clear_all_agents: purged {} agents, {} activities, {} messages, {} tool_events, {} permissions, {} questions",
+        agent_ids.len(),
         activity_ids.len(),
         message_ids.len(),
         tool_event_ids.len(),

@@ -7,13 +7,13 @@ use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct EndCallArgs {
-    pub session_id: u64,
+    pub agent_id: u64,
 }
 
 impl From<EndCallArgs> for super::Reducer {
     fn from(args: EndCallArgs) -> Self {
         Self::EndCall {
-            session_id: args.session_id,
+            agent_id: args.agent_id,
         }
     }
 }
@@ -33,8 +33,8 @@ pub trait end_call {
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
     /// /// Use [`end_call:end_call_then`] to run a callback after the reducer completes.
-    fn end_call(&self, session_id: u64) -> __sdk::Result<()> {
-        self.end_call_then(session_id, |_, _| {})
+    fn end_call(&self, agent_id: u64) -> __sdk::Result<()> {
+        self.end_call_then(agent_id, |_, _| {})
     }
 
     /// Request that the remote module invoke the reducer `end_call` to run as soon as possible,
@@ -45,7 +45,7 @@ pub trait end_call {
     ///  and its status can be observed with the `callback`.
     fn end_call_then(
         &self,
-        session_id: u64,
+        agent_id: u64,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -56,13 +56,13 @@ pub trait end_call {
 impl end_call for super::RemoteReducers {
     fn end_call_then(
         &self,
-        session_id: u64,
+        agent_id: u64,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
             + 'static,
     ) -> __sdk::Result<()> {
         self.imp
-            .invoke_reducer_with_callback(EndCallArgs { session_id }, callback)
+            .invoke_reducer_with_callback(EndCallArgs { agent_id }, callback)
     }
 }

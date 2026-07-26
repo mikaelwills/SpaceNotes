@@ -12,7 +12,7 @@ import {
 
 export default __t.row({
   id: __t.string().primaryKey(),
-  sessionId: __t.string().name("session_id"),
+  agentId: __t.string().name("agent_id"),
   tool: __t.string(),
   input: __t.string(),
   status: __t.string(),

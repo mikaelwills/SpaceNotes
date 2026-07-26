@@ -12,7 +12,7 @@ import {
 
 export default {
   id: __t.string(),
-  sessionId: __t.string(),
+  agentId: __t.string(),
   tool: __t.string(),
   detail: __t.string(),
 };

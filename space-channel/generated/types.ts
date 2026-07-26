@@ -10,8 +10,28 @@ import {
   type Infer as __Infer,
 } from "spacetimedb";
 
+export const Agent = __t.object("Agent", {
+  id: __t.string(),
+  baseName: __t.string(),
+  host: __t.string(),
+  clientId: __t.string(),
+  createdAt: __t.timestamp(),
+  lastSeen: __t.timestamp(),
+  contextUsed: __t.u64(),
+  contextWindow: __t.u64(),
+});
+export type Agent = __Infer<typeof Agent>;
+
+export const AgentActivity = __t.object("AgentActivity", {
+  agentId: __t.string(),
+  state: __t.string(),
+  lastToolEvent: __t.option(__t.string()),
+  updatedAt: __t.timestamp(),
+});
+export type AgentActivity = __Infer<typeof AgentActivity>;
+
 export const AudioFrame = __t.object("AudioFrame", {
-  sessionId: __t.u64(),
+  agentId: __t.u64(),
   from: __t.identity(),
   seq: __t.u32(),
   pcm: __t.byteArray(),
@@ -19,7 +39,7 @@ export const AudioFrame = __t.object("AudioFrame", {
 export type AudioFrame = __Infer<typeof AudioFrame>;
 
 export const CallSession = __t.object("CallSession", {
-  sessionId: __t.u64(),
+  agentId: __t.u64(),
   caller: __t.identity(),
   callee: __t.identity(),
   get state() {
@@ -52,7 +72,7 @@ export type Folder = __Infer<typeof Folder>;
 
 export const Message = __t.object("Message", {
   id: __t.string(),
-  sessionId: __t.string(),
+  agentId: __t.string(),
   role: __t.string(),
   text: __t.string(),
   source: __t.string(),
@@ -68,7 +88,7 @@ export type MessageImage = __Infer<typeof MessageImage>;
 
 export const PermissionRequest = __t.object("PermissionRequest", {
   id: __t.string(),
-  sessionId: __t.string(),
+  agentId: __t.string(),
   tool: __t.string(),
   input: __t.string(),
   status: __t.string(),
@@ -79,7 +99,7 @@ export type PermissionRequest = __Infer<typeof PermissionRequest>;
 
 export const QuestionRequest = __t.object("QuestionRequest", {
   id: __t.string(),
-  sessionId: __t.string(),
+  agentId: __t.string(),
   question: __t.string(),
   header: __t.string(),
   options: __t.string(),
@@ -90,26 +110,6 @@ export const QuestionRequest = __t.object("QuestionRequest", {
   resolvedAt: __t.option(__t.timestamp()),
 });
 export type QuestionRequest = __Infer<typeof QuestionRequest>;
-
-export const Session = __t.object("Session", {
-  id: __t.string(),
-  baseName: __t.string(),
-  host: __t.string(),
-  clientId: __t.string(),
-  createdAt: __t.timestamp(),
-  lastSeen: __t.timestamp(),
-  contextUsed: __t.u64(),
-  contextWindow: __t.u64(),
-});
-export type Session = __Infer<typeof Session>;
-
-export const SessionActivity = __t.object("SessionActivity", {
-  sessionId: __t.string(),
-  state: __t.string(),
-  lastToolEvent: __t.option(__t.string()),
-  updatedAt: __t.timestamp(),
-});
-export type SessionActivity = __Infer<typeof SessionActivity>;
 
 export const SpaceFile = __t.object("SpaceFile", {
   id: __t.string(),
@@ -128,7 +128,7 @@ export type SpaceFile = __Infer<typeof SpaceFile>;
 
 export const ToolEvent = __t.object("ToolEvent", {
   id: __t.string(),
-  sessionId: __t.string(),
+  agentId: __t.string(),
   tool: __t.string(),
   detail: __t.string(),
   startedAt: __t.timestamp(),
@@ -142,7 +142,7 @@ export const UserProfile = __t.object("UserProfile", {
 export type UserProfile = __Infer<typeof UserProfile>;
 
 export const VideoFrame = __t.object("VideoFrame", {
-  sessionId: __t.u64(),
+  agentId: __t.u64(),
   from: __t.identity(),
   seq: __t.u32(),
   codec: __t.u8(),

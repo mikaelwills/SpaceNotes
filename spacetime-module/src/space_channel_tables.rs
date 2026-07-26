@@ -1,7 +1,7 @@
 use spacetimedb::Timestamp;
 
-#[spacetimedb::table(accessor = session, public)]
-pub struct Session {
+#[spacetimedb::table(accessor = agent, public)]
+pub struct Agent {
     #[primary_key]
     pub id: String,
     pub base_name: String,
@@ -13,10 +13,10 @@ pub struct Session {
     pub context_window: u64,
 }
 
-#[spacetimedb::table(accessor = session_activity, public)]
-pub struct SessionActivity {
+#[spacetimedb::table(accessor = agent_activity, public)]
+pub struct AgentActivity {
     #[primary_key]
-    pub session_id: String,
+    pub agent_id: String,
     pub state: String,
     pub last_tool_event: Option<String>,
     pub updated_at: Timestamp,
@@ -27,7 +27,7 @@ pub struct Message {
     #[primary_key]
     pub id: String,
     #[index(btree)]
-    pub session_id: String,
+    pub agent_id: String,
     pub role: String,
     pub text: String,
     pub source: String,
@@ -47,7 +47,7 @@ pub struct ToolEvent {
     #[primary_key]
     pub id: String,
     #[index(btree)]
-    pub session_id: String,
+    pub agent_id: String,
     pub tool: String,
     pub detail: String,
     pub started_at: Timestamp,
@@ -58,7 +58,7 @@ pub struct PermissionRequest {
     #[primary_key]
     pub id: String,
     #[index(btree)]
-    pub session_id: String,
+    pub agent_id: String,
     pub tool: String,
     pub input: String,
     pub status: String,
@@ -71,7 +71,7 @@ pub struct QuestionRequest {
     #[primary_key]
     pub id: String,
     #[index(btree)]
-    pub session_id: String,
+    pub agent_id: String,
     pub question: String,
     pub header: String,
     /// JSON-encoded array of option labels.

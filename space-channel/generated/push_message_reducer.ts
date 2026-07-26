@@ -12,7 +12,7 @@ import {
 
 export default {
   id: __t.string(),
-  sessionId: __t.string(),
+  agentId: __t.string(),
   role: __t.string(),
   text: __t.string(),
   source: __t.string(),

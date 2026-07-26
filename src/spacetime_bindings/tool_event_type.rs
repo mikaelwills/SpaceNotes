@@ -8,7 +8,7 @@ use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 #[sats(crate = __lib)]
 pub struct ToolEvent {
     pub id: String,
-    pub session_id: String,
+    pub agent_id: String,
     pub tool: String,
     pub detail: String,
     pub started_at: __sdk::Timestamp,
@@ -23,7 +23,7 @@ impl __sdk::InModule for ToolEvent {
 /// Provides typed access to columns for query building.
 pub struct ToolEventCols {
     pub id: __sdk::__query_builder::Col<ToolEvent, String>,
-    pub session_id: __sdk::__query_builder::Col<ToolEvent, String>,
+    pub agent_id: __sdk::__query_builder::Col<ToolEvent, String>,
     pub tool: __sdk::__query_builder::Col<ToolEvent, String>,
     pub detail: __sdk::__query_builder::Col<ToolEvent, String>,
     pub started_at: __sdk::__query_builder::Col<ToolEvent, __sdk::Timestamp>,
@@ -34,7 +34,7 @@ impl __sdk::__query_builder::HasCols for ToolEvent {
     fn cols(table_name: &'static str) -> Self::Cols {
         ToolEventCols {
             id: __sdk::__query_builder::Col::new(table_name, "id"),
-            session_id: __sdk::__query_builder::Col::new(table_name, "session_id"),
+            agent_id: __sdk::__query_builder::Col::new(table_name, "agent_id"),
             tool: __sdk::__query_builder::Col::new(table_name, "tool"),
             detail: __sdk::__query_builder::Col::new(table_name, "detail"),
             started_at: __sdk::__query_builder::Col::new(table_name, "started_at"),
@@ -46,16 +46,16 @@ impl __sdk::__query_builder::HasCols for ToolEvent {
 ///
 /// Provides typed access to indexed columns for query building.
 pub struct ToolEventIxCols {
+    pub agent_id: __sdk::__query_builder::IxCol<ToolEvent, String>,
     pub id: __sdk::__query_builder::IxCol<ToolEvent, String>,
-    pub session_id: __sdk::__query_builder::IxCol<ToolEvent, String>,
 }
 
 impl __sdk::__query_builder::HasIxCols for ToolEvent {
     type IxCols = ToolEventIxCols;
     fn ix_cols(table_name: &'static str) -> Self::IxCols {
         ToolEventIxCols {
+            agent_id: __sdk::__query_builder::IxCol::new(table_name, "agent_id"),
             id: __sdk::__query_builder::IxCol::new(table_name, "id"),
-            session_id: __sdk::__query_builder::IxCol::new(table_name, "session_id"),
         }
     }
 }

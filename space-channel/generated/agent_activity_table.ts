@@ -11,7 +11,7 @@ import {
 } from "spacetimedb";
 
 export default __t.row({
-  sessionId: __t.string().primaryKey().name("session_id"),
+  agentId: __t.string().primaryKey().name("agent_id"),
   state: __t.string(),
   lastToolEvent: __t.option(__t.string()).name("last_tool_event"),
   updatedAt: __t.timestamp().name("updated_at"),

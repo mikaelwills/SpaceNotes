@@ -7,13 +7,13 @@ use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct AcceptCallArgs {
-    pub session_id: u64,
+    pub agent_id: u64,
 }
 
 impl From<AcceptCallArgs> for super::Reducer {
     fn from(args: AcceptCallArgs) -> Self {
         Self::AcceptCall {
-            session_id: args.session_id,
+            agent_id: args.agent_id,
         }
     }
 }
@@ -33,8 +33,8 @@ pub trait accept_call {
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
     /// /// Use [`accept_call:accept_call_then`] to run a callback after the reducer completes.
-    fn accept_call(&self, session_id: u64) -> __sdk::Result<()> {
-        self.accept_call_then(session_id, |_, _| {})
+    fn accept_call(&self, agent_id: u64) -> __sdk::Result<()> {
+        self.accept_call_then(agent_id, |_, _| {})
     }
 
     /// Request that the remote module invoke the reducer `accept_call` to run as soon as possible,
@@ -45,7 +45,7 @@ pub trait accept_call {
     ///  and its status can be observed with the `callback`.
     fn accept_call_then(
         &self,
-        session_id: u64,
+        agent_id: u64,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -56,13 +56,13 @@ pub trait accept_call {
 impl accept_call for super::RemoteReducers {
     fn accept_call_then(
         &self,
-        session_id: u64,
+        agent_id: u64,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
             + 'static,
     ) -> __sdk::Result<()> {
         self.imp
-            .invoke_reducer_with_callback(AcceptCallArgs { session_id }, callback)
+            .invoke_reducer_with_callback(AcceptCallArgs { agent_id }, callback)
     }
 }

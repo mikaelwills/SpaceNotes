@@ -7,13 +7,13 @@ use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct HeartbeatArgs {
-    pub session_id: String,
+    pub agent_id: String,
 }
 
 impl From<HeartbeatArgs> for super::Reducer {
     fn from(args: HeartbeatArgs) -> Self {
         Self::Heartbeat {
-            session_id: args.session_id,
+            agent_id: args.agent_id,
         }
     }
 }
@@ -33,8 +33,8 @@ pub trait heartbeat {
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
     /// /// Use [`heartbeat:heartbeat_then`] to run a callback after the reducer completes.
-    fn heartbeat(&self, session_id: String) -> __sdk::Result<()> {
-        self.heartbeat_then(session_id, |_, _| {})
+    fn heartbeat(&self, agent_id: String) -> __sdk::Result<()> {
+        self.heartbeat_then(agent_id, |_, _| {})
     }
 
     /// Request that the remote module invoke the reducer `heartbeat` to run as soon as possible,
@@ -45,7 +45,7 @@ pub trait heartbeat {
     ///  and its status can be observed with the `callback`.
     fn heartbeat_then(
         &self,
-        session_id: String,
+        agent_id: String,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -56,13 +56,13 @@ pub trait heartbeat {
 impl heartbeat for super::RemoteReducers {
     fn heartbeat_then(
         &self,
-        session_id: String,
+        agent_id: String,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
             + 'static,
     ) -> __sdk::Result<()> {
         self.imp
-            .invoke_reducer_with_callback(HeartbeatArgs { session_id }, callback)
+            .invoke_reducer_with_callback(HeartbeatArgs { agent_id }, callback)
     }
 }

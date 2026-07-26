@@ -6,16 +6,16 @@ use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
-pub(super) struct RegisterSessionArgs {
+pub(super) struct RegisterAgentArgs {
     pub id: String,
     pub base_name: String,
     pub host: String,
     pub client_id: String,
 }
 
-impl From<RegisterSessionArgs> for super::Reducer {
-    fn from(args: RegisterSessionArgs) -> Self {
-        Self::RegisterSession {
+impl From<RegisterAgentArgs> for super::Reducer {
+    fn from(args: RegisterAgentArgs) -> Self {
+        Self::RegisterAgent {
             id: args.id,
             base_name: args.base_name,
             host: args.host,
@@ -24,38 +24,38 @@ impl From<RegisterSessionArgs> for super::Reducer {
     }
 }
 
-impl __sdk::InModule for RegisterSessionArgs {
+impl __sdk::InModule for RegisterAgentArgs {
     type Module = super::RemoteModule;
 }
 
 #[allow(non_camel_case_types)]
-/// Extension trait for access to the reducer `register_session`.
+/// Extension trait for access to the reducer `register_agent`.
 ///
 /// Implemented for [`super::RemoteReducers`].
-pub trait register_session {
-    /// Request that the remote module invoke the reducer `register_session` to run as soon as possible.
+pub trait register_agent {
+    /// Request that the remote module invoke the reducer `register_agent` to run as soon as possible.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
-    /// /// Use [`register_session:register_session_then`] to run a callback after the reducer completes.
-    fn register_session(
+    /// /// Use [`register_agent:register_agent_then`] to run a callback after the reducer completes.
+    fn register_agent(
         &self,
         id: String,
         base_name: String,
         host: String,
         client_id: String,
     ) -> __sdk::Result<()> {
-        self.register_session_then(id, base_name, host, client_id, |_, _| {})
+        self.register_agent_then(id, base_name, host, client_id, |_, _| {})
     }
 
-    /// Request that the remote module invoke the reducer `register_session` to run as soon as possible,
+    /// Request that the remote module invoke the reducer `register_agent` to run as soon as possible,
     /// registering `callback` to run when we are notified that the reducer completed.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and its status can be observed with the `callback`.
-    fn register_session_then(
+    fn register_agent_then(
         &self,
         id: String,
         base_name: String,
@@ -68,8 +68,8 @@ pub trait register_session {
     ) -> __sdk::Result<()>;
 }
 
-impl register_session for super::RemoteReducers {
-    fn register_session_then(
+impl register_agent for super::RemoteReducers {
+    fn register_agent_then(
         &self,
         id: String,
         base_name: String,
@@ -81,7 +81,7 @@ impl register_session for super::RemoteReducers {
             + 'static,
     ) -> __sdk::Result<()> {
         self.imp.invoke_reducer_with_callback(
-            RegisterSessionArgs {
+            RegisterAgentArgs {
                 id,
                 base_name,
                 host,

@@ -83,15 +83,15 @@ pub fn identity_disconnected(ctx: &ReducerContext) {
 
     ctx.db.connected_user().identity().delete(&ctx.sender());
 
-    for session in ctx.db.call_session().iter() {
-        let dominated = session.caller == ctx.sender()
-            || session.callee == ctx.sender();
-        let active = session.state != CallState::Ended;
+    for agent in ctx.db.call_session().iter() {
+        let dominated = agent.caller == ctx.sender()
+            || agent.callee == ctx.sender();
+        let active = agent.state != CallState::Ended;
 
         if dominated && active {
-            ctx.db.call_session().session_id().update(CallSession {
+            ctx.db.call_session().agent_id().update(CallSession {
                 state: CallState::Ended,
-                ..session
+                ..agent
             });
         }
     }

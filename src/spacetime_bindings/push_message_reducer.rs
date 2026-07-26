@@ -8,7 +8,7 @@ use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 #[sats(crate = __lib)]
 pub(super) struct PushMessageArgs {
     pub id: String,
-    pub session_id: String,
+    pub agent_id: String,
     pub role: String,
     pub text: String,
     pub source: String,
@@ -18,7 +18,7 @@ impl From<PushMessageArgs> for super::Reducer {
     fn from(args: PushMessageArgs) -> Self {
         Self::PushMessage {
             id: args.id,
-            session_id: args.session_id,
+            agent_id: args.agent_id,
             role: args.role,
             text: args.text,
             source: args.source,
@@ -44,12 +44,12 @@ pub trait push_message {
     fn push_message(
         &self,
         id: String,
-        session_id: String,
+        agent_id: String,
         role: String,
         text: String,
         source: String,
     ) -> __sdk::Result<()> {
-        self.push_message_then(id, session_id, role, text, source, |_, _| {})
+        self.push_message_then(id, agent_id, role, text, source, |_, _| {})
     }
 
     /// Request that the remote module invoke the reducer `push_message` to run as soon as possible,
@@ -61,7 +61,7 @@ pub trait push_message {
     fn push_message_then(
         &self,
         id: String,
-        session_id: String,
+        agent_id: String,
         role: String,
         text: String,
         source: String,
@@ -76,7 +76,7 @@ impl push_message for super::RemoteReducers {
     fn push_message_then(
         &self,
         id: String,
-        session_id: String,
+        agent_id: String,
         role: String,
         text: String,
         source: String,
@@ -88,7 +88,7 @@ impl push_message for super::RemoteReducers {
         self.imp.invoke_reducer_with_callback(
             PushMessageArgs {
                 id,
-                session_id,
+                agent_id,
                 role,
                 text,
                 source,

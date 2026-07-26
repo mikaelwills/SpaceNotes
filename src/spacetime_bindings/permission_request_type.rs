@@ -8,7 +8,7 @@ use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 #[sats(crate = __lib)]
 pub struct PermissionRequest {
     pub id: String,
-    pub session_id: String,
+    pub agent_id: String,
     pub tool: String,
     pub input: String,
     pub status: String,
@@ -25,7 +25,7 @@ impl __sdk::InModule for PermissionRequest {
 /// Provides typed access to columns for query building.
 pub struct PermissionRequestCols {
     pub id: __sdk::__query_builder::Col<PermissionRequest, String>,
-    pub session_id: __sdk::__query_builder::Col<PermissionRequest, String>,
+    pub agent_id: __sdk::__query_builder::Col<PermissionRequest, String>,
     pub tool: __sdk::__query_builder::Col<PermissionRequest, String>,
     pub input: __sdk::__query_builder::Col<PermissionRequest, String>,
     pub status: __sdk::__query_builder::Col<PermissionRequest, String>,
@@ -38,7 +38,7 @@ impl __sdk::__query_builder::HasCols for PermissionRequest {
     fn cols(table_name: &'static str) -> Self::Cols {
         PermissionRequestCols {
             id: __sdk::__query_builder::Col::new(table_name, "id"),
-            session_id: __sdk::__query_builder::Col::new(table_name, "session_id"),
+            agent_id: __sdk::__query_builder::Col::new(table_name, "agent_id"),
             tool: __sdk::__query_builder::Col::new(table_name, "tool"),
             input: __sdk::__query_builder::Col::new(table_name, "input"),
             status: __sdk::__query_builder::Col::new(table_name, "status"),
@@ -52,16 +52,16 @@ impl __sdk::__query_builder::HasCols for PermissionRequest {
 ///
 /// Provides typed access to indexed columns for query building.
 pub struct PermissionRequestIxCols {
+    pub agent_id: __sdk::__query_builder::IxCol<PermissionRequest, String>,
     pub id: __sdk::__query_builder::IxCol<PermissionRequest, String>,
-    pub session_id: __sdk::__query_builder::IxCol<PermissionRequest, String>,
 }
 
 impl __sdk::__query_builder::HasIxCols for PermissionRequest {
     type IxCols = PermissionRequestIxCols;
     fn ix_cols(table_name: &'static str) -> Self::IxCols {
         PermissionRequestIxCols {
+            agent_id: __sdk::__query_builder::IxCol::new(table_name, "agent_id"),
             id: __sdk::__query_builder::IxCol::new(table_name, "id"),
-            session_id: __sdk::__query_builder::IxCol::new(table_name, "session_id"),
         }
     }
 }

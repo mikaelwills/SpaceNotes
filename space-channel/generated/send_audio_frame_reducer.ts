@@ -11,7 +11,7 @@ import {
 } from "spacetimedb";
 
 export default {
-  sessionId: __t.u64(),
+  agentId: __t.u64(),
   seq: __t.u32(),
   pcm: __t.byteArray(),
 };

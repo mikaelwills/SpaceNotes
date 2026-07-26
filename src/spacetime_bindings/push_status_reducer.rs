@@ -7,14 +7,14 @@ use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct PushStatusArgs {
-    pub session_id: String,
+    pub agent_id: String,
     pub state: String,
 }
 
 impl From<PushStatusArgs> for super::Reducer {
     fn from(args: PushStatusArgs) -> Self {
         Self::PushStatus {
-            session_id: args.session_id,
+            agent_id: args.agent_id,
             state: args.state,
         }
     }
@@ -35,8 +35,8 @@ pub trait push_status {
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
     /// /// Use [`push_status:push_status_then`] to run a callback after the reducer completes.
-    fn push_status(&self, session_id: String, state: String) -> __sdk::Result<()> {
-        self.push_status_then(session_id, state, |_, _| {})
+    fn push_status(&self, agent_id: String, state: String) -> __sdk::Result<()> {
+        self.push_status_then(agent_id, state, |_, _| {})
     }
 
     /// Request that the remote module invoke the reducer `push_status` to run as soon as possible,
@@ -47,7 +47,7 @@ pub trait push_status {
     ///  and its status can be observed with the `callback`.
     fn push_status_then(
         &self,
-        session_id: String,
+        agent_id: String,
         state: String,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
@@ -59,7 +59,7 @@ pub trait push_status {
 impl push_status for super::RemoteReducers {
     fn push_status_then(
         &self,
-        session_id: String,
+        agent_id: String,
         state: String,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
@@ -67,6 +67,6 @@ impl push_status for super::RemoteReducers {
             + 'static,
     ) -> __sdk::Result<()> {
         self.imp
-            .invoke_reducer_with_callback(PushStatusArgs { session_id, state }, callback)
+            .invoke_reducer_with_callback(PushStatusArgs { agent_id, state }, callback)
     }
 }

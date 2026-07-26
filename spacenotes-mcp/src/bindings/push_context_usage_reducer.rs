@@ -7,7 +7,7 @@ use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct PushContextUsageArgs {
-    pub session_id: String,
+    pub agent_id: String,
     pub used: u64,
     pub window: u64,
 }
@@ -15,7 +15,7 @@ pub(super) struct PushContextUsageArgs {
 impl From<PushContextUsageArgs> for super::Reducer {
     fn from(args: PushContextUsageArgs) -> Self {
         Self::PushContextUsage {
-            session_id: args.session_id,
+            agent_id: args.agent_id,
             used: args.used,
             window: args.window,
         }
@@ -37,8 +37,8 @@ pub trait push_context_usage {
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
     /// /// Use [`push_context_usage:push_context_usage_then`] to run a callback after the reducer completes.
-    fn push_context_usage(&self, session_id: String, used: u64, window: u64) -> __sdk::Result<()> {
-        self.push_context_usage_then(session_id, used, window, |_, _| {})
+    fn push_context_usage(&self, agent_id: String, used: u64, window: u64) -> __sdk::Result<()> {
+        self.push_context_usage_then(agent_id, used, window, |_, _| {})
     }
 
     /// Request that the remote module invoke the reducer `push_context_usage` to run as soon as possible,
@@ -49,7 +49,7 @@ pub trait push_context_usage {
     ///  and its status can be observed with the `callback`.
     fn push_context_usage_then(
         &self,
-        session_id: String,
+        agent_id: String,
         used: u64,
         window: u64,
 
@@ -62,7 +62,7 @@ pub trait push_context_usage {
 impl push_context_usage for super::RemoteReducers {
     fn push_context_usage_then(
         &self,
-        session_id: String,
+        agent_id: String,
         used: u64,
         window: u64,
 
@@ -72,7 +72,7 @@ impl push_context_usage for super::RemoteReducers {
     ) -> __sdk::Result<()> {
         self.imp.invoke_reducer_with_callback(
             PushContextUsageArgs {
-                session_id,
+                agent_id,
                 used,
                 window,
             },

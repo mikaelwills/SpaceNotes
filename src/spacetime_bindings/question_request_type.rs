@@ -8,7 +8,7 @@ use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 #[sats(crate = __lib)]
 pub struct QuestionRequest {
     pub id: String,
-    pub session_id: String,
+    pub agent_id: String,
     pub question: String,
     pub header: String,
     pub options: String,
@@ -28,7 +28,7 @@ impl __sdk::InModule for QuestionRequest {
 /// Provides typed access to columns for query building.
 pub struct QuestionRequestCols {
     pub id: __sdk::__query_builder::Col<QuestionRequest, String>,
-    pub session_id: __sdk::__query_builder::Col<QuestionRequest, String>,
+    pub agent_id: __sdk::__query_builder::Col<QuestionRequest, String>,
     pub question: __sdk::__query_builder::Col<QuestionRequest, String>,
     pub header: __sdk::__query_builder::Col<QuestionRequest, String>,
     pub options: __sdk::__query_builder::Col<QuestionRequest, String>,
@@ -44,7 +44,7 @@ impl __sdk::__query_builder::HasCols for QuestionRequest {
     fn cols(table_name: &'static str) -> Self::Cols {
         QuestionRequestCols {
             id: __sdk::__query_builder::Col::new(table_name, "id"),
-            session_id: __sdk::__query_builder::Col::new(table_name, "session_id"),
+            agent_id: __sdk::__query_builder::Col::new(table_name, "agent_id"),
             question: __sdk::__query_builder::Col::new(table_name, "question"),
             header: __sdk::__query_builder::Col::new(table_name, "header"),
             options: __sdk::__query_builder::Col::new(table_name, "options"),
@@ -61,16 +61,16 @@ impl __sdk::__query_builder::HasCols for QuestionRequest {
 ///
 /// Provides typed access to indexed columns for query building.
 pub struct QuestionRequestIxCols {
+    pub agent_id: __sdk::__query_builder::IxCol<QuestionRequest, String>,
     pub id: __sdk::__query_builder::IxCol<QuestionRequest, String>,
-    pub session_id: __sdk::__query_builder::IxCol<QuestionRequest, String>,
 }
 
 impl __sdk::__query_builder::HasIxCols for QuestionRequest {
     type IxCols = QuestionRequestIxCols;
     fn ix_cols(table_name: &'static str) -> Self::IxCols {
         QuestionRequestIxCols {
+            agent_id: __sdk::__query_builder::IxCol::new(table_name, "agent_id"),
             id: __sdk::__query_builder::IxCol::new(table_name, "id"),
-            session_id: __sdk::__query_builder::IxCol::new(table_name, "session_id"),
         }
     }
 }

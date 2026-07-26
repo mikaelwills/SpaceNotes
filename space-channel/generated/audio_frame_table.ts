@@ -11,7 +11,7 @@ import {
 } from "spacetimedb";
 
 export default __t.row({
-  sessionId: __t.u64().name("session_id"),
+  agentId: __t.u64().name("agent_id"),
   from: __t.identity(),
   seq: __t.u32(),
   pcm: __t.byteArray(),

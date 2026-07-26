@@ -7,24 +7,28 @@
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
 pub mod accept_call_reducer;
+pub mod agent_activity_table;
+pub mod agent_activity_type;
+pub mod agent_table;
+pub mod agent_type;
 pub mod append_to_file_reducer;
 pub mod audio_frame_table;
 pub mod audio_frame_type;
 pub mod call_session_table;
 pub mod call_session_type;
 pub mod call_state_type;
+pub mod clear_all_agents_reducer;
 pub mod clear_all_reducer;
-pub mod clear_all_sessions_reducer;
 pub mod connected_user_table;
 pub mod connected_user_type;
 pub mod create_file_reducer;
 pub mod create_folder_reducer;
+pub mod delete_agent_reducer;
 pub mod delete_file_reducer;
 pub mod delete_folder_reducer;
-pub mod delete_session_reducer;
 pub mod edit_message_reducer;
+pub mod end_agent_reducer;
 pub mod end_call_reducer;
-pub mod end_session_reducer;
 pub mod find_replace_in_file_reducer;
 pub mod folder_table;
 pub mod folder_type;
@@ -46,7 +50,7 @@ pub mod push_status_reducer;
 pub mod push_tool_event_reducer;
 pub mod question_request_table;
 pub mod question_request_type;
-pub mod register_session_reducer;
+pub mod register_agent_reducer;
 pub mod rename_file_reducer;
 pub mod request_call_reducer;
 pub mod request_permission_reducer;
@@ -55,10 +59,6 @@ pub mod resolve_permission_reducer;
 pub mod respond_to_question_reducer;
 pub mod send_audio_frame_reducer;
 pub mod send_video_frame_reducer;
-pub mod session_activity_table;
-pub mod session_activity_type;
-pub mod session_table;
-pub mod session_type;
 pub mod set_display_name_reducer;
 pub mod space_file_table;
 pub mod space_file_type;
@@ -75,24 +75,28 @@ pub mod video_frame_table;
 pub mod video_frame_type;
 
 pub use accept_call_reducer::accept_call;
+pub use agent_activity_table::*;
+pub use agent_activity_type::AgentActivity;
+pub use agent_table::*;
+pub use agent_type::Agent;
 pub use append_to_file_reducer::append_to_file;
 pub use audio_frame_table::*;
 pub use audio_frame_type::AudioFrame;
 pub use call_session_table::*;
 pub use call_session_type::CallSession;
 pub use call_state_type::CallState;
+pub use clear_all_agents_reducer::clear_all_agents;
 pub use clear_all_reducer::clear_all;
-pub use clear_all_sessions_reducer::clear_all_sessions;
 pub use connected_user_table::*;
 pub use connected_user_type::ConnectedUser;
 pub use create_file_reducer::create_file;
 pub use create_folder_reducer::create_folder;
+pub use delete_agent_reducer::delete_agent;
 pub use delete_file_reducer::delete_file;
 pub use delete_folder_reducer::delete_folder;
-pub use delete_session_reducer::delete_session;
 pub use edit_message_reducer::edit_message;
+pub use end_agent_reducer::end_agent;
 pub use end_call_reducer::end_call;
-pub use end_session_reducer::end_session;
 pub use find_replace_in_file_reducer::find_replace_in_file;
 pub use folder_table::*;
 pub use folder_type::Folder;
@@ -114,7 +118,7 @@ pub use push_status_reducer::push_status;
 pub use push_tool_event_reducer::push_tool_event;
 pub use question_request_table::*;
 pub use question_request_type::QuestionRequest;
-pub use register_session_reducer::register_session;
+pub use register_agent_reducer::register_agent;
 pub use rename_file_reducer::rename_file;
 pub use request_call_reducer::request_call;
 pub use request_permission_reducer::request_permission;
@@ -123,10 +127,6 @@ pub use resolve_permission_reducer::resolve_permission;
 pub use respond_to_question_reducer::respond_to_question;
 pub use send_audio_frame_reducer::send_audio_frame;
 pub use send_video_frame_reducer::send_video_frame;
-pub use session_activity_table::*;
-pub use session_activity_type::SessionActivity;
-pub use session_table::*;
-pub use session_type::Session;
 pub use set_display_name_reducer::set_display_name;
 pub use space_file_table::*;
 pub use space_file_type::SpaceFile;
@@ -151,14 +151,14 @@ pub use video_frame_type::VideoFrame;
 
 pub enum Reducer {
     AcceptCall {
-        session_id: u64,
+        agent_id: u64,
     },
     AppendToFile {
         path: String,
         content: String,
     },
     ClearAll,
-    ClearAllSessions,
+    ClearAllAgents,
     CreateFile {
         id: String,
         path: String,
@@ -176,24 +176,24 @@ pub enum Reducer {
         name: String,
         depth: u32,
     },
+    DeleteAgent {
+        agent_id: String,
+    },
     DeleteFile {
         id: String,
     },
     DeleteFolder {
         path: String,
     },
-    DeleteSession {
-        session_id: String,
-    },
     EditMessage {
         id: String,
         text: String,
     },
-    EndCall {
-        session_id: u64,
+    EndAgent {
+        agent_id: String,
     },
-    EndSession {
-        session_id: String,
+    EndCall {
+        agent_id: u64,
     },
     FindReplaceInFile {
         path: String,
@@ -205,7 +205,7 @@ pub enum Reducer {
         limit: u32,
     },
     Heartbeat {
-        session_id: String,
+        agent_id: String,
     },
     MoveFile {
         old_path: String,
@@ -220,34 +220,34 @@ pub enum Reducer {
         content: String,
     },
     PushContextUsage {
-        session_id: String,
+        agent_id: String,
         used: u64,
         window: u64,
     },
     PushImage {
         id: String,
-        session_id: String,
+        agent_id: String,
         caption: String,
         bytes: Vec<u8>,
     },
     PushMessage {
         id: String,
-        session_id: String,
+        agent_id: String,
         role: String,
         text: String,
         source: String,
     },
     PushStatus {
-        session_id: String,
+        agent_id: String,
         state: String,
     },
     PushToolEvent {
         id: String,
-        session_id: String,
+        agent_id: String,
         tool: String,
         detail: String,
     },
-    RegisterSession {
+    RegisterAgent {
         id: String,
         base_name: String,
         host: String,
@@ -262,13 +262,13 @@ pub enum Reducer {
     },
     RequestPermission {
         id: String,
-        session_id: String,
+        agent_id: String,
         tool: String,
         input: String,
     },
     RequestQuestion {
         id: String,
-        session_id: String,
+        agent_id: String,
         question: String,
         header: String,
         options: String,
@@ -283,12 +283,12 @@ pub enum Reducer {
         response: String,
     },
     SendAudioFrame {
-        session_id: u64,
+        agent_id: u64,
         seq: u32,
         pcm: Vec<u8>,
     },
     SendVideoFrame {
-        session_id: u64,
+        agent_id: u64,
         seq: u32,
         codec: u8,
         is_keyframe: bool,
@@ -337,15 +337,15 @@ impl __sdk::Reducer for Reducer {
             Reducer::AcceptCall { .. } => "accept_call",
             Reducer::AppendToFile { .. } => "append_to_file",
             Reducer::ClearAll => "clear_all",
-            Reducer::ClearAllSessions => "clear_all_sessions",
+            Reducer::ClearAllAgents => "clear_all_agents",
             Reducer::CreateFile { .. } => "create_file",
             Reducer::CreateFolder { .. } => "create_folder",
+            Reducer::DeleteAgent { .. } => "delete_agent",
             Reducer::DeleteFile { .. } => "delete_file",
             Reducer::DeleteFolder { .. } => "delete_folder",
-            Reducer::DeleteSession { .. } => "delete_session",
             Reducer::EditMessage { .. } => "edit_message",
+            Reducer::EndAgent { .. } => "end_agent",
             Reducer::EndCall { .. } => "end_call",
-            Reducer::EndSession { .. } => "end_session",
             Reducer::FindReplaceInFile { .. } => "find_replace_in_file",
             Reducer::GetRecentFiles { .. } => "get_recent_files",
             Reducer::Heartbeat { .. } => "heartbeat",
@@ -357,7 +357,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::PushMessage { .. } => "push_message",
             Reducer::PushStatus { .. } => "push_status",
             Reducer::PushToolEvent { .. } => "push_tool_event",
-            Reducer::RegisterSession { .. } => "register_session",
+            Reducer::RegisterAgent { .. } => "register_agent",
             Reducer::RenameFile { .. } => "rename_file",
             Reducer::RequestCall { .. } => "request_call",
             Reducer::RequestPermission { .. } => "request_permission",
@@ -378,9 +378,9 @@ impl __sdk::Reducer for Reducer {
     #[allow(clippy::clone_on_copy)]
     fn args_bsatn(&self) -> Result<Vec<u8>, __sats::bsatn::EncodeError> {
         match self {
-            Reducer::AcceptCall { session_id } => {
+            Reducer::AcceptCall { agent_id } => {
                 __sats::bsatn::to_vec(&accept_call_reducer::AcceptCallArgs {
-                    session_id: session_id.clone(),
+                    agent_id: agent_id.clone(),
                 })
             }
             Reducer::AppendToFile { path, content } => {
@@ -390,8 +390,8 @@ impl __sdk::Reducer for Reducer {
                 })
             }
             Reducer::ClearAll => __sats::bsatn::to_vec(&clear_all_reducer::ClearAllArgs {}),
-            Reducer::ClearAllSessions => {
-                __sats::bsatn::to_vec(&clear_all_sessions_reducer::ClearAllSessionsArgs {})
+            Reducer::ClearAllAgents => {
+                __sats::bsatn::to_vec(&clear_all_agents_reducer::ClearAllAgentsArgs {})
             }
             Reducer::CreateFile {
                 id,
@@ -423,6 +423,11 @@ impl __sdk::Reducer for Reducer {
                     depth: depth.clone(),
                 })
             }
+            Reducer::DeleteAgent { agent_id } => {
+                __sats::bsatn::to_vec(&delete_agent_reducer::DeleteAgentArgs {
+                    agent_id: agent_id.clone(),
+                })
+            }
             Reducer::DeleteFile { id } => {
                 __sats::bsatn::to_vec(&delete_file_reducer::DeleteFileArgs { id: id.clone() })
             }
@@ -431,25 +436,20 @@ impl __sdk::Reducer for Reducer {
                     path: path.clone(),
                 })
             }
-            Reducer::DeleteSession { session_id } => {
-                __sats::bsatn::to_vec(&delete_session_reducer::DeleteSessionArgs {
-                    session_id: session_id.clone(),
-                })
-            }
             Reducer::EditMessage { id, text } => {
                 __sats::bsatn::to_vec(&edit_message_reducer::EditMessageArgs {
                     id: id.clone(),
                     text: text.clone(),
                 })
             }
-            Reducer::EndCall { session_id } => {
-                __sats::bsatn::to_vec(&end_call_reducer::EndCallArgs {
-                    session_id: session_id.clone(),
+            Reducer::EndAgent { agent_id } => {
+                __sats::bsatn::to_vec(&end_agent_reducer::EndAgentArgs {
+                    agent_id: agent_id.clone(),
                 })
             }
-            Reducer::EndSession { session_id } => {
-                __sats::bsatn::to_vec(&end_session_reducer::EndSessionArgs {
-                    session_id: session_id.clone(),
+            Reducer::EndCall { agent_id } => {
+                __sats::bsatn::to_vec(&end_call_reducer::EndCallArgs {
+                    agent_id: agent_id.clone(),
                 })
             }
             Reducer::FindReplaceInFile {
@@ -468,9 +468,9 @@ impl __sdk::Reducer for Reducer {
                     limit: limit.clone(),
                 })
             }
-            Reducer::Heartbeat { session_id } => {
+            Reducer::Heartbeat { agent_id } => {
                 __sats::bsatn::to_vec(&heartbeat_reducer::HeartbeatArgs {
-                    session_id: session_id.clone(),
+                    agent_id: agent_id.clone(),
                 })
             }
             Reducer::MoveFile { old_path, new_path } => {
@@ -492,61 +492,61 @@ impl __sdk::Reducer for Reducer {
                 })
             }
             Reducer::PushContextUsage {
-                session_id,
+                agent_id,
                 used,
                 window,
             } => __sats::bsatn::to_vec(&push_context_usage_reducer::PushContextUsageArgs {
-                session_id: session_id.clone(),
+                agent_id: agent_id.clone(),
                 used: used.clone(),
                 window: window.clone(),
             }),
             Reducer::PushImage {
                 id,
-                session_id,
+                agent_id,
                 caption,
                 bytes,
             } => __sats::bsatn::to_vec(&push_image_reducer::PushImageArgs {
                 id: id.clone(),
-                session_id: session_id.clone(),
+                agent_id: agent_id.clone(),
                 caption: caption.clone(),
                 bytes: bytes.clone(),
             }),
             Reducer::PushMessage {
                 id,
-                session_id,
+                agent_id,
                 role,
                 text,
                 source,
             } => __sats::bsatn::to_vec(&push_message_reducer::PushMessageArgs {
                 id: id.clone(),
-                session_id: session_id.clone(),
+                agent_id: agent_id.clone(),
                 role: role.clone(),
                 text: text.clone(),
                 source: source.clone(),
             }),
-            Reducer::PushStatus { session_id, state } => {
+            Reducer::PushStatus { agent_id, state } => {
                 __sats::bsatn::to_vec(&push_status_reducer::PushStatusArgs {
-                    session_id: session_id.clone(),
+                    agent_id: agent_id.clone(),
                     state: state.clone(),
                 })
             }
             Reducer::PushToolEvent {
                 id,
-                session_id,
+                agent_id,
                 tool,
                 detail,
             } => __sats::bsatn::to_vec(&push_tool_event_reducer::PushToolEventArgs {
                 id: id.clone(),
-                session_id: session_id.clone(),
+                agent_id: agent_id.clone(),
                 tool: tool.clone(),
                 detail: detail.clone(),
             }),
-            Reducer::RegisterSession {
+            Reducer::RegisterAgent {
                 id,
                 base_name,
                 host,
                 client_id,
-            } => __sats::bsatn::to_vec(&register_session_reducer::RegisterSessionArgs {
+            } => __sats::bsatn::to_vec(&register_agent_reducer::RegisterAgentArgs {
                 id: id.clone(),
                 base_name: base_name.clone(),
                 host: host.clone(),
@@ -565,25 +565,25 @@ impl __sdk::Reducer for Reducer {
             }
             Reducer::RequestPermission {
                 id,
-                session_id,
+                agent_id,
                 tool,
                 input,
             } => __sats::bsatn::to_vec(&request_permission_reducer::RequestPermissionArgs {
                 id: id.clone(),
-                session_id: session_id.clone(),
+                agent_id: agent_id.clone(),
                 tool: tool.clone(),
                 input: input.clone(),
             }),
             Reducer::RequestQuestion {
                 id,
-                session_id,
+                agent_id,
                 question,
                 header,
                 options,
                 multi_select,
             } => __sats::bsatn::to_vec(&request_question_reducer::RequestQuestionArgs {
                 id: id.clone(),
-                session_id: session_id.clone(),
+                agent_id: agent_id.clone(),
                 question: question.clone(),
                 header: header.clone(),
                 options: options.clone(),
@@ -601,23 +601,21 @@ impl __sdk::Reducer for Reducer {
                     response: response.clone(),
                 })
             }
-            Reducer::SendAudioFrame {
-                session_id,
-                seq,
-                pcm,
-            } => __sats::bsatn::to_vec(&send_audio_frame_reducer::SendAudioFrameArgs {
-                session_id: session_id.clone(),
-                seq: seq.clone(),
-                pcm: pcm.clone(),
-            }),
+            Reducer::SendAudioFrame { agent_id, seq, pcm } => {
+                __sats::bsatn::to_vec(&send_audio_frame_reducer::SendAudioFrameArgs {
+                    agent_id: agent_id.clone(),
+                    seq: seq.clone(),
+                    pcm: pcm.clone(),
+                })
+            }
             Reducer::SendVideoFrame {
-                session_id,
+                agent_id,
                 seq,
                 codec,
                 is_keyframe,
                 data,
             } => __sats::bsatn::to_vec(&send_video_frame_reducer::SendVideoFrameArgs {
-                session_id: session_id.clone(),
+                agent_id: agent_id.clone(),
                 seq: seq.clone(),
                 codec: codec.clone(),
                 is_keyframe: is_keyframe.clone(),
@@ -687,6 +685,8 @@ impl __sdk::Reducer for Reducer {
 #[allow(non_snake_case)]
 #[doc(hidden)]
 pub struct DbUpdate {
+    agent: __sdk::TableUpdate<Agent>,
+    agent_activity: __sdk::TableUpdate<AgentActivity>,
     audio_frame: __sdk::TableUpdate<AudioFrame>,
     call_session: __sdk::TableUpdate<CallSession>,
     connected_user: __sdk::TableUpdate<ConnectedUser>,
@@ -695,8 +695,6 @@ pub struct DbUpdate {
     message_image: __sdk::TableUpdate<MessageImage>,
     permission_request: __sdk::TableUpdate<PermissionRequest>,
     question_request: __sdk::TableUpdate<QuestionRequest>,
-    session: __sdk::TableUpdate<Session>,
-    session_activity: __sdk::TableUpdate<SessionActivity>,
     space_file: __sdk::TableUpdate<SpaceFile>,
     tool_event: __sdk::TableUpdate<ToolEvent>,
     user_profile: __sdk::TableUpdate<UserProfile>,
@@ -709,6 +707,12 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
         let mut db_update = DbUpdate::default();
         for table_update in __sdk::transaction_update_iter_table_updates(raw) {
             match &table_update.table_name[..] {
+                "agent" => db_update
+                    .agent
+                    .append(agent_table::parse_table_update(table_update)?),
+                "agent_activity" => db_update
+                    .agent_activity
+                    .append(agent_activity_table::parse_table_update(table_update)?),
                 "audio_frame" => db_update
                     .audio_frame
                     .append(audio_frame_table::parse_table_update(table_update)?),
@@ -733,12 +737,6 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "question_request" => db_update
                     .question_request
                     .append(question_request_table::parse_table_update(table_update)?),
-                "session" => db_update
-                    .session
-                    .append(session_table::parse_table_update(table_update)?),
-                "session_activity" => db_update
-                    .session_activity
-                    .append(session_activity_table::parse_table_update(table_update)?),
                 "space_file" => db_update
                     .space_file
                     .append(space_file_table::parse_table_update(table_update)?),
@@ -777,10 +775,16 @@ impl __sdk::DbUpdate for DbUpdate {
     ) -> AppliedDiff<'_> {
         let mut diff = AppliedDiff::default();
 
+        diff.agent = cache
+            .apply_diff_to_table::<Agent>("agent", &self.agent)
+            .with_updates_by_pk(|row| &row.id);
+        diff.agent_activity = cache
+            .apply_diff_to_table::<AgentActivity>("agent_activity", &self.agent_activity)
+            .with_updates_by_pk(|row| &row.agent_id);
         diff.audio_frame = self.audio_frame.into_event_diff();
         diff.call_session = cache
             .apply_diff_to_table::<CallSession>("call_session", &self.call_session)
-            .with_updates_by_pk(|row| &row.session_id);
+            .with_updates_by_pk(|row| &row.agent_id);
         diff.connected_user = cache
             .apply_diff_to_table::<ConnectedUser>("connected_user", &self.connected_user)
             .with_updates_by_pk(|row| &row.identity);
@@ -802,12 +806,6 @@ impl __sdk::DbUpdate for DbUpdate {
         diff.question_request = cache
             .apply_diff_to_table::<QuestionRequest>("question_request", &self.question_request)
             .with_updates_by_pk(|row| &row.id);
-        diff.session = cache
-            .apply_diff_to_table::<Session>("session", &self.session)
-            .with_updates_by_pk(|row| &row.id);
-        diff.session_activity = cache
-            .apply_diff_to_table::<SessionActivity>("session_activity", &self.session_activity)
-            .with_updates_by_pk(|row| &row.session_id);
         diff.space_file = cache
             .apply_diff_to_table::<SpaceFile>("space_file", &self.space_file)
             .with_updates_by_pk(|row| &row.id);
@@ -825,6 +823,12 @@ impl __sdk::DbUpdate for DbUpdate {
         let mut db_update = DbUpdate::default();
         for table_rows in raw.tables {
             match &table_rows.table[..] {
+                "agent" => db_update
+                    .agent
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "agent_activity" => db_update
+                    .agent_activity
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "audio_frame" => db_update
                     .audio_frame
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
@@ -848,12 +852,6 @@ impl __sdk::DbUpdate for DbUpdate {
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "question_request" => db_update
                     .question_request
-                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
-                "session" => db_update
-                    .session
-                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
-                "session_activity" => db_update
-                    .session_activity
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "space_file" => db_update
                     .space_file
@@ -880,6 +878,12 @@ impl __sdk::DbUpdate for DbUpdate {
         let mut db_update = DbUpdate::default();
         for table_rows in raw.tables {
             match &table_rows.table[..] {
+                "agent" => db_update
+                    .agent
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "agent_activity" => db_update
+                    .agent_activity
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "audio_frame" => db_update
                     .audio_frame
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -903,12 +907,6 @@ impl __sdk::DbUpdate for DbUpdate {
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "question_request" => db_update
                     .question_request
-                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
-                "session" => db_update
-                    .session
-                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
-                "session_activity" => db_update
-                    .session_activity
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "space_file" => db_update
                     .space_file
@@ -937,6 +935,8 @@ impl __sdk::DbUpdate for DbUpdate {
 #[allow(non_snake_case)]
 #[doc(hidden)]
 pub struct AppliedDiff<'r> {
+    agent: __sdk::TableAppliedDiff<'r, Agent>,
+    agent_activity: __sdk::TableAppliedDiff<'r, AgentActivity>,
     audio_frame: __sdk::TableAppliedDiff<'r, AudioFrame>,
     call_session: __sdk::TableAppliedDiff<'r, CallSession>,
     connected_user: __sdk::TableAppliedDiff<'r, ConnectedUser>,
@@ -945,8 +945,6 @@ pub struct AppliedDiff<'r> {
     message_image: __sdk::TableAppliedDiff<'r, MessageImage>,
     permission_request: __sdk::TableAppliedDiff<'r, PermissionRequest>,
     question_request: __sdk::TableAppliedDiff<'r, QuestionRequest>,
-    session: __sdk::TableAppliedDiff<'r, Session>,
-    session_activity: __sdk::TableAppliedDiff<'r, SessionActivity>,
     space_file: __sdk::TableAppliedDiff<'r, SpaceFile>,
     tool_event: __sdk::TableAppliedDiff<'r, ToolEvent>,
     user_profile: __sdk::TableAppliedDiff<'r, UserProfile>,
@@ -964,6 +962,12 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
         event: &EventContext,
         callbacks: &mut __sdk::DbCallbacks<RemoteModule>,
     ) {
+        callbacks.invoke_table_row_callbacks::<Agent>("agent", &self.agent, event);
+        callbacks.invoke_table_row_callbacks::<AgentActivity>(
+            "agent_activity",
+            &self.agent_activity,
+            event,
+        );
         callbacks.invoke_table_row_callbacks::<AudioFrame>("audio_frame", &self.audio_frame, event);
         callbacks.invoke_table_row_callbacks::<CallSession>(
             "call_session",
@@ -990,12 +994,6 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
         callbacks.invoke_table_row_callbacks::<QuestionRequest>(
             "question_request",
             &self.question_request,
-            event,
-        );
-        callbacks.invoke_table_row_callbacks::<Session>("session", &self.session, event);
-        callbacks.invoke_table_row_callbacks::<SessionActivity>(
-            "session_activity",
-            &self.session_activity,
             event,
         );
         callbacks.invoke_table_row_callbacks::<SpaceFile>("space_file", &self.space_file, event);
@@ -1666,6 +1664,8 @@ impl __sdk::SpacetimeModule for RemoteModule {
     type QueryBuilder = __sdk::QueryBuilder;
 
     fn register_tables(client_cache: &mut __sdk::ClientCache<Self>) {
+        agent_table::register_table(client_cache);
+        agent_activity_table::register_table(client_cache);
         audio_frame_table::register_table(client_cache);
         call_session_table::register_table(client_cache);
         connected_user_table::register_table(client_cache);
@@ -1674,14 +1674,14 @@ impl __sdk::SpacetimeModule for RemoteModule {
         message_image_table::register_table(client_cache);
         permission_request_table::register_table(client_cache);
         question_request_table::register_table(client_cache);
-        session_table::register_table(client_cache);
-        session_activity_table::register_table(client_cache);
         space_file_table::register_table(client_cache);
         tool_event_table::register_table(client_cache);
         user_profile_table::register_table(client_cache);
         video_frame_table::register_table(client_cache);
     }
     const ALL_TABLE_NAMES: &'static [&'static str] = &[
+        "agent",
+        "agent_activity",
         "audio_frame",
         "call_session",
         "connected_user",
@@ -1690,8 +1690,6 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "message_image",
         "permission_request",
         "question_request",
-        "session",
-        "session_activity",
         "space_file",
         "tool_event",
         "user_profile",

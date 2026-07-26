@@ -694,24 +694,24 @@ pub fn get_tools() -> Vec<Tool> {
             }),
         },
         Tool {
-            name: "list_sessions".to_string(),
-            description: "List registered SpaceChannel Claude sessions (id, base_name, host, state, last_seen_us). Heartbeats every ~20s → last_seen stale >60s means dead.".to_string(),
+            name: "list_agents".to_string(),
+            description: "List registered SpaceChannel Claude agents (id, base_name, host, state, last_seen_us). Heartbeats every ~20s → last_seen stale >60s means dead.".to_string(),
             input_schema: json!({"type": "object", "properties": {}}),
         },
         Tool {
-            name: "delete_session".to_string(),
-            description: "Delete one SpaceChannel session row by id (+cascaded state). For cleaning up stale ghost rows.".to_string(),
+            name: "delete_agent".to_string(),
+            description: "Delete one SpaceChannel agent row by id (+cascaded state). For cleaning up stale ghost rows.".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "session_id": {"type": "string", "description": "Full session id like 'note-assistant@robert'"}
+                    "agent_id": {"type": "string", "description": "Full agent id like 'note-assistant@robert'"}
                 },
-                "required": ["session_id"]
+                "required": ["agent_id"]
             }),
         },
         Tool {
-            name: "clear_all_sessions".to_string(),
-            description: "Wipe ALL SpaceChannel session state. Live binaries re-register within seconds, so only ghost rows are destroyed.".to_string(),
+            name: "clear_all_agents".to_string(),
+            description: "Wipe ALL SpaceChannel agent state. Live binaries re-register within seconds, so only ghost rows are destroyed.".to_string(),
             input_schema: json!({"type": "object", "properties": {}}),
         },
     ]
@@ -1559,25 +1559,25 @@ pub async fn execute_tool(
                 }]
             }))
         }
-        "list_sessions" => {
-            let sessions = client.list_sessions().map_err(|e| e.to_string())?;
+        "list_agents" => {
+            let agents = client.list_agents().map_err(|e| e.to_string())?;
             Ok(json!({
                 "content": [{
                     "type": "text",
-                    "text": serde_json::to_string_pretty(&json!({"sessions": sessions}))
-                        .unwrap_or_else(|_| "{\"sessions\":[]}".to_string())
+                    "text": serde_json::to_string_pretty(&json!({"agents": agents}))
+                        .unwrap_or_else(|_| "{\"agents\":[]}".to_string())
                 }]
             }))
         }
-        "delete_session" => {
-            let session_id: String = serde_json::from_value(params.arguments["session_id"].clone())
+        "delete_agent" => {
+            let agent_id: String = serde_json::from_value(params.arguments["agent_id"].clone())
                 .map_err(|e| e.to_string())?;
-            client.delete_session(session_id.clone()).map_err(|e| e.to_string())?;
-            Ok(json!({"content": [{"type": "text", "text": format!("Deleted session: {}", session_id)}]}))
+            client.delete_agent(agent_id.clone()).map_err(|e| e.to_string())?;
+            Ok(json!({"content": [{"type": "text", "text": format!("Deleted agent: {}", agent_id)}]}))
         }
-        "clear_all_sessions" => {
-            client.clear_all_sessions().map_err(|e| e.to_string())?;
-            Ok(json!({"content": [{"type": "text", "text": "Cleared all sessions. Live binaries will re-register within seconds."}]}))
+        "clear_all_agents" => {
+            client.clear_all_agents().map_err(|e| e.to_string())?;
+            Ok(json!({"content": [{"type": "text", "text": "Cleared all agents. Live binaries will re-register within seconds."}]}))
         }
         _ => Err(format!("Unknown tool: {}", params.name)),
     }
@@ -2014,7 +2014,7 @@ mod tests {
             "get_note", "get_notes", "create_note", "edit_note", "delete_note", "delete_notes",
             "move_note", "move_notes_to_folder", "append_to_note", "prepend_to_note",
             "search_notes", "search_notes_content", "list_folder",
-            "log_session", "get_latest_session", "list_sessions", "delete_session",
+            "log_session", "get_latest_session", "list_agents", "delete_agent",
         ] {
             assert!(names.contains(&expected.to_string()), "missing tool: {}", expected);
         }

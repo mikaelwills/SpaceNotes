@@ -37,15 +37,15 @@ import {
 import AcceptCallReducer from "./accept_call_reducer";
 import AppendToFileReducer from "./append_to_file_reducer";
 import ClearAllReducer from "./clear_all_reducer";
-import ClearAllSessionsReducer from "./clear_all_sessions_reducer";
+import ClearAllAgentsReducer from "./clear_all_agents_reducer";
 import CreateFileReducer from "./create_file_reducer";
 import CreateFolderReducer from "./create_folder_reducer";
+import DeleteAgentReducer from "./delete_agent_reducer";
 import DeleteFileReducer from "./delete_file_reducer";
 import DeleteFolderReducer from "./delete_folder_reducer";
-import DeleteSessionReducer from "./delete_session_reducer";
 import EditMessageReducer from "./edit_message_reducer";
+import EndAgentReducer from "./end_agent_reducer";
 import EndCallReducer from "./end_call_reducer";
-import EndSessionReducer from "./end_session_reducer";
 import FindReplaceInFileReducer from "./find_replace_in_file_reducer";
 import GetRecentFilesReducer from "./get_recent_files_reducer";
 import HeartbeatReducer from "./heartbeat_reducer";
@@ -57,7 +57,7 @@ import PushImageReducer from "./push_image_reducer";
 import PushMessageReducer from "./push_message_reducer";
 import PushStatusReducer from "./push_status_reducer";
 import PushToolEventReducer from "./push_tool_event_reducer";
-import RegisterSessionReducer from "./register_session_reducer";
+import RegisterAgentReducer from "./register_agent_reducer";
 import RenameFileReducer from "./rename_file_reducer";
 import RequestCallReducer from "./request_call_reducer";
 import RequestPermissionReducer from "./request_permission_reducer";
@@ -76,6 +76,8 @@ import UpsertFolderReducer from "./upsert_folder_reducer";
 // Import all procedure arg schemas
 
 // Import all table schema definitions
+import AgentRow from "./agent_table";
+import AgentActivityRow from "./agent_activity_table";
 import AudioFrameRow from "./audio_frame_table";
 import CallSessionRow from "./call_session_table";
 import ConnectedUserRow from "./connected_user_table";
@@ -84,8 +86,6 @@ import MessageRow from "./message_table";
 import MessageImageRow from "./message_image_table";
 import PermissionRequestRow from "./permission_request_table";
 import QuestionRequestRow from "./question_request_table";
-import SessionRow from "./session_table";
-import SessionActivityRow from "./session_activity_table";
 import SpaceFileRow from "./space_file_table";
 import ToolEventRow from "./tool_event_table";
 import UserProfileRow from "./user_profile_table";
@@ -95,6 +95,28 @@ import VideoFrameRow from "./video_frame_table";
 
 /** The schema information for all tables in this module. This is defined the same was as the tables would have been defined in the server. */
 const tablesSchema = __schema({
+  agent: __table({
+    name: 'agent',
+    indexes: [
+      { accessor: 'id', name: 'agent_id_idx_btree', algorithm: 'btree', columns: [
+        'id',
+      ] },
+    ],
+    constraints: [
+      { name: 'agent_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, AgentRow),
+  agent_activity: __table({
+    name: 'agent_activity',
+    indexes: [
+      { accessor: 'agent_id', name: 'agent_activity_agent_id_idx_btree', algorithm: 'btree', columns: [
+        'agentId',
+      ] },
+    ],
+    constraints: [
+      { name: 'agent_activity_agent_id_key', constraint: 'unique', columns: ['agentId'] },
+    ],
+  }, AgentActivityRow),
   audio_frame: __table({
     name: 'audio_frame',
     indexes: [
@@ -106,12 +128,12 @@ const tablesSchema = __schema({
   call_session: __table({
     name: 'call_session',
     indexes: [
-      { accessor: 'session_id', name: 'call_session_session_id_idx_btree', algorithm: 'btree', columns: [
-        'sessionId',
+      { accessor: 'agent_id', name: 'call_session_agent_id_idx_btree', algorithm: 'btree', columns: [
+        'agentId',
       ] },
     ],
     constraints: [
-      { name: 'call_session_session_id_key', constraint: 'unique', columns: ['sessionId'] },
+      { name: 'call_session_agent_id_key', constraint: 'unique', columns: ['agentId'] },
     ],
   }, CallSessionRow),
   connected_user: __table({
@@ -139,14 +161,14 @@ const tablesSchema = __schema({
   message: __table({
     name: 'message',
     indexes: [
+      { accessor: 'agent_id', name: 'message_agent_id_idx_btree', algorithm: 'btree', columns: [
+        'agentId',
+      ] },
       { accessor: 'created_at', name: 'message_created_at_idx_btree', algorithm: 'btree', columns: [
         'createdAt',
       ] },
       { accessor: 'id', name: 'message_id_idx_btree', algorithm: 'btree', columns: [
         'id',
-      ] },
-      { accessor: 'session_id', name: 'message_session_id_idx_btree', algorithm: 'btree', columns: [
-        'sessionId',
       ] },
     ],
     constraints: [
@@ -167,11 +189,11 @@ const tablesSchema = __schema({
   permission_request: __table({
     name: 'permission_request',
     indexes: [
+      { accessor: 'agent_id', name: 'permission_request_agent_id_idx_btree', algorithm: 'btree', columns: [
+        'agentId',
+      ] },
       { accessor: 'id', name: 'permission_request_id_idx_btree', algorithm: 'btree', columns: [
         'id',
-      ] },
-      { accessor: 'session_id', name: 'permission_request_session_id_idx_btree', algorithm: 'btree', columns: [
-        'sessionId',
       ] },
     ],
     constraints: [
@@ -181,39 +203,17 @@ const tablesSchema = __schema({
   question_request: __table({
     name: 'question_request',
     indexes: [
+      { accessor: 'agent_id', name: 'question_request_agent_id_idx_btree', algorithm: 'btree', columns: [
+        'agentId',
+      ] },
       { accessor: 'id', name: 'question_request_id_idx_btree', algorithm: 'btree', columns: [
         'id',
-      ] },
-      { accessor: 'session_id', name: 'question_request_session_id_idx_btree', algorithm: 'btree', columns: [
-        'sessionId',
       ] },
     ],
     constraints: [
       { name: 'question_request_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, QuestionRequestRow),
-  session: __table({
-    name: 'session',
-    indexes: [
-      { accessor: 'id', name: 'session_id_idx_btree', algorithm: 'btree', columns: [
-        'id',
-      ] },
-    ],
-    constraints: [
-      { name: 'session_id_key', constraint: 'unique', columns: ['id'] },
-    ],
-  }, SessionRow),
-  session_activity: __table({
-    name: 'session_activity',
-    indexes: [
-      { accessor: 'session_id', name: 'session_activity_session_id_idx_btree', algorithm: 'btree', columns: [
-        'sessionId',
-      ] },
-    ],
-    constraints: [
-      { name: 'session_activity_session_id_key', constraint: 'unique', columns: ['sessionId'] },
-    ],
-  }, SessionActivityRow),
   space_file: __table({
     name: 'space_file',
     indexes: [
@@ -235,11 +235,11 @@ const tablesSchema = __schema({
   tool_event: __table({
     name: 'tool_event',
     indexes: [
+      { accessor: 'agent_id', name: 'tool_event_agent_id_idx_btree', algorithm: 'btree', columns: [
+        'agentId',
+      ] },
       { accessor: 'id', name: 'tool_event_id_idx_btree', algorithm: 'btree', columns: [
         'id',
-      ] },
-      { accessor: 'session_id', name: 'tool_event_session_id_idx_btree', algorithm: 'btree', columns: [
-        'sessionId',
       ] },
     ],
     constraints: [
@@ -272,15 +272,15 @@ const reducersSchema = __reducers(
   __reducerSchema("accept_call", AcceptCallReducer),
   __reducerSchema("append_to_file", AppendToFileReducer),
   __reducerSchema("clear_all", ClearAllReducer),
-  __reducerSchema("clear_all_sessions", ClearAllSessionsReducer),
+  __reducerSchema("clear_all_agents", ClearAllAgentsReducer),
   __reducerSchema("create_file", CreateFileReducer),
   __reducerSchema("create_folder", CreateFolderReducer),
+  __reducerSchema("delete_agent", DeleteAgentReducer),
   __reducerSchema("delete_file", DeleteFileReducer),
   __reducerSchema("delete_folder", DeleteFolderReducer),
-  __reducerSchema("delete_session", DeleteSessionReducer),
   __reducerSchema("edit_message", EditMessageReducer),
+  __reducerSchema("end_agent", EndAgentReducer),
   __reducerSchema("end_call", EndCallReducer),
-  __reducerSchema("end_session", EndSessionReducer),
   __reducerSchema("find_replace_in_file", FindReplaceInFileReducer),
   __reducerSchema("get_recent_files", GetRecentFilesReducer),
   __reducerSchema("heartbeat", HeartbeatReducer),
@@ -292,7 +292,7 @@ const reducersSchema = __reducers(
   __reducerSchema("push_message", PushMessageReducer),
   __reducerSchema("push_status", PushStatusReducer),
   __reducerSchema("push_tool_event", PushToolEventReducer),
-  __reducerSchema("register_session", RegisterSessionReducer),
+  __reducerSchema("register_agent", RegisterAgentReducer),
   __reducerSchema("rename_file", RenameFileReducer),
   __reducerSchema("request_call", RequestCallReducer),
   __reducerSchema("request_permission", RequestPermissionReducer),

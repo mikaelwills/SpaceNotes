@@ -12,7 +12,7 @@ import {
 
 export default {
   id: __t.string(),
-  sessionId: __t.string(),
+  agentId: __t.string(),
   question: __t.string(),
   header: __t.string(),
   options: __t.string(),
