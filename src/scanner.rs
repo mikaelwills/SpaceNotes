@@ -8,13 +8,32 @@ use crate::isolation::run_isolated;
 use crate::space_file::SpaceFile;
 use crate::sanitize::sanitize_path;
 
-const INGEST_EXTENSIONS: [&str; 6] = ["md", "yaml", "yml", "json", "toml", "txt"];
+const TEXT_EXTENSIONS: [&str; 6] = ["md", "yaml", "yml", "json", "toml", "txt"];
 
-pub fn is_ingestible(path: &Path) -> bool {
-    match path.extension().and_then(|e| e.to_str()) {
-        Some(ext) => INGEST_EXTENSIONS.contains(&ext.to_lowercase().as_str()),
+const BINARY_EXTENSIONS: [&str; 0] = [];
+
+fn extension_of(path: &Path) -> Option<String> {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase())
+}
+
+pub fn is_text(path: &Path) -> bool {
+    match extension_of(path) {
+        Some(ext) => TEXT_EXTENSIONS.contains(&ext.as_str()),
         None => false,
     }
+}
+
+pub fn is_binary(path: &Path) -> bool {
+    match extension_of(path) {
+        Some(ext) => BINARY_EXTENSIONS.contains(&ext.as_str()),
+        None => false,
+    }
+}
+
+pub fn is_ingestible(path: &Path) -> bool {
+    is_text(path) || is_binary(path)
 }
 
 pub fn read_file_at(vault_path: &Path, abs_path: &Path) -> Result<Option<SpaceFile>> {
@@ -33,8 +52,18 @@ pub fn read_file_at(vault_path: &Path, abs_path: &Path) -> Result<Option<SpaceFi
         .to_string_lossy()
         .to_string());
 
-    let bytes = std::fs::read(abs_path)?;
-    let content = String::from_utf8_lossy(&bytes).into_owned();
+    let content = if is_binary(abs_path) {
+        String::new()
+    } else {
+        let bytes = std::fs::read(abs_path)?;
+        String::from_utf8(bytes).map_err(|e| {
+            anyhow::anyhow!(
+                "{} is not valid UTF-8 (invalid byte at offset {}) - it is listed in TEXT_EXTENSIONS but is not a text file",
+                rel_path,
+                e.utf8_error().valid_up_to()
+            )
+        })?
+    };
 
     let metadata = std::fs::metadata(abs_path)?;
 
@@ -166,6 +195,33 @@ mod tests {
         assert_eq!(files[0].extension, "yaml");
         assert_eq!(files[0].content, "key: value\n");
         assert_eq!(files[1].extension, "json");
+
+        let _ = std::fs::remove_dir_all(&vault);
+    }
+
+    #[test]
+    fn non_utf8_in_a_text_extension_errors_instead_of_ingesting_replacement_chars() {
+        let vault = temp_vault("non-utf8");
+        std::fs::write(vault.join("broken.md"), [0x68, 0x69, 0xFF, 0xFE]).unwrap();
+
+        let err = read_file_at(&vault, &vault.join("broken.md")).unwrap_err();
+        let msg = err.to_string();
+
+        assert!(msg.contains("not valid UTF-8"), "unexpected error: {}", msg);
+        assert!(msg.contains("offset 2"), "unexpected error: {}", msg);
+
+        let _ = std::fs::remove_dir_all(&vault);
+    }
+
+    #[test]
+    fn a_file_outside_both_lists_is_not_ingested() {
+        let vault = temp_vault("unlisted");
+        let path = vault.join("clip.wav");
+        std::fs::write(&path, [0x52, 0x49, 0x46, 0x46, 0x00, 0xFF]).unwrap();
+
+        assert!(!is_text(&path));
+        assert!(!is_binary(&path));
+        assert!(read_file_at(&vault, &path).unwrap().is_none());
 
         let _ = std::fs::remove_dir_all(&vault);
     }
