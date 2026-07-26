@@ -275,7 +275,7 @@ fn format_file(n: &crate::spacetime_client::FullSpaceFile) -> String {
 }
 
 // The latest session file for a workflow, formatted, or a "no sessions" line.
-// Newest = max date, then lowest N within that date (create_session makes the
+// Newest = max date, then lowest N within that date (log_session makes the
 // new file `-1-` and bumps older ones up).
 fn latest_session_block(
     client: &crate::spacetime_client::SpacetimeClient,
@@ -453,8 +453,8 @@ pub fn get_tools() -> Vec<Tool> {
             }),
         },
         Tool {
-            name: "create_session".to_string(),
-            description: "Write a workflow session log. Auto-rotates: new file is `<date>-1-<slug>.md`, existing same-day `<date>-N-*` bump +1 (lower N = newer). Owns the numbering — don't hand-pick. Returns the path.".to_string(),
+            name: "log_session".to_string(),
+            description: "Write a workflow session log. ALWAYS use this instead of create_note for a session log — it owns the numbering: the new file is `<date>-1-<slug>.md` and existing same-day `<date>-N-*` bump +1, so lower N is always newer and get_latest_session resolves correctly. Creating one by hand breaks that ordering. Returns the path.".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -928,7 +928,7 @@ pub async fn execute_tool(
                 json!({"content": [{"type": "text", "text": format!("Created note: {} (id: {})", path, id)}]}),
             )
         }
-        "create_session" => {
+        "log_session" => {
             let workflow: String = serde_json::from_value(params.arguments["workflow"].clone())
                 .map_err(|e| e.to_string())?;
             let slug: String = serde_json::from_value(params.arguments["slug"].clone())
@@ -2014,6 +2014,7 @@ mod tests {
             "get_note", "get_notes", "create_note", "edit_note", "delete_note", "delete_notes",
             "move_note", "move_notes_to_folder", "append_to_note", "prepend_to_note",
             "search_notes", "search_notes_content", "list_folder",
+            "log_session", "get_latest_session", "list_sessions", "delete_session",
         ] {
             assert!(names.contains(&expected.to_string()), "missing tool: {}", expected);
         }
