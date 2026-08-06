@@ -3,7 +3,7 @@ use spacetimedb::{ReducerContext, Table};
 use crate::space_channel_tables::{
     message, message_image, permission_request, question_request, agent, agent_activity,
     tool_event, Message, MessageImage, PermissionRequest, QuestionRequest, Agent,
-    AgentActivity, ToolEvent,
+    AgentActivity, ToolEvent, SweepSchedule,
 };
 
 const MESSAGE_TTL_MICROS: i64 = 48 * 60 * 60 * 1_000_000;
@@ -336,8 +336,25 @@ pub fn respond_to_question(ctx: &ReducerContext, id: String, response: String) {
     });
 }
 
+/// Arm the hourly sweep on an already-published database, where `init` no
+/// longer runs. Idempotent.
 #[spacetimedb::reducer]
-pub fn sweep_old_messages(ctx: &ReducerContext) {
+pub fn arm_sweep_schedule(ctx: &ReducerContext) {
+    use crate::space_channel_tables::sweep_schedule;
+
+    if ctx.db.sweep_schedule().iter().next().is_some() {
+        log::info!("arm_sweep_schedule: already armed");
+        return;
+    }
+    ctx.db.sweep_schedule().insert(SweepSchedule {
+        scheduled_id: 0,
+        scheduled_at: spacetimedb::TimeDuration::from_micros(60 * 60 * 1_000_000).into(),
+    });
+    log::info!("arm_sweep_schedule: armed hourly sweep");
+}
+
+#[spacetimedb::reducer]
+pub fn sweep_old_messages(ctx: &ReducerContext, _schedule: SweepSchedule) {
     let cutoff_micros = ctx
         .timestamp
         .to_micros_since_unix_epoch()

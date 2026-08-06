@@ -18,6 +18,18 @@ pub struct ToolEventTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `tool_event`.
+pub struct ToolEventTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for ToolEventTableAccessor {
+    type Row = ToolEvent;
+    type Handle<'db> = ToolEventTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.tool_event()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `tool_event`.
 ///
@@ -39,6 +51,18 @@ impl ToolEventTableAccess for super::RemoteTables {
 
 pub struct ToolEventInsertCallbackId(__sdk::CallbackId);
 pub struct ToolEventDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for ToolEventTableHandle<'ctx> {
+    type Row = ToolEvent;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = ToolEvent> + '_ {
+        self.imp.iter()
+    }
+}
 
 impl<'ctx> __sdk::Table for ToolEventTableHandle<'ctx> {
     type Row = ToolEvent;
@@ -78,9 +102,54 @@ impl<'ctx> __sdk::Table for ToolEventTableHandle<'ctx> {
     }
 }
 
+impl<'ctx> __sdk::WithInsert for ToolEventTableHandle<'ctx> {
+    type InsertCallbackId = ToolEventInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> ToolEventInsertCallbackId {
+        ToolEventInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: ToolEventInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for ToolEventTableHandle<'ctx> {
+    type DeleteCallbackId = ToolEventDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> ToolEventDeleteCallbackId {
+        ToolEventDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: ToolEventDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
 pub struct ToolEventUpdateCallbackId(__sdk::CallbackId);
 
 impl<'ctx> __sdk::TableWithPrimaryKey for ToolEventTableHandle<'ctx> {
+    type UpdateCallbackId = ToolEventUpdateCallbackId;
+
+    fn on_update(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row, &Self::Row) + Send + 'static,
+    ) -> ToolEventUpdateCallbackId {
+        ToolEventUpdateCallbackId(self.imp.on_update(Box::new(callback)))
+    }
+
+    fn remove_on_update(&self, callback: ToolEventUpdateCallbackId) {
+        self.imp.remove_on_update(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithUpdate for ToolEventTableHandle<'ctx> {
     type UpdateCallbackId = ToolEventUpdateCallbackId;
 
     fn on_update(

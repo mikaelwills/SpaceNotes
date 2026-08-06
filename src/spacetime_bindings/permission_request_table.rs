@@ -18,6 +18,18 @@ pub struct PermissionRequestTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `permission_request`.
+pub struct PermissionRequestTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for PermissionRequestTableAccessor {
+    type Row = PermissionRequest;
+    type Handle<'db> = PermissionRequestTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.permission_request()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `permission_request`.
 ///
@@ -41,6 +53,18 @@ impl PermissionRequestTableAccess for super::RemoteTables {
 
 pub struct PermissionRequestInsertCallbackId(__sdk::CallbackId);
 pub struct PermissionRequestDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for PermissionRequestTableHandle<'ctx> {
+    type Row = PermissionRequest;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = PermissionRequest> + '_ {
+        self.imp.iter()
+    }
+}
 
 impl<'ctx> __sdk::Table for PermissionRequestTableHandle<'ctx> {
     type Row = PermissionRequest;
@@ -80,9 +104,54 @@ impl<'ctx> __sdk::Table for PermissionRequestTableHandle<'ctx> {
     }
 }
 
+impl<'ctx> __sdk::WithInsert for PermissionRequestTableHandle<'ctx> {
+    type InsertCallbackId = PermissionRequestInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> PermissionRequestInsertCallbackId {
+        PermissionRequestInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: PermissionRequestInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for PermissionRequestTableHandle<'ctx> {
+    type DeleteCallbackId = PermissionRequestDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> PermissionRequestDeleteCallbackId {
+        PermissionRequestDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: PermissionRequestDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
 pub struct PermissionRequestUpdateCallbackId(__sdk::CallbackId);
 
 impl<'ctx> __sdk::TableWithPrimaryKey for PermissionRequestTableHandle<'ctx> {
+    type UpdateCallbackId = PermissionRequestUpdateCallbackId;
+
+    fn on_update(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row, &Self::Row) + Send + 'static,
+    ) -> PermissionRequestUpdateCallbackId {
+        PermissionRequestUpdateCallbackId(self.imp.on_update(Box::new(callback)))
+    }
+
+    fn remove_on_update(&self, callback: PermissionRequestUpdateCallbackId) {
+        self.imp.remove_on_update(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithUpdate for PermissionRequestTableHandle<'ctx> {
     type UpdateCallbackId = PermissionRequestUpdateCallbackId;
 
     fn on_update(

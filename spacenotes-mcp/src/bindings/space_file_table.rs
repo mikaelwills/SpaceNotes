@@ -18,6 +18,18 @@ pub struct SpaceFileTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `space_file`.
+pub struct SpaceFileTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for SpaceFileTableAccessor {
+    type Row = SpaceFile;
+    type Handle<'db> = SpaceFileTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.space_file()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `space_file`.
 ///
@@ -39,6 +51,18 @@ impl SpaceFileTableAccess for super::RemoteTables {
 
 pub struct SpaceFileInsertCallbackId(__sdk::CallbackId);
 pub struct SpaceFileDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for SpaceFileTableHandle<'ctx> {
+    type Row = SpaceFile;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = SpaceFile> + '_ {
+        self.imp.iter()
+    }
+}
 
 impl<'ctx> __sdk::Table for SpaceFileTableHandle<'ctx> {
     type Row = SpaceFile;
@@ -78,9 +102,54 @@ impl<'ctx> __sdk::Table for SpaceFileTableHandle<'ctx> {
     }
 }
 
+impl<'ctx> __sdk::WithInsert for SpaceFileTableHandle<'ctx> {
+    type InsertCallbackId = SpaceFileInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> SpaceFileInsertCallbackId {
+        SpaceFileInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: SpaceFileInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for SpaceFileTableHandle<'ctx> {
+    type DeleteCallbackId = SpaceFileDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> SpaceFileDeleteCallbackId {
+        SpaceFileDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: SpaceFileDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
 pub struct SpaceFileUpdateCallbackId(__sdk::CallbackId);
 
 impl<'ctx> __sdk::TableWithPrimaryKey for SpaceFileTableHandle<'ctx> {
+    type UpdateCallbackId = SpaceFileUpdateCallbackId;
+
+    fn on_update(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row, &Self::Row) + Send + 'static,
+    ) -> SpaceFileUpdateCallbackId {
+        SpaceFileUpdateCallbackId(self.imp.on_update(Box::new(callback)))
+    }
+
+    fn remove_on_update(&self, callback: SpaceFileUpdateCallbackId) {
+        self.imp.remove_on_update(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithUpdate for SpaceFileTableHandle<'ctx> {
     type UpdateCallbackId = SpaceFileUpdateCallbackId;
 
     fn on_update(

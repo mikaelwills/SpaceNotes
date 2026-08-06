@@ -1,4 +1,6 @@
-use spacetimedb::Timestamp;
+use spacetimedb::{ScheduleAt, Timestamp};
+
+use crate::space_channel_reducers::sweep_old_messages;
 
 #[spacetimedb::table(accessor = agent, public)]
 pub struct Agent {
@@ -51,6 +53,14 @@ pub struct ToolEvent {
     pub tool: String,
     pub detail: String,
     pub started_at: Timestamp,
+}
+
+#[spacetimedb::table(accessor = sweep_schedule, scheduled(sweep_old_messages))]
+pub struct SweepSchedule {
+    #[primary_key]
+    #[auto_inc]
+    pub scheduled_id: u64,
+    pub scheduled_at: ScheduleAt,
 }
 
 #[spacetimedb::table(accessor = permission_request, public)]

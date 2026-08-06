@@ -126,6 +126,12 @@ export const SpaceFile = __t.object("SpaceFile", {
 });
 export type SpaceFile = __Infer<typeof SpaceFile>;
 
+export const SweepSchedule = __t.object("SweepSchedule", {
+  scheduledId: __t.u64(),
+  scheduledAt: __t.scheduleAt(),
+});
+export type SweepSchedule = __Infer<typeof SweepSchedule>;
+
 export const ToolEvent = __t.object("ToolEvent", {
   id: __t.string(),
   agentId: __t.string(),

@@ -18,6 +18,18 @@ pub struct UserProfileTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `user_profile`.
+pub struct UserProfileTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for UserProfileTableAccessor {
+    type Row = UserProfile;
+    type Handle<'db> = UserProfileTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.user_profile()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `user_profile`.
 ///
@@ -39,6 +51,18 @@ impl UserProfileTableAccess for super::RemoteTables {
 
 pub struct UserProfileInsertCallbackId(__sdk::CallbackId);
 pub struct UserProfileDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for UserProfileTableHandle<'ctx> {
+    type Row = UserProfile;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = UserProfile> + '_ {
+        self.imp.iter()
+    }
+}
 
 impl<'ctx> __sdk::Table for UserProfileTableHandle<'ctx> {
     type Row = UserProfile;
@@ -78,9 +102,54 @@ impl<'ctx> __sdk::Table for UserProfileTableHandle<'ctx> {
     }
 }
 
+impl<'ctx> __sdk::WithInsert for UserProfileTableHandle<'ctx> {
+    type InsertCallbackId = UserProfileInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> UserProfileInsertCallbackId {
+        UserProfileInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: UserProfileInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for UserProfileTableHandle<'ctx> {
+    type DeleteCallbackId = UserProfileDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> UserProfileDeleteCallbackId {
+        UserProfileDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: UserProfileDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
 pub struct UserProfileUpdateCallbackId(__sdk::CallbackId);
 
 impl<'ctx> __sdk::TableWithPrimaryKey for UserProfileTableHandle<'ctx> {
+    type UpdateCallbackId = UserProfileUpdateCallbackId;
+
+    fn on_update(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row, &Self::Row) + Send + 'static,
+    ) -> UserProfileUpdateCallbackId {
+        UserProfileUpdateCallbackId(self.imp.on_update(Box::new(callback)))
+    }
+
+    fn remove_on_update(&self, callback: UserProfileUpdateCallbackId) {
+        self.imp.remove_on_update(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithUpdate for UserProfileTableHandle<'ctx> {
     type UpdateCallbackId = UserProfileUpdateCallbackId;
 
     fn on_update(

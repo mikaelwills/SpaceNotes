@@ -6,40 +6,40 @@ use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
-pub(super) struct SweepOldMessagesArgs {}
+pub(super) struct ArmSweepScheduleArgs {}
 
-impl From<SweepOldMessagesArgs> for super::Reducer {
-    fn from(args: SweepOldMessagesArgs) -> Self {
-        Self::SweepOldMessages
+impl From<ArmSweepScheduleArgs> for super::Reducer {
+    fn from(args: ArmSweepScheduleArgs) -> Self {
+        Self::ArmSweepSchedule
     }
 }
 
-impl __sdk::InModule for SweepOldMessagesArgs {
+impl __sdk::InModule for ArmSweepScheduleArgs {
     type Module = super::RemoteModule;
 }
 
 #[allow(non_camel_case_types)]
-/// Extension trait for access to the reducer `sweep_old_messages`.
+/// Extension trait for access to the reducer `arm_sweep_schedule`.
 ///
 /// Implemented for [`super::RemoteReducers`].
-pub trait sweep_old_messages {
-    /// Request that the remote module invoke the reducer `sweep_old_messages` to run as soon as possible.
+pub trait arm_sweep_schedule {
+    /// Request that the remote module invoke the reducer `arm_sweep_schedule` to run as soon as possible.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
-    /// /// Use [`sweep_old_messages:sweep_old_messages_then`] to run a callback after the reducer completes.
-    fn sweep_old_messages(&self) -> __sdk::Result<()> {
-        self.sweep_old_messages_then(|_, _| {})
+    /// /// Use [`arm_sweep_schedule:arm_sweep_schedule_then`] to run a callback after the reducer completes.
+    fn arm_sweep_schedule(&self) -> __sdk::Result<()> {
+        self.arm_sweep_schedule_then(|_, _| {})
     }
 
-    /// Request that the remote module invoke the reducer `sweep_old_messages` to run as soon as possible,
+    /// Request that the remote module invoke the reducer `arm_sweep_schedule` to run as soon as possible,
     /// registering `callback` to run when we are notified that the reducer completed.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and its status can be observed with the `callback`.
-    fn sweep_old_messages_then(
+    fn arm_sweep_schedule_then(
         &self,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
@@ -48,8 +48,8 @@ pub trait sweep_old_messages {
     ) -> __sdk::Result<()>;
 }
 
-impl sweep_old_messages for super::RemoteReducers {
-    fn sweep_old_messages_then(
+impl arm_sweep_schedule for super::RemoteReducers {
+    fn arm_sweep_schedule_then(
         &self,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
@@ -57,6 +57,6 @@ impl sweep_old_messages for super::RemoteReducers {
             + 'static,
     ) -> __sdk::Result<()> {
         self.imp
-            .invoke_reducer_with_callback(SweepOldMessagesArgs {}, callback)
+            .invoke_reducer_with_callback(ArmSweepScheduleArgs {}, callback)
     }
 }

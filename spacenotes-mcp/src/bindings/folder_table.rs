@@ -18,6 +18,18 @@ pub struct FolderTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `folder`.
+pub struct FolderTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for FolderTableAccessor {
+    type Row = Folder;
+    type Handle<'db> = FolderTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.folder()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `folder`.
 ///
@@ -39,6 +51,18 @@ impl FolderTableAccess for super::RemoteTables {
 
 pub struct FolderInsertCallbackId(__sdk::CallbackId);
 pub struct FolderDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for FolderTableHandle<'ctx> {
+    type Row = Folder;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = Folder> + '_ {
+        self.imp.iter()
+    }
+}
 
 impl<'ctx> __sdk::Table for FolderTableHandle<'ctx> {
     type Row = Folder;
@@ -78,9 +102,54 @@ impl<'ctx> __sdk::Table for FolderTableHandle<'ctx> {
     }
 }
 
+impl<'ctx> __sdk::WithInsert for FolderTableHandle<'ctx> {
+    type InsertCallbackId = FolderInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> FolderInsertCallbackId {
+        FolderInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: FolderInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for FolderTableHandle<'ctx> {
+    type DeleteCallbackId = FolderDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> FolderDeleteCallbackId {
+        FolderDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: FolderDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
 pub struct FolderUpdateCallbackId(__sdk::CallbackId);
 
 impl<'ctx> __sdk::TableWithPrimaryKey for FolderTableHandle<'ctx> {
+    type UpdateCallbackId = FolderUpdateCallbackId;
+
+    fn on_update(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row, &Self::Row) + Send + 'static,
+    ) -> FolderUpdateCallbackId {
+        FolderUpdateCallbackId(self.imp.on_update(Box::new(callback)))
+    }
+
+    fn remove_on_update(&self, callback: FolderUpdateCallbackId) {
+        self.imp.remove_on_update(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithUpdate for FolderTableHandle<'ctx> {
     type UpdateCallbackId = FolderUpdateCallbackId;
 
     fn on_update(

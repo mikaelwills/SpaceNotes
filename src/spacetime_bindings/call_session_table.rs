@@ -19,6 +19,18 @@ pub struct CallSessionTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `call_session`.
+pub struct CallSessionTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for CallSessionTableAccessor {
+    type Row = CallSession;
+    type Handle<'db> = CallSessionTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.call_session()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `call_session`.
 ///
@@ -40,6 +52,18 @@ impl CallSessionTableAccess for super::RemoteTables {
 
 pub struct CallSessionInsertCallbackId(__sdk::CallbackId);
 pub struct CallSessionDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for CallSessionTableHandle<'ctx> {
+    type Row = CallSession;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = CallSession> + '_ {
+        self.imp.iter()
+    }
+}
 
 impl<'ctx> __sdk::Table for CallSessionTableHandle<'ctx> {
     type Row = CallSession;
@@ -79,9 +103,54 @@ impl<'ctx> __sdk::Table for CallSessionTableHandle<'ctx> {
     }
 }
 
+impl<'ctx> __sdk::WithInsert for CallSessionTableHandle<'ctx> {
+    type InsertCallbackId = CallSessionInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> CallSessionInsertCallbackId {
+        CallSessionInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: CallSessionInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for CallSessionTableHandle<'ctx> {
+    type DeleteCallbackId = CallSessionDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> CallSessionDeleteCallbackId {
+        CallSessionDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: CallSessionDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
 pub struct CallSessionUpdateCallbackId(__sdk::CallbackId);
 
 impl<'ctx> __sdk::TableWithPrimaryKey for CallSessionTableHandle<'ctx> {
+    type UpdateCallbackId = CallSessionUpdateCallbackId;
+
+    fn on_update(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row, &Self::Row) + Send + 'static,
+    ) -> CallSessionUpdateCallbackId {
+        CallSessionUpdateCallbackId(self.imp.on_update(Box::new(callback)))
+    }
+
+    fn remove_on_update(&self, callback: CallSessionUpdateCallbackId) {
+        self.imp.remove_on_update(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithUpdate for CallSessionTableHandle<'ctx> {
     type UpdateCallbackId = CallSessionUpdateCallbackId;
 
     fn on_update(

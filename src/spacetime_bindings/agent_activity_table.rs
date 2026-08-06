@@ -18,6 +18,18 @@ pub struct AgentActivityTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `agent_activity`.
+pub struct AgentActivityTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for AgentActivityTableAccessor {
+    type Row = AgentActivity;
+    type Handle<'db> = AgentActivityTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.agent_activity()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `agent_activity`.
 ///
@@ -39,6 +51,18 @@ impl AgentActivityTableAccess for super::RemoteTables {
 
 pub struct AgentActivityInsertCallbackId(__sdk::CallbackId);
 pub struct AgentActivityDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for AgentActivityTableHandle<'ctx> {
+    type Row = AgentActivity;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = AgentActivity> + '_ {
+        self.imp.iter()
+    }
+}
 
 impl<'ctx> __sdk::Table for AgentActivityTableHandle<'ctx> {
     type Row = AgentActivity;
@@ -78,9 +102,54 @@ impl<'ctx> __sdk::Table for AgentActivityTableHandle<'ctx> {
     }
 }
 
+impl<'ctx> __sdk::WithInsert for AgentActivityTableHandle<'ctx> {
+    type InsertCallbackId = AgentActivityInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> AgentActivityInsertCallbackId {
+        AgentActivityInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: AgentActivityInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for AgentActivityTableHandle<'ctx> {
+    type DeleteCallbackId = AgentActivityDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> AgentActivityDeleteCallbackId {
+        AgentActivityDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: AgentActivityDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
 pub struct AgentActivityUpdateCallbackId(__sdk::CallbackId);
 
 impl<'ctx> __sdk::TableWithPrimaryKey for AgentActivityTableHandle<'ctx> {
+    type UpdateCallbackId = AgentActivityUpdateCallbackId;
+
+    fn on_update(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row, &Self::Row) + Send + 'static,
+    ) -> AgentActivityUpdateCallbackId {
+        AgentActivityUpdateCallbackId(self.imp.on_update(Box::new(callback)))
+    }
+
+    fn remove_on_update(&self, callback: AgentActivityUpdateCallbackId) {
+        self.imp.remove_on_update(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithUpdate for AgentActivityTableHandle<'ctx> {
     type UpdateCallbackId = AgentActivityUpdateCallbackId;
 
     fn on_update(

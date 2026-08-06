@@ -1,4 +1,4 @@
-use spacetimedb::{CaseConversionPolicy, ReducerContext, Table, Timestamp};
+use spacetimedb::{CaseConversionPolicy, ReducerContext, Table, TimeDuration, Timestamp};
 
 #[spacetimedb::settings]
 const CASE_CONVERSION_POLICY: CaseConversionPolicy = CaseConversionPolicy::None;
@@ -59,7 +59,16 @@ pub struct UserProfile {
 // =============================================================================
 
 #[spacetimedb::reducer(init)]
-pub fn init(_ctx: &ReducerContext) {
+pub fn init(ctx: &ReducerContext) {
+    use space_channel_tables::{sweep_schedule, SweepSchedule};
+
+    if ctx.db.sweep_schedule().iter().next().is_none() {
+        ctx.db.sweep_schedule().insert(SweepSchedule {
+            scheduled_id: 0,
+            scheduled_at: TimeDuration::from_micros(60 * 60 * 1_000_000).into(),
+        });
+    }
+
     log::info!("SpaceNotes module initialized");
 }
 

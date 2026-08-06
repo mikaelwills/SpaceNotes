@@ -18,6 +18,18 @@ pub struct MessageImageTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `message_image`.
+pub struct MessageImageTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for MessageImageTableAccessor {
+    type Row = MessageImage;
+    type Handle<'db> = MessageImageTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.message_image()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `message_image`.
 ///
@@ -39,6 +51,18 @@ impl MessageImageTableAccess for super::RemoteTables {
 
 pub struct MessageImageInsertCallbackId(__sdk::CallbackId);
 pub struct MessageImageDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for MessageImageTableHandle<'ctx> {
+    type Row = MessageImage;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = MessageImage> + '_ {
+        self.imp.iter()
+    }
+}
 
 impl<'ctx> __sdk::Table for MessageImageTableHandle<'ctx> {
     type Row = MessageImage;
@@ -78,9 +102,54 @@ impl<'ctx> __sdk::Table for MessageImageTableHandle<'ctx> {
     }
 }
 
+impl<'ctx> __sdk::WithInsert for MessageImageTableHandle<'ctx> {
+    type InsertCallbackId = MessageImageInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> MessageImageInsertCallbackId {
+        MessageImageInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: MessageImageInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for MessageImageTableHandle<'ctx> {
+    type DeleteCallbackId = MessageImageDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> MessageImageDeleteCallbackId {
+        MessageImageDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: MessageImageDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
 pub struct MessageImageUpdateCallbackId(__sdk::CallbackId);
 
 impl<'ctx> __sdk::TableWithPrimaryKey for MessageImageTableHandle<'ctx> {
+    type UpdateCallbackId = MessageImageUpdateCallbackId;
+
+    fn on_update(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row, &Self::Row) + Send + 'static,
+    ) -> MessageImageUpdateCallbackId {
+        MessageImageUpdateCallbackId(self.imp.on_update(Box::new(callback)))
+    }
+
+    fn remove_on_update(&self, callback: MessageImageUpdateCallbackId) {
+        self.imp.remove_on_update(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithUpdate for MessageImageTableHandle<'ctx> {
     type UpdateCallbackId = MessageImageUpdateCallbackId;
 
     fn on_update(

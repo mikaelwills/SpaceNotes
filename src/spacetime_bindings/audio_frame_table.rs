@@ -18,6 +18,18 @@ pub struct AudioFrameTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `audio_frame`.
+pub struct AudioFrameTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for AudioFrameTableAccessor {
+    type Row = AudioFrame;
+    type Handle<'db> = AudioFrameTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.audio_frame()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `audio_frame`.
 ///
@@ -39,6 +51,18 @@ impl AudioFrameTableAccess for super::RemoteTables {
 
 pub struct AudioFrameInsertCallbackId(__sdk::CallbackId);
 
+impl<'ctx> __sdk::TableLike for AudioFrameTableHandle<'ctx> {
+    type Row = AudioFrame;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = AudioFrame> + '_ {
+        self.imp.iter()
+    }
+}
+
 impl<'ctx> __sdk::EventTable for AudioFrameTableHandle<'ctx> {
     type Row = AudioFrame;
     type EventContext = super::EventContext;
@@ -50,6 +74,21 @@ impl<'ctx> __sdk::EventTable for AudioFrameTableHandle<'ctx> {
         self.imp.iter()
     }
 
+    type InsertCallbackId = AudioFrameInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> AudioFrameInsertCallbackId {
+        AudioFrameInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: AudioFrameInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithInsert for AudioFrameTableHandle<'ctx> {
     type InsertCallbackId = AudioFrameInsertCallbackId;
 
     fn on_insert(
