@@ -103,7 +103,13 @@ async fn main() -> Result<()> {
             continue;
         }
 
-        let folder_path = absolute_vault_path.join(&server_folder.path);
+        let folder_path = match writer::resolve_vault_path(&absolute_vault_path, &server_folder.path) {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::error!("Refusing server folder {}: {}", server_folder.path, e);
+                continue;
+            }
+        };
         if !folder_path.exists() {
             if let Err(e) = std::fs::create_dir_all(&folder_path) {
                 tracing::error!("Failed to create folder {}: {}", server_folder.path, e);
@@ -124,7 +130,8 @@ async fn main() -> Result<()> {
     let journal_clone = opened_journal.journal.clone();
     client.on_file_updated(move |old_file, new_file| {
         let path_changed = old_file.path != new_file.path;
-        let content_changed = tracker_clone.is_modified(&new_file.id, &new_file.content);
+        let signal = new_file.content.clone();
+        let content_changed = tracker_clone.is_modified(&new_file.id, &signal);
 
         // Skip if nothing changed (echo from our own update)
         if !path_changed && !content_changed {
@@ -132,16 +139,8 @@ async fn main() -> Result<()> {
             return;
         }
 
-        // If path changed, delete the old file (this is a rename)
-        if old_file.path != new_file.path {
-            let old_path = vault_clone.join(&old_file.path);
-            if old_path.exists() {
-                if let Err(e) = std::fs::remove_file(&old_path) {
-                    tracing::error!("Failed to delete old file {}: {}", old_file.path, e);
-                } else {
-                    tracing::info!("Deleted old file during rename: {}", old_file.path);
-                }
-            }
+        if path_changed && !apply_server_rename(&vault_clone, &old_file.path, &new_file.path) {
+            return;
         }
 
         // Convert DbSpaceFile to LocalSpaceFile for writer
@@ -158,13 +157,8 @@ async fn main() -> Result<()> {
             modified_time: new_file.modified_time,
         };
 
-        tracker_clone.update(&file.id, &file.content);
-        if let Err(e) = write_file_to_disk(&vault_clone, &file) {
-            tracing::error!("Failed to write {}: {}", file.path, e);
-        } else {
-            record_file_in_journal(&journal_clone, &vault_clone, &file);
-            tracing::info!("Downloaded update: {}", file.path);
-        }
+        tracker_clone.update(&file.id, &signal);
+        download_server_file(&journal_clone, &vault_clone, &file, "Downloaded update");
     });
 
     // Register callback for file inserts from server
@@ -172,8 +166,9 @@ async fn main() -> Result<()> {
     let tracker_clone = tracker.clone();
     let journal_clone = opened_journal.journal.clone();
     client.on_file_inserted(move |db_file| {
+        let signal = db_file.content.clone();
         // Skip if we already have this content (echo from our own upload)
-        if !tracker_clone.is_modified(&db_file.id, &db_file.content) {
+        if !tracker_clone.is_modified(&db_file.id, &signal) {
             tracing::debug!("Skipping insert echo: {}", db_file.path);
             return;
         }
@@ -191,13 +186,8 @@ async fn main() -> Result<()> {
             modified_time: db_file.modified_time,
         };
 
-        tracker_clone.update(&file.id, &file.content);
-        if let Err(e) = write_file_to_disk(&vault_clone, &file) {
-            tracing::error!("Failed to write {}: {}", file.path, e);
-        } else {
-            record_file_in_journal(&journal_clone, &vault_clone, &file);
-            tracing::info!("Downloaded new: {}", file.path);
-        }
+        tracker_clone.update(&file.id, &signal);
+        download_server_file(&journal_clone, &vault_clone, &file, "Downloaded new");
     });
 
     // Register callback for file deletions from server
@@ -205,8 +195,21 @@ async fn main() -> Result<()> {
     let tracker_clone = tracker.clone();
     let journal_clone = opened_journal.journal.clone();
     client.on_file_deleted(move |old_file| {
-        let path = vault_clone.join(&old_file.path);
+        let path = match writer::resolve_vault_path(&vault_clone, &old_file.path) {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::error!("Refusing server delete of {}: {}", old_file.path, e);
+                return;
+            }
+        };
         if path.exists() {
+            if scanner::is_binary(&path) {
+                tracing::warn!(
+                    "Refusing to delete binary file {} from disk: its bytes are not stored in the database and exist nowhere else",
+                    old_file.path
+                );
+                return;
+            }
             if let Err(e) = std::fs::remove_file(&path) {
                 tracing::error!("Failed to delete {}: {}", old_file.path, e);
                 return;
@@ -227,7 +230,13 @@ async fn main() -> Result<()> {
             return;
         }
 
-        let path = vault_clone.join(&new_folder.path);
+        let path = match writer::resolve_vault_path(&vault_clone, &new_folder.path) {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::error!("Refusing server folder {}: {}", new_folder.path, e);
+                return;
+            }
+        };
         if !path.exists() {
             if let Err(e) = std::fs::create_dir_all(&path) {
                 tracing::error!("Failed to create folder {}: {}", new_folder.path, e);
@@ -240,8 +249,22 @@ async fn main() -> Result<()> {
     // Register callback for folder deletions from server
     let vault_clone = absolute_vault_path.clone();
     client.on_folder_deleted(move |old_folder| {
-        let path = vault_clone.join(&old_folder.path);
+        let path = match writer::resolve_vault_path(&vault_clone, &old_folder.path) {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::error!("Refusing server folder delete of {}: {}", old_folder.path, e);
+                return;
+            }
+        };
         if path.exists() && path.is_dir() {
+            if let Some(found) = scanner::find_binary_under(&path) {
+                tracing::warn!(
+                    "Refusing to delete folder {} from disk: it contains binary file {} whose bytes are not stored in the database",
+                    old_folder.path,
+                    found.display()
+                );
+                return;
+            }
             if let Err(e) = std::fs::remove_dir_all(&path) {
                 tracing::error!("Failed to delete folder {}: {}", old_folder.path, e);
             } else {
@@ -253,8 +276,20 @@ async fn main() -> Result<()> {
     // Register callback for folder updates from server (renames/moves)
     let vault_clone = absolute_vault_path.clone();
     client.on_folder_updated(move |old_folder, new_folder| {
-        let old_path = vault_clone.join(&old_folder.path);
-        let new_path = vault_clone.join(&new_folder.path);
+        let old_path = match writer::resolve_vault_path(&vault_clone, &old_folder.path) {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::error!("Refusing server folder rename from {}: {}", old_folder.path, e);
+                return;
+            }
+        };
+        let new_path = match writer::resolve_vault_path(&vault_clone, &new_folder.path) {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::error!("Refusing server folder rename to {}: {}", new_folder.path, e);
+                return;
+            }
+        };
 
         if old_path.exists() && old_path != new_path {
             // Create parent directory for new location if needed
@@ -394,6 +429,72 @@ fn move_corrupt_journal_aside(db_path: &Path) {
     }
 }
 
+fn apply_server_rename(vault_path: &Path, old_rel: &str, new_rel: &str) -> bool {
+    let old_path = match writer::resolve_vault_path(vault_path, old_rel) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!("Refusing server rename from {}: {}", old_rel, e);
+            return false;
+        }
+    };
+    let new_path = match writer::resolve_vault_path(vault_path, new_rel) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!("Refusing server rename to {}: {}", new_rel, e);
+            return false;
+        }
+    };
+    if !old_path.exists() {
+        return true;
+    }
+    if scanner::is_binary(&old_path) != scanner::is_binary(&new_path) {
+        tracing::warn!(
+            "Refusing server rename {} -> {}: it crosses the text/binary boundary and would corrupt the file on disk",
+            old_rel,
+            new_rel
+        );
+        return false;
+    }
+    if scanner::is_binary(&old_path) {
+        tracing::warn!(
+            "Refusing server rename {} -> {}: credentials move only at the vault, never because a row's path changed",
+            old_rel,
+            new_rel
+        );
+        return false;
+    }
+    if let Err(e) = std::fs::remove_file(&old_path) {
+        tracing::error!("Failed to delete old file {}: {}", old_rel, e);
+    } else {
+        tracing::info!("Deleted old file during rename: {}", old_rel);
+    }
+    true
+}
+
+fn download_server_file(
+    journal: &journal::Journal,
+    vault_path: &Path,
+    file: &space_file::SpaceFile,
+    verb: &str,
+) {
+    match write_file_to_disk(vault_path, file) {
+        Ok(writer::WriteOutcome::Written) => {
+            record_file_in_journal(journal, vault_path, file);
+            tracing::info!("{}: {}", verb, file.path);
+        }
+        Ok(writer::WriteOutcome::SkippedBinary) => {
+            if vault_path.join(&file.path).exists() {
+                record_file_in_journal(journal, vault_path, file);
+            }
+            tracing::debug!(
+                "Skipped server->disk write for {}: binary bytes are not stored in the database",
+                file.path
+            );
+        }
+        Err(e) => tracing::error!("Failed to write {}: {}", file.path, e),
+    }
+}
+
 fn record_file_in_journal(journal: &journal::Journal, vault_path: &Path, file: &space_file::SpaceFile) {
     let abs = vault_path.join(&file.path);
     match journal::record_from_disk(vault_path, &abs, file.id.clone()) {
@@ -430,5 +531,195 @@ fn run_journal_maintenance(opened: &OpenedJournal, vault_path: &Path, data_dir: 
             Ok(()) => tracing::info!("Journal backup written: {:?}", target),
             Err(e) => tracing::error!("Journal backup to {:?} failed: {:#}", target, e),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const ID_A: &str = "11111111-1111-1111-1111-111111111111";
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "spacenotes-main-{}-{}",
+            name,
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn vault_in(dir: &Path) -> PathBuf {
+        let vault = dir.join("vault");
+        std::fs::create_dir_all(&vault).unwrap();
+        vault
+    }
+
+    #[test]
+    fn server_rename_of_a_credential_is_refused_and_leaves_it_in_place() {
+        let dir = temp_dir("binary-rename");
+        let vault = vault_in(&dir);
+        let ciphertext: &[u8] = &[0x85, 0x02, 0x0c, 0x03, 0xff, 0x00, 0xde, 0xad];
+        std::fs::write(vault.join("secret.gpg"), ciphertext).unwrap();
+
+        assert!(!apply_server_rename(&vault, "secret.gpg", "moved/secret.gpg"));
+
+        assert_eq!(
+            std::fs::read(vault.join("secret.gpg")).unwrap(),
+            ciphertext,
+            "a credential moves only at the vault, so it stays put"
+        );
+        assert!(!vault.join("moved/secret.gpg").exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn server_rename_onto_an_existing_credential_is_refused() {
+        let dir = temp_dir("rename-clobber");
+        let vault = vault_in(&dir);
+        let moving: &[u8] = &[0x85, 0x02, 0xde, 0xad];
+        let victim: &[u8] = &[0x99, 0x03, 0xbe, 0xef];
+        std::fs::write(vault.join("a.gpg"), moving).unwrap();
+        std::fs::write(vault.join("b.gpg"), victim).unwrap();
+
+        let applied = apply_server_rename(&vault, "a.gpg", "b.gpg");
+
+        assert!(!applied, "the caller must be told the rename was refused");
+        assert_eq!(std::fs::read(vault.join("b.gpg")).unwrap(), victim);
+        assert_eq!(std::fs::read(vault.join("a.gpg")).unwrap(), moving);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn server_rename_across_the_text_binary_boundary_is_refused() {
+        let dir = temp_dir("rename-boundary");
+        let vault = vault_in(&dir);
+        let ciphertext: &[u8] = &[0x85, 0x02, 0xde, 0xad];
+        std::fs::write(vault.join("secret.gpg"), ciphertext).unwrap();
+        std::fs::write(vault.join("note.md"), "body\n").unwrap();
+
+        assert!(!apply_server_rename(&vault, "secret.gpg", "secret.md"));
+        assert_eq!(std::fs::read(vault.join("secret.gpg")).unwrap(), ciphertext);
+        assert!(!vault.join("secret.md").exists());
+
+        assert!(!apply_server_rename(&vault, "note.md", "note.gpg"));
+        assert_eq!(std::fs::read_to_string(vault.join("note.md")).unwrap(), "body\n");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn server_rename_of_text_row_deletes_the_old_path() {
+        let dir = temp_dir("text-rename");
+        let vault = vault_in(&dir);
+        std::fs::write(vault.join("a.md"), "body\n").unwrap();
+
+        apply_server_rename(&vault, "a.md", "moved.md");
+
+        assert!(!vault.join("a.md").exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn server_rename_with_traversal_in_the_old_path_is_refused() {
+        let dir = temp_dir("traversal-old");
+        let vault = vault_in(&dir);
+        let ciphertext: &[u8] = &[0x85, 0x02];
+        std::fs::write(dir.join("outside.gpg"), ciphertext).unwrap();
+
+        apply_server_rename(&vault, "../outside.gpg", "stolen.gpg");
+
+        assert_eq!(std::fs::read(dir.join("outside.gpg")).unwrap(), ciphertext);
+        assert!(!vault.join("stolen.gpg").exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn server_rename_with_traversal_in_the_new_path_is_refused() {
+        let dir = temp_dir("traversal-new");
+        let vault = vault_in(&dir);
+        let ciphertext: &[u8] = &[0x85, 0x02];
+        std::fs::write(vault.join("secret.gpg"), ciphertext).unwrap();
+
+        apply_server_rename(&vault, "secret.gpg", "../stolen.gpg");
+
+        assert_eq!(std::fs::read(vault.join("secret.gpg")).unwrap(), ciphertext);
+        assert!(!dir.join("stolen.gpg").exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn fresh_device_binary_row_is_not_journaled_as_a_phantom_file() {
+        let dir = temp_dir("phantom-binary");
+        let vault = vault_in(&dir);
+        let journal = journal::Journal::open(&dir.join("journal.db")).unwrap();
+        let file = space_file::SpaceFile::new(
+            ID_A.to_string(),
+            "site.com/user.gpg".to_string(),
+            String::new(),
+            8,
+            1_600_000_000_000,
+            1_600_000_000_000,
+        );
+
+        download_server_file(&journal, &vault, &file, "Downloaded new");
+
+        assert!(!vault.join("site.com/user.gpg").exists());
+        assert!(journal.by_path("site.com/user.gpg").unwrap().is_none());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn binary_row_update_with_the_file_on_disk_refreshes_the_journal() {
+        let dir = temp_dir("binary-journal-refresh");
+        let vault = vault_in(&dir);
+        let ciphertext: &[u8] = &[0x85, 0x02, 0x0c];
+        std::fs::write(vault.join("secret.gpg"), ciphertext).unwrap();
+        let journal = journal::Journal::open(&dir.join("journal.db")).unwrap();
+        let file = space_file::SpaceFile::new(
+            ID_A.to_string(),
+            "secret.gpg".to_string(),
+            String::new(),
+            3,
+            1_600_000_000_000,
+            1_600_000_000_000,
+        );
+
+        download_server_file(&journal, &vault, &file, "Downloaded update");
+
+        assert_eq!(std::fs::read(vault.join("secret.gpg")).unwrap(), ciphertext);
+        assert_eq!(journal.by_path("secret.gpg").unwrap().unwrap().uuid, ID_A);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn text_row_download_writes_and_journals() {
+        let dir = temp_dir("text-download");
+        let vault = vault_in(&dir);
+        let journal = journal::Journal::open(&dir.join("journal.db")).unwrap();
+        let file = space_file::SpaceFile::new(
+            ID_A.to_string(),
+            "a.md".to_string(),
+            "body\n".to_string(),
+            5,
+            1_600_000_000_000,
+            1_600_000_000_000,
+        );
+
+        download_server_file(&journal, &vault, &file, "Downloaded new");
+
+        assert_eq!(std::fs::read_to_string(vault.join("a.md")).unwrap(), "body\n");
+        assert_eq!(journal.by_path("a.md").unwrap().unwrap().uuid, ID_A);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

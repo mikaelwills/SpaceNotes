@@ -80,6 +80,18 @@ mod tests {
     }
 
     #[test]
+    fn a_binary_row_is_tracked_by_its_encoded_content() {
+        let tracker = ContentTracker::new();
+        let first = crate::scanner::encode_binary_content(&[0x85, 0x02, 0xde, 0xad]);
+        let reencrypted = crate::scanner::encode_binary_content(&[0x85, 0x02, 0xbe, 0xef]);
+
+        assert!(tracker.has_changed("id", &first));
+        tracker.update("id", &first);
+        assert!(!tracker.has_changed("id", &first));
+        assert!(tracker.has_changed("id", &reencrypted));
+    }
+
+    #[test]
     fn cascade_poison_recovers_on_subsequent_ops() {
         let tracker = ContentTracker::new();
         tracker.update("id-a", "content-a");

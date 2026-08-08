@@ -10,7 +10,7 @@ use crate::sanitize::sanitize_path;
 
 const TEXT_EXTENSIONS: [&str; 6] = ["md", "yaml", "yml", "json", "toml", "txt"];
 
-const BINARY_EXTENSIONS: [&str; 0] = [];
+const BINARY_EXTENSIONS: [&str; 1] = ["gpg"];
 
 fn extension_of(path: &Path) -> Option<String> {
     path.extension()
@@ -18,7 +18,26 @@ fn extension_of(path: &Path) -> Option<String> {
         .map(|e| e.to_lowercase())
 }
 
+const TEXT_DOTFILES: [&str; 2] = [".gpg-id", ".gpg-pubkeys.asc"];
+
+const ALLOWED_HIDDEN_DIRS: [&str; 1] = [".password-store"];
+
+pub fn is_allowed_dotfile(name: &str) -> bool {
+    TEXT_DOTFILES.contains(&name)
+}
+
+pub fn is_allowed_hidden_entry(name: &str) -> bool {
+    TEXT_DOTFILES.contains(&name) || ALLOWED_HIDDEN_DIRS.contains(&name)
+}
+
 pub fn is_text(path: &Path) -> bool {
+    let is_text_dotfile = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(is_allowed_dotfile);
+    if is_text_dotfile {
+        return true;
+    }
     match extension_of(path) {
         Some(ext) => TEXT_EXTENSIONS.contains(&ext.as_str()),
         None => false,
@@ -34,6 +53,19 @@ pub fn is_binary(path: &Path) -> bool {
 
 pub fn is_ingestible(path: &Path) -> bool {
     is_text(path) || is_binary(path)
+}
+
+pub fn encode_binary_content(bytes: &[u8]) -> String {
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD.encode(bytes)
+}
+
+pub fn find_binary_under(dir: &Path) -> Option<std::path::PathBuf> {
+    WalkDir::new(dir)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .map(|e| e.into_path())
+        .find(|p| p.is_file() && is_binary(p))
 }
 
 pub fn read_file_at(vault_path: &Path, abs_path: &Path) -> Result<Option<SpaceFile>> {
@@ -53,7 +85,8 @@ pub fn read_file_at(vault_path: &Path, abs_path: &Path) -> Result<Option<SpaceFi
         .to_string());
 
     let content = if is_binary(abs_path) {
-        String::new()
+        let bytes = std::fs::read(abs_path)?;
+        encode_binary_content(&bytes)
     } else {
         let bytes = std::fs::read(abs_path)?;
         String::from_utf8(bytes).map_err(|e| {
@@ -88,7 +121,7 @@ pub fn scan_files(vault_path: &Path) -> Result<Vec<SpaceFile>> {
     // Optimization: filter_entry prevents descending into hidden directories
     let walker = WalkDir::new(vault_path).into_iter().filter_entry(|e| {
         let name = e.file_name().to_string_lossy();
-        !name.starts_with('.') && name != "@eaDir"
+        (!name.starts_with('.') || is_allowed_hidden_entry(&name)) && name != "@eaDir"
     });
 
     for entry in walker.filter_map(|e| e.ok()) {
@@ -117,7 +150,7 @@ pub fn scan_folders(vault_path: &Path) -> Result<Vec<Folder>> {
     // Optimization: filter_entry prevents descending into hidden directories
     let walker = WalkDir::new(vault_path).into_iter().filter_entry(|e| {
         let name = e.file_name().to_string_lossy();
-        !name.starts_with('.') && name != "@eaDir"
+        (!name.starts_with('.') || is_allowed_hidden_entry(&name)) && name != "@eaDir"
     });
 
     for entry in walker.filter_map(|e| e.ok()) {
@@ -141,6 +174,13 @@ pub fn scan_folders(vault_path: &Path) -> Result<Vec<Folder>> {
 mod tests {
     use super::*;
 
+    fn decode_for_test(content: &str) -> Vec<u8> {
+        use base64::Engine;
+        base64::engine::general_purpose::STANDARD
+            .decode(content)
+            .expect("row content must be valid base64")
+    }
+
     fn temp_vault(name: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("spacenotes-scan-{}-{}", name, std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -161,6 +201,87 @@ mod tests {
         assert_eq!(files[0].content, "body of a\n");
         assert!(files[0].id.is_empty());
         assert_eq!(files[0].extension, "md");
+
+        let _ = std::fs::remove_dir_all(&vault);
+    }
+
+    #[test]
+    fn find_binary_under_detects_a_nested_gpg_and_ignores_text_only_trees() {
+        let vault = temp_vault("findbinary");
+        std::fs::create_dir_all(vault.join("with/site.com")).unwrap();
+        std::fs::create_dir_all(vault.join("without/notes")).unwrap();
+        std::fs::write(vault.join("with/site.com/user.gpg"), [0x85u8, 0x02]).unwrap();
+        std::fs::write(vault.join("without/notes/a.md"), "body\n").unwrap();
+
+        let found = find_binary_under(&vault.join("with")).unwrap();
+        assert!(found.ends_with("user.gpg"));
+        assert!(find_binary_under(&vault.join("without")).is_none());
+
+        let _ = std::fs::remove_dir_all(&vault);
+    }
+
+    #[test]
+    fn a_hidden_password_store_ingests_but_other_dot_directories_stay_pruned() {
+        let vault = temp_vault("hiddenstore");
+        std::fs::create_dir_all(vault.join(".password-store/site.com")).unwrap();
+        std::fs::create_dir_all(vault.join(".git")).unwrap();
+        std::fs::write(vault.join(".password-store/site.com/user.gpg"), [0x85u8, 0x02]).unwrap();
+        std::fs::write(vault.join(".password-store/.gpg-id"), "ABC123!\n").unwrap();
+        std::fs::write(
+            vault.join(".password-store/.gpg-pubkeys.asc"),
+            "-----BEGIN PGP PUBLIC KEY BLOCK-----\n",
+        )
+        .unwrap();
+        std::fs::write(vault.join(".git/leak.md"), "must not ingest\n").unwrap();
+        std::fs::write(vault.join("regular.md"), "note\n").unwrap();
+
+        let files = scan_files(&vault).unwrap();
+        let paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
+
+        assert!(paths.iter().any(|p| p.ends_with("user.gpg")));
+        assert!(paths.iter().any(|p| p.ends_with(".gpg-id")));
+        assert!(
+            paths.iter().any(|p| p.ends_with(".gpg-pubkeys.asc")),
+            "the recipients' public keys must ingest with the store"
+        );
+        assert!(paths.contains(&"regular.md"));
+        assert!(
+            !paths.iter().any(|p| p.contains(".git")),
+            "the allowlist must not open every dot-directory"
+        );
+
+        let _ = std::fs::remove_dir_all(&vault);
+    }
+
+    #[test]
+    fn a_pass_store_ingests_gpg_ciphertext_and_gpg_id_as_text() {
+        let vault = temp_vault("passstore");
+        std::fs::create_dir_all(vault.join("site.com")).unwrap();
+        let ciphertext: &[u8] = &[0x85, 0x02, 0x0c, 0x03, 0xff, 0x00, 0xde, 0xad];
+        std::fs::write(vault.join("site.com/user.gpg"), ciphertext).unwrap();
+        std::fs::write(vault.join(".gpg-id"), "ABC123!\nDEF456!\n").unwrap();
+
+        let mut files = scan_files(&vault).unwrap();
+        files.sort_by(|a, b| a.path.cmp(&b.path));
+
+        assert_eq!(files.len(), 2, "expected .gpg-id and the .gpg entry");
+
+        let gpg_id = files.iter().find(|f| f.path == ".gpg-id").unwrap();
+        assert_eq!(gpg_id.content, "ABC123!\nDEF456!\n");
+
+        let entry = files.iter().find(|f| f.path.ends_with("user.gpg")).unwrap();
+        assert_eq!(
+            decode_for_test(&entry.content),
+            ciphertext,
+            "decoding the row content must reproduce the file bytes exactly"
+        );
+        assert_eq!(entry.extension, "gpg");
+        assert_eq!(entry.size, ciphertext.len() as u64);
+
+        assert_eq!(
+            std::fs::read(vault.join("site.com/user.gpg")).unwrap(),
+            ciphertext
+        );
 
         let _ = std::fs::remove_dir_all(&vault);
     }

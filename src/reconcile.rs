@@ -9,13 +9,18 @@ use crate::journal::{self, FileRecord, Journal};
 use crate::space_file::SpaceFile;
 use crate::scanner::scan_files;
 use crate::tracker::ContentTracker;
-use crate::writer::write_file_to_disk;
+use crate::writer::{write_file_to_disk, WriteOutcome};
 
 enum Outcome {
     Downloaded,
     Uploaded,
     Unchanged,
     Skipped,
+    SkippedBinary,
+}
+
+fn signal_of(file: &SpaceFile) -> String {
+    file.content.clone()
 }
 
 pub struct LadderOutcome {
@@ -298,28 +303,40 @@ fn reconcile_one(
                         server.created_time,
                         server.modified_time,
                     );
-                    write_file_to_disk(vault_path, &merged)?;
-                    tracker.update(&merged.id, &merged.content);
-                    client.upsert_file(&merged);
-                    tracing::debug!(
-                        "Downloaded newer into moved path: {} (ID: {})",
-                        merged.path,
-                        id
-                    );
+                    match write_file_to_disk(vault_path, &merged)? {
+                        WriteOutcome::Written => {
+                            tracker.update(&merged.id, &signal_of(&merged));
+                            client.upsert_file(&merged);
+                            tracing::debug!(
+                                "Downloaded newer into moved path: {} (ID: {})",
+                                merged.path,
+                                id
+                            );
+                            Ok(Outcome::Downloaded)
+                        }
+                        WriteOutcome::SkippedBinary => {
+                            client.upsert_file(local);
+                            tracker.update(&local.id, &signal_of(local));
+                            tracing::warn!(
+                                "Propagated offline move of binary {} without bytes: server bytes for {} are not stored in the database (ID: {})",
+                                local.path,
+                                server.path,
+                                id
+                            );
+                            Ok(Outcome::SkippedBinary)
+                        }
+                    }
                 } else {
-                    write_file_to_disk(vault_path, server)?;
-                    tracker.update(&server.id, &server.content);
-                    tracing::debug!("Downloaded newer: {} (ID: {})", server.path, id);
+                    download_newer(vault_path, tracker, local, server, id)
                 }
-                Ok(Outcome::Downloaded)
             } else if local.modified_time > server.modified_time {
                 client.upsert_file(local);
-                tracker.update(&local.id, &local.content);
+                tracker.update(&local.id, &signal_of(local));
                 tracing::debug!("Uploaded newer: {} (ID: {})", local.path, id);
                 Ok(Outcome::Uploaded)
             } else if moved_locally {
                 client.upsert_file(local);
-                tracker.update(&local.id, &local.content);
+                tracker.update(&local.id, &signal_of(local));
                 tracing::info!(
                     "Propagated offline move: {} -> {} (ID: {})",
                     server.path,
@@ -328,26 +345,69 @@ fn reconcile_one(
                 );
                 Ok(Outcome::Uploaded)
             } else {
-                tracker.update(&local.id, &local.content);
+                tracker.update(&local.id, &signal_of(local));
                 Ok(Outcome::Unchanged)
             }
         }
 
-        (None, Some(server)) => {
-            write_file_to_disk(vault_path, server)?;
-            tracker.update(&server.id, &server.content);
-            tracing::debug!("Downloaded new: {} (ID: {})", server.path, id);
-            Ok(Outcome::Downloaded)
-        }
+        (None, Some(server)) => download_missing(vault_path, tracker, server, id),
 
         (Some(local), None) => {
             client.upsert_file(local);
-            tracker.update(&local.id, &local.content);
+            tracker.update(&local.id, &signal_of(local));
             tracing::debug!("Uploaded new: {} (ID: {})", local.path, id);
             Ok(Outcome::Uploaded)
         }
 
         (None, None) => unreachable!(),
+    }
+}
+
+fn download_newer(
+    vault_path: &Path,
+    tracker: &ContentTracker,
+    local: &SpaceFile,
+    server: &SpaceFile,
+    id: &str,
+) -> Result<Outcome> {
+    match write_file_to_disk(vault_path, server)? {
+        WriteOutcome::Written => {
+            tracker.update(&server.id, &signal_of(server));
+            tracing::debug!("Downloaded newer: {} (ID: {})", server.path, id);
+            Ok(Outcome::Downloaded)
+        }
+        WriteOutcome::SkippedBinary => {
+            tracker.update(&local.id, &signal_of(local));
+            tracing::warn!(
+                "Server row for binary {} is newer but its bytes are not stored in the database; keeping local copy (ID: {})",
+                server.path,
+                id
+            );
+            Ok(Outcome::SkippedBinary)
+        }
+    }
+}
+
+fn download_missing(
+    vault_path: &Path,
+    tracker: &ContentTracker,
+    server: &SpaceFile,
+    id: &str,
+) -> Result<Outcome> {
+    match write_file_to_disk(vault_path, server)? {
+        WriteOutcome::Written => {
+            tracker.update(&server.id, &signal_of(server));
+            tracing::debug!("Downloaded new: {} (ID: {})", server.path, id);
+            Ok(Outcome::Downloaded)
+        }
+        WriteOutcome::SkippedBinary => {
+            tracing::warn!(
+                "Server has binary row {} but its bytes are not stored in the database and no local copy exists; it cannot be restored on this device (ID: {})",
+                server.path,
+                id
+            );
+            Ok(Outcome::SkippedBinary)
+        }
     }
 }
 
@@ -401,6 +461,7 @@ pub fn reconcile_on_startup(
     let mut downloaded = 0;
     let mut uploaded = 0;
     let mut unchanged = 0;
+    let mut skipped_binary = 0;
 
     for id in all_ids {
         let mut outcome: Result<Outcome> = Ok(Outcome::Skipped);
@@ -423,14 +484,16 @@ pub fn reconcile_on_startup(
             Outcome::Uploaded => uploaded += 1,
             Outcome::Unchanged => unchanged += 1,
             Outcome::Skipped => {}
+            Outcome::SkippedBinary => skipped_binary += 1,
         }
     }
 
     tracing::info!(
-        "Reconciliation complete: {} downloaded, {} uploaded, {} unchanged",
+        "Reconciliation complete: {} downloaded, {} uploaded, {} unchanged, {} binary skipped (bytes not in DB)",
         downloaded,
         uploaded,
-        unchanged
+        unchanged,
+        skipped_binary
     );
 
     Ok(())
@@ -745,6 +808,68 @@ mod tests {
             modified_time,
             modified_time,
         )
+    }
+
+    fn binary_server_file(id: &str, path: &str, modified_time: u64) -> SpaceFile {
+        SpaceFile::new(
+            id.to_string(),
+            path.to_string(),
+            String::new(),
+            8,
+            modified_time,
+            modified_time,
+        )
+    }
+
+    #[test]
+    fn missing_binary_download_reports_skipped_not_downloaded() {
+        let dir = temp_dir("binary-skip");
+        let vault = dir.join("vault");
+        std::fs::create_dir_all(&vault).unwrap();
+        let tracker = ContentTracker::new();
+        let server = binary_server_file(ID_A, "site.com/user.gpg", 1000);
+
+        let outcome = download_missing(&vault, &tracker, &server, ID_A).unwrap();
+
+        assert!(matches!(outcome, Outcome::SkippedBinary));
+        assert!(!vault.join("site.com/user.gpg").exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn newer_binary_server_row_keeps_local_bytes_and_reports_skipped() {
+        let dir = temp_dir("binary-newer-skip");
+        let vault = dir.join("vault");
+        std::fs::create_dir_all(&vault).unwrap();
+        let ciphertext: &[u8] = &[0x85, 0x02, 0x0c];
+        std::fs::write(vault.join("secret.gpg"), ciphertext).unwrap();
+        let tracker = ContentTracker::new();
+        let local = binary_server_file(ID_A, "secret.gpg", 1000);
+        let server = binary_server_file(ID_A, "secret.gpg", 2000);
+
+        let outcome = download_newer(&vault, &tracker, &local, &server, ID_A).unwrap();
+
+        assert!(matches!(outcome, Outcome::SkippedBinary));
+        assert_eq!(std::fs::read(vault.join("secret.gpg")).unwrap(), ciphertext);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn missing_text_download_writes_and_reports_downloaded() {
+        let dir = temp_dir("text-download");
+        let vault = dir.join("vault");
+        std::fs::create_dir_all(&vault).unwrap();
+        let tracker = ContentTracker::new();
+        let server = server_file(ID_A, "a.md", 1_600_000_000_000);
+
+        let outcome = download_missing(&vault, &tracker, &server, ID_A).unwrap();
+
+        assert!(matches!(outcome, Outcome::Downloaded));
+        assert_eq!(std::fs::read_to_string(vault.join("a.md")).unwrap(), "body");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

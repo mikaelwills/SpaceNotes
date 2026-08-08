@@ -33,8 +33,9 @@ struct EventContext<'a> {
 
 fn is_ignored(path: &Path) -> bool {
     path.iter().any(|name| {
-        name.to_str()
-            .map_or(false, |s| s.starts_with('.') || s == "@eaDir")
+        name.to_str().map_or(false, |s| {
+            (s.starts_with('.') && !crate::scanner::is_allowed_hidden_entry(s)) || s == "@eaDir"
+        })
     })
 }
 
@@ -221,7 +222,8 @@ fn upsert_md(ctx: &EventContext, abs: &Path) -> Vec<Action> {
         }
     };
 
-    if !ctx.tracker.has_changed(&file.id, &file.content) {
+    let signal = file.content.clone();
+    if !ctx.tracker.has_changed(&file.id, &signal) {
         record_in_journal(ctx, abs, &file.id);
         tracing::debug!("Watcher ignoring echo: {}", file.path);
         return Vec::new();
@@ -229,7 +231,7 @@ fn upsert_md(ctx: &EventContext, abs: &Path) -> Vec<Action> {
 
     record_in_journal(ctx, abs, &file.id);
 
-    if ctx.tracker.is_modified(&file.id, &file.content) {
+    if ctx.tracker.is_modified(&file.id, &signal) {
         vec![Action::UpsertFile(file)]
     } else {
         tracing::debug!("Watcher ignoring echo: {}", file.path);
@@ -647,6 +649,92 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn binary_reencryption_updates_the_server_row() {
+        let dir = temp_dir("binary-edit");
+        let vault = dir.join("vault");
+        std::fs::create_dir_all(&vault).unwrap();
+        std::fs::write(vault.join("secret.gpg"), [0x85u8, 0x02, 0x0c]).unwrap();
+        let journal = Journal::open(&dir.join("journal.db")).unwrap();
+        let tracker = ContentTracker::new();
+
+        let ctx = EventContext {
+            vault_path: &vault,
+            journal: &journal,
+            tracker: &tracker,
+            known_file_id: &no_known_id,
+        };
+        let first = dispatch_event(
+            &ctx,
+            &EventKind::Create(CreateKind::File),
+            &[vault.join("secret.gpg")],
+            false,
+        );
+        assert_eq!(upserted_file_ids_and_paths(&first).len(), 1);
+
+        std::fs::write(vault.join("secret.gpg"), [0x99u8, 0x03, 0x04, 0x05, 0x06]).unwrap();
+        let second = dispatch_event(
+            &ctx,
+            &EventKind::Modify(ModifyKind::Data(DataChange::Content)),
+            &[vault.join("secret.gpg")],
+            false,
+        );
+
+        let upserts: Vec<&SpaceFile> = second
+            .iter()
+            .filter_map(|a| match a {
+                Action::UpsertFile(file) => Some(file),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            upserts.len(),
+            1,
+            "a re-encrypted binary must update its server row without a restart"
+        );
+        assert_eq!(upserts[0].size, 5);
+        assert_eq!(
+            crate::scanner::encode_binary_content(&[0x99u8, 0x03, 0x04, 0x05, 0x06]),
+            upserts[0].content,
+            "the re-encrypted bytes must reach the row"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn unchanged_binary_event_is_suppressed_as_echo() {
+        let dir = temp_dir("binary-echo");
+        let vault = dir.join("vault");
+        std::fs::create_dir_all(&vault).unwrap();
+        std::fs::write(vault.join("secret.gpg"), [0x85u8, 0x02, 0x0c]).unwrap();
+        let journal = Journal::open(&dir.join("journal.db")).unwrap();
+        let tracker = ContentTracker::new();
+
+        let ctx = EventContext {
+            vault_path: &vault,
+            journal: &journal,
+            tracker: &tracker,
+            known_file_id: &no_known_id,
+        };
+        dispatch_event(
+            &ctx,
+            &EventKind::Create(CreateKind::File),
+            &[vault.join("secret.gpg")],
+            false,
+        );
+        let second = dispatch_event(
+            &ctx,
+            &EventKind::Modify(ModifyKind::Data(DataChange::Content)),
+            &[vault.join("secret.gpg")],
+            false,
+        );
+
+        assert!(upserted_file_ids_and_paths(&second).is_empty());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
