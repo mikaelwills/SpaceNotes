@@ -30,6 +30,12 @@ pub fn is_allowed_hidden_entry(name: &str) -> bool {
     TEXT_DOTFILES.contains(&name) || ALLOWED_HIDDEN_DIRS.contains(&name)
 }
 
+pub fn is_credential_store_path(rel_path: &str) -> bool {
+    ALLOWED_HIDDEN_DIRS
+        .iter()
+        .any(|dir| rel_path == *dir || rel_path.starts_with(&format!("{dir}/")))
+}
+
 pub fn is_text(path: &Path) -> bool {
     let is_text_dotfile = path
         .file_name()
@@ -345,5 +351,15 @@ mod tests {
         assert!(read_file_at(&vault, &path).unwrap().is_none());
 
         let _ = std::fs::remove_dir_all(&vault);
+    }
+
+    #[test]
+    fn credential_store_paths_are_recognised() {
+        assert!(is_credential_store_path(".password-store"));
+        assert!(is_credential_store_path(".password-store/github.com"));
+        assert!(is_credential_store_path(".password-store/a/b/c"));
+        assert!(!is_credential_store_path("All Notes"));
+        assert!(!is_credential_store_path(".password-store-other"));
+        assert!(!is_credential_store_path("notes/.password-store"));
     }
 }

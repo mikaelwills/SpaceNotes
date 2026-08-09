@@ -276,6 +276,17 @@ async fn main() -> Result<()> {
     // Register callback for folder updates from server (renames/moves)
     let vault_clone = absolute_vault_path.clone();
     client.on_folder_updated(move |old_folder, new_folder| {
+        if scanner::is_credential_store_path(&old_folder.path)
+            || scanner::is_credential_store_path(&new_folder.path)
+        {
+            tracing::warn!(
+                "Refusing server folder rename {} -> {}: the credential store moves only at the vault",
+                old_folder.path,
+                new_folder.path
+            );
+            return;
+        }
+
         let old_path = match writer::resolve_vault_path(&vault_clone, &old_folder.path) {
             Ok(p) => p,
             Err(e) => {
