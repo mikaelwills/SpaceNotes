@@ -223,6 +223,15 @@ fn decide_orphan(row: &FileRecord, server: Option<&SpaceFile>) -> OrphanDecision
     match server {
         None => OrphanDecision::ForgetLocally,
         Some(server) if (server.modified_time as i64) > row.modified_time => {
+            if crate::scanner::is_credential_store_path(&row.path)
+                && crate::scanner::is_binary(Path::new(&row.path))
+            {
+                tracing::warn!(
+                    "Refusing to resurrect credential {}: it was deleted at the vault, and only a person there removes or restores one",
+                    row.path
+                );
+                return OrphanDecision::PropagateDelete;
+            }
             OrphanDecision::Resurrect
         }
         Some(_) => OrphanDecision::PropagateDelete,
@@ -370,6 +379,14 @@ fn download_newer(
     server: &SpaceFile,
     id: &str,
 ) -> Result<Outcome> {
+    if local.path != server.path
+        && crate::scanner::is_credential_store_path(&server.path)
+        && crate::scanner::is_binary(Path::new(&server.path))
+    {
+        return download_newer_credential_at_a_diverged_path(
+            vault_path, tracker, local, server, id,
+        );
+    }
     match write_file_to_disk(vault_path, server)? {
         WriteOutcome::Written => {
             tracker.update(&server.id, &signal_of(server));
@@ -380,6 +397,69 @@ fn download_newer(
             tracker.update(&local.id, &signal_of(local));
             tracing::warn!(
                 "Server row for binary {} is newer but its bytes are not stored in the database; keeping local copy (ID: {})",
+                server.path,
+                id
+            );
+            Ok(Outcome::SkippedBinary)
+        }
+    }
+}
+
+fn download_newer_credential_at_a_diverged_path(
+    vault_path: &Path,
+    tracker: &ContentTracker,
+    local: &SpaceFile,
+    server: &SpaceFile,
+    id: &str,
+) -> Result<Outcome> {
+    if !crate::writer::credential_write_is_valid(vault_path, server) {
+        tracker.update(&local.id, &signal_of(local));
+        tracing::warn!(
+            "Server row for credential {} is newer at a different path than the local {}, but its content is not a valid credential; leaving the local bytes where they are (ID: {})",
+            server.path,
+            local.path,
+            id
+        );
+        return Ok(Outcome::SkippedBinary);
+    }
+
+    let old_abs = crate::writer::resolve_vault_path(vault_path, &local.path)?;
+    let new_abs = crate::writer::resolve_vault_path(vault_path, &server.path)?;
+
+    if new_abs.exists() {
+        tracker.update(&local.id, &signal_of(local));
+        tracing::warn!(
+            "Refusing to move credential {} onto {}: the destination is occupied (ID: {})",
+            local.path,
+            server.path,
+            id
+        );
+        return Ok(Outcome::SkippedBinary);
+    }
+
+    if old_abs.exists() {
+        if let Some(parent) = new_abs.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::rename(&old_abs, &new_abs)?;
+    }
+
+    match write_file_to_disk(vault_path, server)? {
+        WriteOutcome::Written => {
+            tracker.update(&server.id, &signal_of(server));
+            tracing::info!(
+                "Moved credential {} to {} and wrote the newer bytes (ID: {})",
+                local.path,
+                server.path,
+                id
+            );
+            Ok(Outcome::Downloaded)
+        }
+        WriteOutcome::SkippedBinary => {
+            tracker.update(&local.id, &signal_of(local));
+            tracing::warn!(
+                "Credential {} was moved to {} but its bytes were refused (ID: {})",
+                local.path,
                 server.path,
                 id
             );
@@ -854,6 +934,178 @@ mod tests {
         assert_eq!(std::fs::read(vault.join("secret.gpg")).unwrap(), ciphertext);
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn credential_server_file(id: &str, path: &str, modified_time: u64) -> SpaceFile {
+        let content = crate::writer::tests::valid_row_content();
+        SpaceFile::new(
+            id.to_string(),
+            path.to_string(),
+            content,
+            0,
+            modified_time,
+            modified_time,
+        )
+    }
+
+    fn gpg_count(store: &Path) -> usize {
+        walkdir::WalkDir::new(store)
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.file_type().is_file()
+                    && e.path().extension().and_then(|x| x.to_str()) == Some("gpg")
+            })
+            .count()
+    }
+
+    #[test]
+    fn a_newer_credential_row_at_a_diverged_path_leaves_the_bytes_at_exactly_one_name() {
+        let dir = temp_dir("cred-orphan");
+        let vault = dir.join("vault");
+        std::fs::create_dir_all(&vault).unwrap();
+        crate::writer::tests::seed_store(&vault);
+        let store = vault.join(".password-store");
+
+        let old_rel = ".password-store/a.com/old.gpg";
+        let new_rel = ".password-store/a.com/new.gpg";
+        let original = crate::writer::tests::valid_ciphertext();
+        std::fs::create_dir_all(store.join("a.com")).unwrap();
+        std::fs::write(vault.join(old_rel), &original).unwrap();
+        assert_eq!(gpg_count(&store), 1);
+
+        let tracker = ContentTracker::new();
+        let local = credential_server_file(ID_A, old_rel, 1000);
+        let server = credential_server_file(ID_A, new_rel, 2000);
+
+        let outcome = download_newer(&vault, &tracker, &local, &server, ID_A).unwrap();
+
+        assert!(matches!(outcome, Outcome::Downloaded));
+        assert_eq!(
+            gpg_count(&store),
+            1,
+            "behaviour 40: the bytes end at exactly one name, never both"
+        );
+        assert!(
+            !vault.join(old_rel).exists(),
+            "no orphan is left at the old name"
+        );
+        assert_eq!(
+            std::fs::read(vault.join(new_rel)).unwrap(),
+            crate::writer::tests::valid_ciphertext()
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_diverged_credential_row_with_invalid_content_leaves_the_local_bytes_alone() {
+        let dir = temp_dir("cred-orphan-invalid");
+        let vault = dir.join("vault");
+        std::fs::create_dir_all(&vault).unwrap();
+        crate::writer::tests::seed_store(&vault);
+        let store = vault.join(".password-store");
+
+        let old_rel = ".password-store/a.com/old.gpg";
+        let new_rel = ".password-store/a.com/new.gpg";
+        let original = crate::writer::tests::valid_ciphertext();
+        std::fs::create_dir_all(store.join("a.com")).unwrap();
+        std::fs::write(vault.join(old_rel), &original).unwrap();
+
+        let tracker = ContentTracker::new();
+        let local = credential_server_file(ID_A, old_rel, 1000);
+        let mut server = credential_server_file(ID_A, new_rel, 2000);
+        server.content = crate::scanner::encode_binary_content(b"not openpgp");
+
+        let outcome = download_newer(&vault, &tracker, &local, &server, ID_A).unwrap();
+
+        assert!(matches!(outcome, Outcome::SkippedBinary));
+        assert_eq!(gpg_count(&store), 1);
+        assert_eq!(std::fs::read(vault.join(old_rel)).unwrap(), original);
+        assert!(!vault.join(new_rel).exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_diverged_credential_row_onto_an_occupied_destination_is_refused() {
+        let dir = temp_dir("cred-orphan-occupied");
+        let vault = dir.join("vault");
+        std::fs::create_dir_all(&vault).unwrap();
+        crate::writer::tests::seed_store(&vault);
+        let store = vault.join(".password-store");
+
+        let old_rel = ".password-store/a.com/old.gpg";
+        let new_rel = ".password-store/a.com/new.gpg";
+        let original = crate::writer::tests::valid_ciphertext();
+        let occupant: &[u8] = &[0x99, 0x01, 0x02];
+        std::fs::create_dir_all(store.join("a.com")).unwrap();
+        std::fs::write(vault.join(old_rel), &original).unwrap();
+        std::fs::write(vault.join(new_rel), occupant).unwrap();
+
+        let tracker = ContentTracker::new();
+        let local = credential_server_file(ID_A, old_rel, 1000);
+        let server = credential_server_file(ID_A, new_rel, 2000);
+
+        let outcome = download_newer(&vault, &tracker, &local, &server, ID_A).unwrap();
+
+        assert!(matches!(outcome, Outcome::SkippedBinary));
+        assert_eq!(std::fs::read(vault.join(old_rel)).unwrap(), original);
+        assert_eq!(std::fs::read(vault.join(new_rel)).unwrap(), occupant);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_same_path_newer_credential_row_still_writes_normally() {
+        let dir = temp_dir("cred-same-path");
+        let vault = dir.join("vault");
+        std::fs::create_dir_all(&vault).unwrap();
+        crate::writer::tests::seed_store(&vault);
+
+        let rel = ".password-store/a.com/user.gpg";
+        std::fs::create_dir_all(vault.join(".password-store/a.com")).unwrap();
+        std::fs::write(vault.join(rel), b"older bytes").unwrap();
+
+        let tracker = ContentTracker::new();
+        let local = credential_server_file(ID_A, rel, 1000);
+        let server = credential_server_file(ID_A, rel, 2000);
+
+        let outcome = download_newer(&vault, &tracker, &local, &server, ID_A).unwrap();
+
+        assert!(matches!(outcome, Outcome::Downloaded));
+        assert_eq!(
+            std::fs::read(vault.join(rel)).unwrap(),
+            crate::writer::tests::valid_ciphertext()
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_vault_deleted_credential_is_never_resurrected_from_a_newer_row() {
+        let mut row = fabricated_record(ID_A, ".password-store/a.com/u.gpg", "deadbeef", 4, 1);
+        row.modified_time = 1000;
+        let server = credential_server_file(ID_A, ".password-store/a.com/u.gpg", 5000);
+
+        assert_eq!(
+            decide_orphan(&row, Some(&server)),
+            OrphanDecision::PropagateDelete,
+            "behaviour 39: a credential is removed only by a person at the vault"
+        );
+    }
+
+    #[test]
+    fn a_vault_deleted_note_is_still_resurrected_from_a_newer_row() {
+        let mut row = fabricated_record(ID_A, "notes/a.md", "deadbeef", 4, 1);
+        row.modified_time = 1000;
+        let server = server_file(ID_A, "notes/a.md", 5000);
+
+        assert_eq!(
+            decide_orphan(&row, Some(&server)),
+            OrphanDecision::Resurrect,
+            "the carve-out is scoped to credentials, not to every file"
+        );
     }
 
     #[test]
