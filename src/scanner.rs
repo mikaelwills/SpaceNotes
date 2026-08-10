@@ -66,6 +66,13 @@ pub fn encode_binary_content(bytes: &[u8]) -> String {
     base64::engine::general_purpose::STANDARD.encode(bytes)
 }
 
+pub fn decode_binary_content(content: &str) -> Result<Vec<u8>> {
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD
+        .decode(content)
+        .map_err(|e| anyhow::anyhow!("Content is not valid base64: {e}"))
+}
+
 pub fn find_binary_under(dir: &Path) -> Option<std::path::PathBuf> {
     WalkDir::new(dir)
         .into_iter()
