@@ -12,6 +12,7 @@ services:
     volumes:
       - /path/to/your/notes:/vault  # Edit this to your notes folder
       - spacetimedb-data:/var/lib/spacetimedb
+      - spacetime-config:/root/.config/spacetime  # Persists the publish identity across recreates
       - opencode-config:/config
       - spacenotes-daemon-data:/data
     environment:
@@ -32,5 +33,6 @@ services:
 
 volumes:
   spacetimedb-data:
+  spacetime-config:
   opencode-config:
   spacenotes-daemon-data:

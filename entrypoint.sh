@@ -32,9 +32,13 @@ for i in {1..30}; do
     sleep 1
 done
 
-# Publish the pre-built WASM module
+if ! grep -q "^spacetimedb_token" /root/.config/spacetime/cli.toml 2>/dev/null; then
+    echo "No stored identity - requesting server-issued login..."
+    spacetime login --server-issued-login local
+fi
+
 echo "Publishing SpacetimeDB module..."
-spacetime publish "$SPACETIME_DB" --server http://127.0.0.1:3000 -y --bin-path /opt/spacetime-module.wasm --anonymous || {
+spacetime publish "$SPACETIME_DB" --server local -y --bin-path /opt/spacetime-module.wasm || {
     echo "FATAL: module publish failed - refusing to serve a stale module"
     exit 1
 }
