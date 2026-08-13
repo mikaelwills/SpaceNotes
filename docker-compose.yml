@@ -13,26 +13,12 @@ services:
       - /path/to/your/notes:/vault  # Edit this to your notes folder
       - spacetimedb-data:/var/lib/spacetimedb
       - spacetime-config:/root/.config/spacetime  # Persists the publish identity across recreates
-      - opencode-config:/config
       - spacenotes-daemon-data:/data
     environment:
       - DATA_DIR=/data
     restart: unless-stopped
 
-  opencode:
-    image: ghcr.io/anomalyco/opencode:latest
-    container_name: opencode
-    ports:
-      - "5053:5053"
-    volumes:
-      - opencode-config:/root/.config/opencode:ro
-    command: ["serve", "--port", "5053", "--hostname", "0.0.0.0"]
-    restart: unless-stopped
-    depends_on:
-      - spacenotes
-
 volumes:
   spacetimedb-data:
   spacetime-config:
-  opencode-config:
   spacenotes-daemon-data:
