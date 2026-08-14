@@ -42,6 +42,8 @@ pub struct Folder {
 #[spacetimedb::table(accessor = connected_user, public)]
 pub struct ConnectedUser {
     #[primary_key]
+    pub connection_id: spacetimedb::ConnectionId,
+    #[index(btree)]
     pub identity: spacetimedb::Identity,
     pub connected_at: u64,
     pub name: String,
@@ -74,23 +76,38 @@ pub fn init(ctx: &ReducerContext) {
 
 #[spacetimedb::reducer(client_connected)]
 pub fn identity_connected(ctx: &ReducerContext) {
+    let Some(connection_id) = ctx.connection_id() else {
+        log::warn!("client_connected: no connection_id");
+        return;
+    };
     let saved_name = ctx.db.user_profile().identity().find(&ctx.sender())
         .map(|p| p.name)
         .unwrap_or_default();
-    ctx.db.connected_user().identity().delete(&ctx.sender());
+    ctx.db.connected_user().connection_id().delete(&connection_id);
     ctx.db.connected_user().insert(ConnectedUser {
+        connection_id,
         identity: ctx.sender(),
         connected_at: ctx.timestamp.to_duration_since_unix_epoch().unwrap_or_default().as_millis() as u64,
         name: saved_name,
     });
-    log::info!("Client connected: {:?}", ctx.sender());
+    log::info!("Client connected: {:?} conn {:?}", ctx.sender(), connection_id);
 }
 
 #[spacetimedb::reducer(client_disconnected)]
 pub fn identity_disconnected(ctx: &ReducerContext) {
     use call_reducers::{call_session, CallSession, CallState};
 
-    ctx.db.connected_user().identity().delete(&ctx.sender());
+    if let Some(connection_id) = ctx.connection_id() {
+        ctx.db.connected_user().connection_id().delete(&connection_id);
+    }
+
+    if ctx.db.connected_user().identity().filter(&ctx.sender()).next().is_some() {
+        log::info!(
+            "Client disconnected: {:?} still has another live connection, keeping calls",
+            ctx.sender()
+        );
+        return;
+    }
 
     for call in ctx.db.call_session().iter() {
         let dominated = call.caller == ctx.sender()
@@ -104,19 +121,23 @@ pub fn identity_disconnected(ctx: &ReducerContext) {
             });
         }
     }
-    log::info!("Client disconnected: {:?}", ctx.sender());
+    log::info!("Client fully disconnected: {:?}", ctx.sender());
 }
 
 #[spacetimedb::reducer]
 pub fn set_display_name(ctx: &ReducerContext, name: String) {
-    let Some(user) = ctx.db.connected_user().identity().find(&ctx.sender()) else {
+    let sessions: Vec<ConnectedUser> =
+        ctx.db.connected_user().identity().filter(&ctx.sender()).collect();
+    if sessions.is_empty() {
         log::warn!("set_display_name: user not found");
         return;
-    };
-    ctx.db.connected_user().identity().update(ConnectedUser {
-        name: name.clone(),
-        ..user
-    });
+    }
+    for session in sessions {
+        ctx.db.connected_user().connection_id().update(ConnectedUser {
+            name: name.clone(),
+            ..session
+        });
+    }
     if ctx.db.user_profile().identity().find(&ctx.sender()).is_some() {
         ctx.db.user_profile().identity().update(UserProfile {
             identity: ctx.sender(),
