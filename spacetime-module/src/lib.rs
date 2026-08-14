@@ -42,7 +42,7 @@ pub struct Folder {
 #[spacetimedb::table(accessor = connected_user, public)]
 pub struct ConnectedUser {
     #[primary_key]
-    pub connection_id: spacetimedb::ConnectionId,
+    pub connection_id: String,
     #[index(btree)]
     pub identity: spacetimedb::Identity,
     pub connected_at: u64,
@@ -76,7 +76,7 @@ pub fn init(ctx: &ReducerContext) {
 
 #[spacetimedb::reducer(client_connected)]
 pub fn identity_connected(ctx: &ReducerContext) {
-    let Some(connection_id) = ctx.connection_id() else {
+    let Some(connection_id) = ctx.connection_id().map(|c| c.to_hex().to_string()) else {
         log::warn!("client_connected: no connection_id");
         return;
     };
@@ -85,19 +85,19 @@ pub fn identity_connected(ctx: &ReducerContext) {
         .unwrap_or_default();
     ctx.db.connected_user().connection_id().delete(&connection_id);
     ctx.db.connected_user().insert(ConnectedUser {
-        connection_id,
+        connection_id: connection_id.clone(),
         identity: ctx.sender(),
         connected_at: ctx.timestamp.to_duration_since_unix_epoch().unwrap_or_default().as_millis() as u64,
         name: saved_name,
     });
-    log::info!("Client connected: {:?} conn {:?}", ctx.sender(), connection_id);
+    log::info!("Client connected: {:?} conn {}", ctx.sender(), connection_id);
 }
 
 #[spacetimedb::reducer(client_disconnected)]
 pub fn identity_disconnected(ctx: &ReducerContext) {
     use call_reducers::{call_session, CallSession, CallState};
 
-    if let Some(connection_id) = ctx.connection_id() {
+    if let Some(connection_id) = ctx.connection_id().map(|c| c.to_hex().to_string()) {
         ctx.db.connected_user().connection_id().delete(&connection_id);
     }
 
