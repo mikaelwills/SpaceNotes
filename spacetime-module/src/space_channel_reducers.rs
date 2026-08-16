@@ -1,9 +1,9 @@
 use spacetimedb::{ReducerContext, Table};
 
 use crate::space_channel_tables::{
-    message, message_image, permission_request, question_request, agent, agent_activity,
+    message, message_image, permission_request, question_request, agent, agent_activity, channel_config,
     tool_event, Message, MessageImage, PermissionRequest, QuestionRequest, Agent,
-    AgentActivity, ToolEvent, SweepSchedule,
+    AgentActivity, ToolEvent, SweepSchedule, ChannelConfig,
 };
 
 const MESSAGE_TTL_MICROS: i64 = 48 * 60 * 60 * 1_000_000;
@@ -553,4 +553,19 @@ pub fn clear_all_agents(ctx: &ReducerContext) {
         permission_ids.len(),
         question_ids.len()
     );
+}
+
+#[spacetimedb::reducer]
+pub fn set_a2a_enabled(ctx: &ReducerContext, enabled: bool) {
+    if ctx.db.channel_config().id().find(0).is_some() {
+        ctx.db
+            .channel_config()
+            .id()
+            .update(ChannelConfig { id: 0, a2a_enabled: enabled });
+    } else {
+        ctx.db
+            .channel_config()
+            .insert(ChannelConfig { id: 0, a2a_enabled: enabled });
+    }
+    log::info!("a2a_enabled set to {}", enabled);
 }

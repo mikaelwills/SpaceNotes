@@ -67,6 +67,7 @@ import ResolvePermissionReducer from "./resolve_permission_reducer";
 import RespondToQuestionReducer from "./respond_to_question_reducer";
 import SendAudioFrameReducer from "./send_audio_frame_reducer";
 import SendVideoFrameReducer from "./send_video_frame_reducer";
+import SetA2AEnabledReducer from "./set_a_2_a_enabled_reducer";
 import SetDisplayNameReducer from "./set_display_name_reducer";
 import UpdateFileContentReducer from "./update_file_content_reducer";
 import UpdateFilePathReducer from "./update_file_path_reducer";
@@ -80,6 +81,7 @@ import AgentRow from "./agent_table";
 import AgentActivityRow from "./agent_activity_table";
 import AudioFrameRow from "./audio_frame_table";
 import CallSessionRow from "./call_session_table";
+import ChannelConfigRow from "./channel_config_table";
 import ConnectedUserRow from "./connected_user_table";
 import FolderRow from "./folder_table";
 import MessageRow from "./message_table";
@@ -136,15 +138,29 @@ const tablesSchema = __schema({
       { name: 'call_session_call_id_key', constraint: 'unique', columns: ['callId'] },
     ],
   }, CallSessionRow),
+  channelConfig: __table({
+    name: 'channel_config',
+    indexes: [
+      { accessor: 'id', name: 'channel_config_id_idx_btree', algorithm: 'btree', columns: [
+        'id',
+      ] },
+    ],
+    constraints: [
+      { name: 'channel_config_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, ChannelConfigRow),
   connectedUser: __table({
     name: 'connected_user',
     indexes: [
+      { accessor: 'connection_id', name: 'connected_user_connection_id_idx_btree', algorithm: 'btree', columns: [
+        'connectionId',
+      ] },
       { accessor: 'identity', name: 'connected_user_identity_idx_btree', algorithm: 'btree', columns: [
         'identity',
       ] },
     ],
     constraints: [
-      { name: 'connected_user_identity_key', constraint: 'unique', columns: ['identity'] },
+      { name: 'connected_user_connection_id_key', constraint: 'unique', columns: ['connectionId'] },
     ],
   }, ConnectedUserRow),
   folder: __table({
@@ -302,6 +318,7 @@ const reducersSchema = __reducers(
   __reducerSchema("respond_to_question", RespondToQuestionReducer),
   __reducerSchema("send_audio_frame", SendAudioFrameReducer),
   __reducerSchema("send_video_frame", SendVideoFrameReducer),
+  __reducerSchema("set_a2a_enabled", SetA2AEnabledReducer),
   __reducerSchema("set_display_name", SetDisplayNameReducer),
   __reducerSchema("update_file_content", UpdateFileContentReducer),
   __reducerSchema("update_file_path", UpdateFilePathReducer),
@@ -321,6 +338,8 @@ type __SchemaWithTableAccessorAliases = Omit<typeof tablesSchema.schemaType, "ta
     readonly "audio_frame": Omit<typeof tablesSchema.schemaType.tables["audioFrame"], "accessorName"> & { readonly accessorName: "audio_frame" };
     /** @deprecated Use `callSession` instead. This alias will be removed in the next major version. */
     readonly "call_session": Omit<typeof tablesSchema.schemaType.tables["callSession"], "accessorName"> & { readonly accessorName: "call_session" };
+    /** @deprecated Use `channelConfig` instead. This alias will be removed in the next major version. */
+    readonly "channel_config": Omit<typeof tablesSchema.schemaType.tables["channelConfig"], "accessorName"> & { readonly accessorName: "channel_config" };
     /** @deprecated Use `connectedUser` instead. This alias will be removed in the next major version. */
     readonly "connected_user": Omit<typeof tablesSchema.schemaType.tables["connectedUser"], "accessorName"> & { readonly accessorName: "connected_user" };
     /** @deprecated Use `messageImage` instead. This alias will be removed in the next major version. */
@@ -358,6 +377,7 @@ const tableAccessorAliases = {
   "agent_activity": "agentActivity",
   "audio_frame": "audioFrame",
   "call_session": "callSession",
+  "channel_config": "channelConfig",
   "connected_user": "connectedUser",
   "message_image": "messageImage",
   "permission_request": "permissionRequest",
@@ -392,6 +412,8 @@ export type DbView = __DbViewBase & {
   readonly "audio_frame": __DbViewBase["audioFrame"];
   /** @deprecated Use `callSession` instead. This alias will be removed in the next major version. */
   readonly "call_session": __DbViewBase["callSession"];
+  /** @deprecated Use `channelConfig` instead. This alias will be removed in the next major version. */
+  readonly "channel_config": __DbViewBase["channelConfig"];
   /** @deprecated Use `connectedUser` instead. This alias will be removed in the next major version. */
   readonly "connected_user": __DbViewBase["connectedUser"];
   /** @deprecated Use `messageImage` instead. This alias will be removed in the next major version. */
@@ -418,6 +440,8 @@ export type Tables = __TablesBase & {
   readonly "audio_frame": __TablesBase["audioFrame"];
   /** @deprecated Use `callSession` instead. This alias will be removed in the next major version. */
   readonly "call_session": __TablesBase["callSession"];
+  /** @deprecated Use `channelConfig` instead. This alias will be removed in the next major version. */
+  readonly "channel_config": __TablesBase["channelConfig"];
   /** @deprecated Use `connectedUser` instead. This alias will be removed in the next major version. */
   readonly "connected_user": __TablesBase["connectedUser"];
   /** @deprecated Use `messageImage` instead. This alias will be removed in the next major version. */

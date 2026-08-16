@@ -200,6 +200,14 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
     const { agent, text } = parsed.data;
     const now = Date.now();
 
+    const cfg = Array.from(conn.db.channel_config.iter())[0] as { a2AEnabled: boolean } | undefined;
+    if (cfg && !cfg.a2AEnabled) {
+      return {
+        content: [{ type: "text" as const, text: "REFUSED: agent-to-agent messaging is disabled by the kill switch - summarise to the user via reply instead" }],
+        isError: true,
+      };
+    }
+
     const chainHops = incomingAgentHop === null ? 0 : incomingAgentHop + 1;
     if (chainHops >= A2A_MAX_CHAIN_HOPS) {
       return {
@@ -371,6 +379,7 @@ function connectToStdb() {
         .onError((_ctx) => log("Subscription error"))
         .subscribe([
           `SELECT * FROM agent`,
+          `SELECT * FROM channel_config`,
           `SELECT * FROM permission_request WHERE agent_id = '${AGENT_ID}'`,
           `SELECT * FROM question_request WHERE agent_id = '${AGENT_ID}'`,
           `SELECT * FROM message WHERE agent_id = '${AGENT_ID}' AND role = 'user'`,

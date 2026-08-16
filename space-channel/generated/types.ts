@@ -56,7 +56,14 @@ export const CallState = __t.enum("CallState", {
 });
 export type CallState = __Infer<typeof CallState>;
 
+export const ChannelConfig = __t.object("ChannelConfig", {
+  id: __t.u32(),
+  a2AEnabled: __t.bool(),
+});
+export type ChannelConfig = __Infer<typeof ChannelConfig>;
+
 export const ConnectedUser = __t.object("ConnectedUser", {
+  connectionId: __t.string(),
   identity: __t.identity(),
   connectedAt: __t.u64(),
   name: __t.string(),

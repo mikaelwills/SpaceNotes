@@ -11,8 +11,6 @@ import {
 } from "spacetimedb";
 
 export default __t.row({
-  connectionId: __t.string().primaryKey().name("connection_id"),
-  identity: __t.identity(),
-  connectedAt: __t.u64().name("connected_at"),
-  name: __t.string(),
+  id: __t.u32().primaryKey(),
+  a2AEnabled: __t.bool().name("a_2_a_enabled"),
 });

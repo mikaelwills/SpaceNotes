@@ -94,3 +94,10 @@ pub struct QuestionRequest {
     pub created_at: Timestamp,
     pub resolved_at: Option<Timestamp>,
 }
+
+#[spacetimedb::table(accessor = channel_config, public)]
+pub struct ChannelConfig {
+    #[primary_key]
+    pub id: u32,
+    pub a2a_enabled: bool,
+}
