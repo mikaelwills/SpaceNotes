@@ -71,6 +71,16 @@ pub fn init(ctx: &ReducerContext) {
         });
     }
 
+    {
+        use space_channel_tables::{channel_config, ChannelConfig};
+        if ctx.db.channel_config().id().find(0).is_none() {
+            ctx.db.channel_config().insert(ChannelConfig {
+                id: 0,
+                a2a_enabled: true,
+            });
+        }
+    }
+
     log::info!("SpaceNotes module initialized");
 }
 
