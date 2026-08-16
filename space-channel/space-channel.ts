@@ -111,6 +111,13 @@ const SendToAgentArgsSchema = z
   .object({ agent: z.string().min(1), text: z.string().min(1) })
   .strict();
 
+const A2A_TARGET_COOLDOWN_MS = 60_000;
+const A2A_HOURLY_LIMIT = 10;
+const A2A_MAX_CHAIN_HOPS = 4;
+const a2aSendTimes: number[] = [];
+const a2aLastSendToTarget = new Map<string, number>();
+let incomingAgentHop: number | null = null;
+
 mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
     {
@@ -129,7 +136,7 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: "send_to_agent",
       description:
-        "Send a message to another agent's channel. It arrives in that agent's Claude session like a user message, attributed to this agent. `agent` takes a base name (e.g. 'workflow-agent') which resolves against the live agent registry, or a full id ('name@host') when the agent runs on several machines — an ambiguous name fails with the candidate ids, an unknown name fails with the registered list. The target must have a running session to receive it.",
+        "Send a message to another agent's channel. It arrives in that agent's Claude session like a user message, attributed to this agent. `agent` takes a base name (e.g. 'workflow-agent') which resolves against the live agent registry, or a full id ('name@host') when the agent runs on several machines — an ambiguous name fails with the candidate ids, an unknown name fails with the registered list. The target must have a running session to receive it. Hard limits enforced by the tool: 60s cooldown per target, 10 agent messages per hour, and reply chains cap at 4 hops - when refused, summarise to the user via reply instead of retrying.",
       inputSchema: {
         type: "object" as const,
         properties: {
@@ -191,6 +198,24 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
       };
     }
     const { agent, text } = parsed.data;
+    const now = Date.now();
+
+    const chainHops = incomingAgentHop === null ? 0 : incomingAgentHop + 1;
+    if (chainHops >= A2A_MAX_CHAIN_HOPS) {
+      return {
+        content: [{ type: "text" as const, text: `REFUSED: agent reply chain reached ${A2A_MAX_CHAIN_HOPS} hops - stop messaging agents and summarise the exchange to the user via reply instead` }],
+        isError: true,
+      };
+    }
+
+    while (a2aSendTimes.length > 0 && now - a2aSendTimes[0]! > 3_600_000) a2aSendTimes.shift();
+    if (a2aSendTimes.length >= A2A_HOURLY_LIMIT) {
+      return {
+        content: [{ type: "text" as const, text: `REFUSED: rate limited - ${A2A_HOURLY_LIMIT} agent messages per hour already sent; summarise to the user via reply instead` }],
+        isError: true,
+      };
+    }
+
     const registry = Array.from(conn.db.agent.iter()) as Array<{ id: string; baseName: string }>;
     let target = agent;
     if (!registry.some((a) => a.id === agent)) {
@@ -211,10 +236,21 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
         };
       }
     }
-    const id = `a2a-${Date.now()}`;
+    const lastToTarget = a2aLastSendToTarget.get(target);
+    if (lastToTarget !== undefined && now - lastToTarget < A2A_TARGET_COOLDOWN_MS) {
+      const wait = Math.ceil((A2A_TARGET_COOLDOWN_MS - (now - lastToTarget)) / 1000);
+      return {
+        content: [{ type: "text" as const, text: `REFUSED: rate limited - already messaged ${target} in the last 60s, retry in ${wait}s or batch your points into one message` }],
+        isError: true,
+      };
+    }
+
+    const id = `a2a-${chainHops}-${now}`;
     try {
       await conn.reducers.pushMessage({ id, agentId: target, role: "user", text, source: `agent:${AGENT_ID}` });
-      return { content: [{ type: "text" as const, text: `sent to ${target} (id: ${id})` }] };
+      a2aSendTimes.push(now);
+      a2aLastSendToTarget.set(target, now);
+      return { content: [{ type: "text" as const, text: `sent to ${target} (id: ${id}, chain hop ${chainHops})` }] };
     } catch (e) {
       return { content: [{ type: "text" as const, text: `FAILED: ${e}` }], isError: true };
     }
@@ -423,6 +459,13 @@ function handleIncomingMessage(row: Message) {
   if (row.role !== "user" || (row.source !== "flutter" && !fromAgent)) {
     log(`handleIncomingMessage skipping id=${row.id} (role/source filter)`);
     return;
+  }
+
+  if (fromAgent) {
+    const hopMatch = row.id.match(/^a2a-(\d+)-/);
+    incomingAgentHop = hopMatch ? parseInt(hopMatch[1]!, 10) : 0;
+  } else {
+    incomingAgentHop = null;
   }
 
   lastInputSource = "flutter";
