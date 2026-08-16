@@ -129,11 +129,11 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: "send_to_agent",
       description:
-        "Send a message to another agent's channel. It arrives in that agent's Claude session like a user message, attributed to this agent. `agent` is the full agent id (e.g. 'workflow-agent@Robert'); the target must have a running session to receive it.",
+        "Send a message to another agent's channel. It arrives in that agent's Claude session like a user message, attributed to this agent. `agent` takes a base name (e.g. 'workflow-agent') which resolves against the live agent registry, or a full id ('name@host') when the agent runs on several machines — an ambiguous name fails with the candidate ids, an unknown name fails with the registered list. The target must have a running session to receive it.",
       inputSchema: {
         type: "object" as const,
         properties: {
-          agent: { type: "string", description: "Target agent id, e.g. 'workflow-agent@Robert'" },
+          agent: { type: "string", description: "Target agent base name (e.g. 'workflow-agent') or full id ('name@host') when it runs on several machines" },
           text: { type: "string", description: "The message to send" },
         },
         required: ["agent", "text"],
@@ -191,10 +191,30 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
       };
     }
     const { agent, text } = parsed.data;
+    const registry = Array.from(conn.db.agent.iter()) as Array<{ id: string; baseName: string }>;
+    let target = agent;
+    if (!registry.some((a) => a.id === agent)) {
+      const matches = registry.filter((a) => a.baseName === agent);
+      if (matches.length === 1) {
+        target = matches[0]!.id;
+      } else if (matches.length > 1) {
+        const list = matches.map((a) => a.id).join(", ");
+        return {
+          content: [{ type: "text" as const, text: `FAILED: '${agent}' runs on multiple hosts — specify one of: ${list}` }],
+          isError: true,
+        };
+      } else {
+        const known = registry.map((a) => a.id).join(", ") || "none registered";
+        return {
+          content: [{ type: "text" as const, text: `FAILED: unknown agent '${agent}'. Registered agents: ${known}` }],
+          isError: true,
+        };
+      }
+    }
     const id = `a2a-${Date.now()}`;
     try {
-      await conn.reducers.pushMessage({ id, agentId: agent, role: "user", text, source: `agent:${AGENT_ID}` });
-      return { content: [{ type: "text" as const, text: `sent to ${agent} (id: ${id})` }] };
+      await conn.reducers.pushMessage({ id, agentId: target, role: "user", text, source: `agent:${AGENT_ID}` });
+      return { content: [{ type: "text" as const, text: `sent to ${target} (id: ${id})` }] };
     } catch (e) {
       return { content: [{ type: "text" as const, text: `FAILED: ${e}` }], isError: true };
     }
@@ -314,6 +334,7 @@ function connectToStdb() {
         .onApplied(() => log("Subscriptions applied"))
         .onError((_ctx) => log("Subscription error"))
         .subscribe([
+          `SELECT * FROM agent`,
           `SELECT * FROM permission_request WHERE agent_id = '${AGENT_ID}'`,
           `SELECT * FROM question_request WHERE agent_id = '${AGENT_ID}'`,
           `SELECT * FROM message WHERE agent_id = '${AGENT_ID}' AND role = 'user'`,
