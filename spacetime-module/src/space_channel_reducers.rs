@@ -557,15 +557,51 @@ pub fn clear_all_agents(ctx: &ReducerContext) {
 
 #[spacetimedb::reducer]
 pub fn set_a2a_enabled(ctx: &ReducerContext, enabled: bool) {
-    if ctx.db.channel_config().id().find(0).is_some() {
-        ctx.db
-            .channel_config()
-            .id()
-            .update(ChannelConfig { id: 0, a2a_enabled: enabled });
-    } else {
-        ctx.db
-            .channel_config()
-            .insert(ChannelConfig { id: 0, a2a_enabled: enabled });
+    match ctx.db.channel_config().id().find(0) {
+        Some(cfg) => {
+            ctx.db
+                .channel_config()
+                .id()
+                .update(ChannelConfig { a2a_enabled: enabled, ..cfg });
+        }
+        None => {
+            ctx.db.channel_config().insert(ChannelConfig {
+                id: 0,
+                a2a_enabled: enabled,
+                a2a_cooldown_secs: 0,
+                a2a_hourly_limit: 0,
+                a2a_max_hops: 4,
+            });
+        }
     }
     log::info!("a2a_enabled set to {}", enabled);
+}
+
+#[spacetimedb::reducer]
+pub fn set_a2a_limits(ctx: &ReducerContext, cooldown_secs: u32, hourly_limit: u32, max_hops: u32) {
+    match ctx.db.channel_config().id().find(0) {
+        Some(cfg) => {
+            ctx.db.channel_config().id().update(ChannelConfig {
+                a2a_cooldown_secs: cooldown_secs,
+                a2a_hourly_limit: hourly_limit,
+                a2a_max_hops: max_hops,
+                ..cfg
+            });
+        }
+        None => {
+            ctx.db.channel_config().insert(ChannelConfig {
+                id: 0,
+                a2a_enabled: true,
+                a2a_cooldown_secs: cooldown_secs,
+                a2a_hourly_limit: hourly_limit,
+                a2a_max_hops: max_hops,
+            });
+        }
+    }
+    log::info!(
+        "a2a limits set: cooldown={}s hourly={} max_hops={}",
+        cooldown_secs,
+        hourly_limit,
+        max_hops
+    );
 }

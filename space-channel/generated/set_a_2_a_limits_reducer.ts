@@ -10,10 +10,8 @@ import {
   type Infer as __Infer,
 } from "spacetimedb";
 
-export default __t.row({
-  id: __t.u32().primaryKey(),
-  a2AEnabled: __t.bool().name("a_2_a_enabled"),
-  a2ACooldownSecs: __t.u32().name("a_2_a_cooldown_secs"),
-  a2AHourlyLimit: __t.u32().name("a_2_a_hourly_limit"),
-  a2AMaxHops: __t.u32().name("a_2_a_max_hops"),
-});
+export default {
+  cooldownSecs: __t.u32(),
+  hourlyLimit: __t.u32(),
+  maxHops: __t.u32(),
+};

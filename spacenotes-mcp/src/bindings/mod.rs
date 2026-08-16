@@ -18,6 +18,8 @@ pub mod audio_frame_type;
 pub mod call_session_table;
 pub mod call_session_type;
 pub mod call_state_type;
+pub mod channel_config_table;
+pub mod channel_config_type;
 pub mod clear_all_agents_reducer;
 pub mod clear_all_reducer;
 pub mod connected_user_table;
@@ -60,6 +62,8 @@ pub mod resolve_permission_reducer;
 pub mod respond_to_question_reducer;
 pub mod send_audio_frame_reducer;
 pub mod send_video_frame_reducer;
+pub mod set_a_2_a_enabled_reducer;
+pub mod set_a_2_a_limits_reducer;
 pub mod set_display_name_reducer;
 pub mod space_file_table;
 pub mod space_file_type;
@@ -87,6 +91,8 @@ pub use audio_frame_type::AudioFrame;
 pub use call_session_table::*;
 pub use call_session_type::CallSession;
 pub use call_state_type::CallState;
+pub use channel_config_table::*;
+pub use channel_config_type::ChannelConfig;
 pub use clear_all_agents_reducer::clear_all_agents;
 pub use clear_all_reducer::clear_all;
 pub use connected_user_table::*;
@@ -129,6 +135,8 @@ pub use resolve_permission_reducer::resolve_permission;
 pub use respond_to_question_reducer::respond_to_question;
 pub use send_audio_frame_reducer::send_audio_frame;
 pub use send_video_frame_reducer::send_video_frame;
+pub use set_a_2_a_enabled_reducer::set_a_2_a_enabled;
+pub use set_a_2_a_limits_reducer::set_a_2_a_limits;
 pub use set_display_name_reducer::set_display_name;
 pub use space_file_table::*;
 pub use space_file_type::SpaceFile;
@@ -297,6 +305,14 @@ pub enum Reducer {
         is_keyframe: bool,
         data: Vec<u8>,
     },
+    SetA2AEnabled {
+        enabled: bool,
+    },
+    SetA2ALimits {
+        cooldown_secs: u32,
+        hourly_limit: u32,
+        max_hops: u32,
+    },
     SetDisplayName {
         name: String,
     },
@@ -369,6 +385,8 @@ impl __sdk::Reducer for Reducer {
             Reducer::RespondToQuestion { .. } => "respond_to_question",
             Reducer::SendAudioFrame { .. } => "send_audio_frame",
             Reducer::SendVideoFrame { .. } => "send_video_frame",
+            Reducer::SetA2AEnabled { .. } => "set_a2a_enabled",
+            Reducer::SetA2ALimits { .. } => "set_a2a_limits",
             Reducer::SetDisplayName { .. } => "set_display_name",
             Reducer::UpdateFileContent { .. } => "update_file_content",
             Reducer::UpdateFilePath { .. } => "update_file_path",
@@ -624,6 +642,20 @@ impl __sdk::Reducer for Reducer {
                 is_keyframe: is_keyframe.clone(),
                 data: data.clone(),
             }),
+            Reducer::SetA2AEnabled { enabled } => {
+                __sats::bsatn::to_vec(&set_a_2_a_enabled_reducer::SetA2AEnabledArgs {
+                    enabled: enabled.clone(),
+                })
+            }
+            Reducer::SetA2ALimits {
+                cooldown_secs,
+                hourly_limit,
+                max_hops,
+            } => __sats::bsatn::to_vec(&set_a_2_a_limits_reducer::SetA2ALimitsArgs {
+                cooldown_secs: cooldown_secs.clone(),
+                hourly_limit: hourly_limit.clone(),
+                max_hops: max_hops.clone(),
+            }),
             Reducer::SetDisplayName { name } => {
                 __sats::bsatn::to_vec(&set_display_name_reducer::SetDisplayNameArgs {
                     name: name.clone(),
@@ -689,6 +721,7 @@ pub struct DbUpdate {
     agent_activity: __sdk::TableUpdate<AgentActivity>,
     audio_frame: __sdk::TableUpdate<AudioFrame>,
     call_session: __sdk::TableUpdate<CallSession>,
+    channel_config: __sdk::TableUpdate<ChannelConfig>,
     connected_user: __sdk::TableUpdate<ConnectedUser>,
     folder: __sdk::TableUpdate<Folder>,
     message: __sdk::TableUpdate<Message>,
@@ -719,6 +752,9 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "call_session" => db_update
                     .call_session
                     .append(call_session_table::parse_table_update(table_update)?),
+                "channel_config" => db_update
+                    .channel_config
+                    .append(channel_config_table::parse_table_update(table_update)?),
                 "connected_user" => db_update
                     .connected_user
                     .append(connected_user_table::parse_table_update(table_update)?),
@@ -785,9 +821,12 @@ impl __sdk::DbUpdate for DbUpdate {
         diff.call_session = cache
             .apply_diff_to_table::<CallSession>("call_session", &self.call_session)
             .with_updates_by_pk(|row| &row.call_id);
+        diff.channel_config = cache
+            .apply_diff_to_table::<ChannelConfig>("channel_config", &self.channel_config)
+            .with_updates_by_pk(|row| &row.id);
         diff.connected_user = cache
             .apply_diff_to_table::<ConnectedUser>("connected_user", &self.connected_user)
-            .with_updates_by_pk(|row| &row.identity);
+            .with_updates_by_pk(|row| &row.connection_id);
         diff.folder = cache
             .apply_diff_to_table::<Folder>("folder", &self.folder)
             .with_updates_by_pk(|row| &row.path);
@@ -834,6 +873,9 @@ impl __sdk::DbUpdate for DbUpdate {
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "call_session" => db_update
                     .call_session
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "channel_config" => db_update
+                    .channel_config
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "connected_user" => db_update
                     .connected_user
@@ -890,6 +932,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "call_session" => db_update
                     .call_session
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "channel_config" => db_update
+                    .channel_config
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "connected_user" => db_update
                     .connected_user
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -939,6 +984,7 @@ pub struct AppliedDiff<'r> {
     agent_activity: __sdk::TableAppliedDiff<'r, AgentActivity>,
     audio_frame: __sdk::TableAppliedDiff<'r, AudioFrame>,
     call_session: __sdk::TableAppliedDiff<'r, CallSession>,
+    channel_config: __sdk::TableAppliedDiff<'r, ChannelConfig>,
     connected_user: __sdk::TableAppliedDiff<'r, ConnectedUser>,
     folder: __sdk::TableAppliedDiff<'r, Folder>,
     message: __sdk::TableAppliedDiff<'r, Message>,
@@ -972,6 +1018,11 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
         callbacks.invoke_table_row_callbacks::<CallSession>(
             "call_session",
             &self.call_session,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<ChannelConfig>(
+            "channel_config",
+            &self.channel_config,
             event,
         );
         callbacks.invoke_table_row_callbacks::<ConnectedUser>(
@@ -1668,6 +1719,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         agent_activity_table::register_table(client_cache);
         audio_frame_table::register_table(client_cache);
         call_session_table::register_table(client_cache);
+        channel_config_table::register_table(client_cache);
         connected_user_table::register_table(client_cache);
         folder_table::register_table(client_cache);
         message_table::register_table(client_cache);
@@ -1684,6 +1736,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "agent_activity",
         "audio_frame",
         "call_session",
+        "channel_config",
         "connected_user",
         "folder",
         "message",

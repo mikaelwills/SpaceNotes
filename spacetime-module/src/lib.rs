@@ -77,6 +77,9 @@ pub fn init(ctx: &ReducerContext) {
             ctx.db.channel_config().insert(ChannelConfig {
                 id: 0,
                 a2a_enabled: true,
+                a2a_cooldown_secs: 0,
+                a2a_hourly_limit: 0,
+                a2a_max_hops: 4,
             });
         }
     }

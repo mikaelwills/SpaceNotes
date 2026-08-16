@@ -111,12 +111,12 @@ const SendToAgentArgsSchema = z
   .object({ agent: z.string().min(1), text: z.string().min(1) })
   .strict();
 
-const A2A_TARGET_COOLDOWN_MS = 60_000;
-const A2A_HOURLY_LIMIT = 10;
-const A2A_MAX_CHAIN_HOPS = 4;
+const A2A_DEFAULT_MAX_HOPS = 4;
+const A2A_HOP_DECAY_MS = 5 * 60_000;
 const a2aSendTimes: number[] = [];
 const a2aLastSendToTarget = new Map<string, number>();
 let incomingAgentHop: number | null = null;
+let incomingAgentHopAt = 0;
 
 mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
@@ -136,7 +136,7 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: "send_to_agent",
       description:
-        "Send a message to another agent's channel. It arrives in that agent's Claude session like a user message, attributed to this agent. `agent` takes a base name (e.g. 'workflow-agent') which resolves against the live agent registry, or a full id ('name@host') when the agent runs on several machines — an ambiguous name fails with the candidate ids, an unknown name fails with the registered list. The target must have a running session to receive it. Hard limits enforced by the tool: 60s cooldown per target, 10 agent messages per hour, and reply chains cap at 4 hops - when refused, summarise to the user via reply instead of retrying.",
+        "Send a message to another agent's channel. It arrives in that agent's Claude session like a user message, attributed to this agent. `agent` takes a base name (e.g. 'workflow-agent') which resolves against the live agent registry, or a full id ('name@host') when the agent runs on several machines — an ambiguous name fails with the candidate ids, an unknown name fails with the registered list. The target must have a running session to receive it. Limits (per-target cooldown, hourly cap, reply-chain hop cap) come from live channel_config and may be off - when refused, summarise to the user via reply instead of retrying.",
       inputSchema: {
         type: "object" as const,
         properties: {
@@ -200,7 +200,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
     const { agent, text } = parsed.data;
     const now = Date.now();
 
-    const cfg = Array.from(conn.db.channel_config.iter())[0] as { a2AEnabled: boolean } | undefined;
+    const cfg = Array.from(conn.db.channel_config.iter())[0] as { a2AEnabled: boolean; a2ACooldownSecs: number; a2AHourlyLimit: number; a2AMaxHops: number } | undefined;
     if (cfg && !cfg.a2AEnabled) {
       return {
         content: [{ type: "text" as const, text: "REFUSED: agent-to-agent messaging is disabled by the kill switch - summarise to the user via reply instead" }],
@@ -208,18 +208,26 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
       };
     }
 
-    const chainHops = incomingAgentHop === null ? 0 : incomingAgentHop + 1;
-    if (chainHops >= A2A_MAX_CHAIN_HOPS) {
+    const cooldownMs = (cfg?.a2ACooldownSecs ?? 0) * 1000;
+    const hourlyLimit = cfg?.a2AHourlyLimit ?? 0;
+    const maxHops = cfg?.a2AMaxHops ?? A2A_DEFAULT_MAX_HOPS;
+
+    const inheritedHop =
+      incomingAgentHop !== null && now - incomingAgentHopAt < A2A_HOP_DECAY_MS
+        ? incomingAgentHop
+        : null;
+    const chainHops = inheritedHop === null ? 0 : inheritedHop + 1;
+    if (maxHops > 0 && chainHops >= maxHops) {
       return {
-        content: [{ type: "text" as const, text: `REFUSED: agent reply chain reached ${A2A_MAX_CHAIN_HOPS} hops - stop messaging agents and summarise the exchange to the user via reply instead` }],
+        content: [{ type: "text" as const, text: `REFUSED: agent reply chain reached ${maxHops} hops - stop messaging agents and summarise the exchange to the user via reply instead` }],
         isError: true,
       };
     }
 
     while (a2aSendTimes.length > 0 && now - a2aSendTimes[0]! > 3_600_000) a2aSendTimes.shift();
-    if (a2aSendTimes.length >= A2A_HOURLY_LIMIT) {
+    if (hourlyLimit > 0 && a2aSendTimes.length >= hourlyLimit) {
       return {
-        content: [{ type: "text" as const, text: `REFUSED: rate limited - ${A2A_HOURLY_LIMIT} agent messages per hour already sent; summarise to the user via reply instead` }],
+        content: [{ type: "text" as const, text: `REFUSED: rate limited - ${hourlyLimit} agent messages per hour already sent; summarise to the user via reply instead` }],
         isError: true,
       };
     }
@@ -245,10 +253,10 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
       }
     }
     const lastToTarget = a2aLastSendToTarget.get(target);
-    if (lastToTarget !== undefined && now - lastToTarget < A2A_TARGET_COOLDOWN_MS) {
-      const wait = Math.ceil((A2A_TARGET_COOLDOWN_MS - (now - lastToTarget)) / 1000);
+    if (cooldownMs > 0 && lastToTarget !== undefined && now - lastToTarget < cooldownMs) {
+      const wait = Math.ceil((cooldownMs - (now - lastToTarget)) / 1000);
       return {
-        content: [{ type: "text" as const, text: `REFUSED: rate limited - already messaged ${target} in the last 60s, retry in ${wait}s or batch your points into one message` }],
+        content: [{ type: "text" as const, text: `REFUSED: rate limited - already messaged ${target} in the last ${cooldownMs / 1000}s, retry in ${wait}s or batch your points into one message` }],
         isError: true,
       };
     }
@@ -473,6 +481,7 @@ function handleIncomingMessage(row: Message) {
   if (fromAgent) {
     const hopMatch = row.id.match(/^a2a-(\d+)-/);
     incomingAgentHop = hopMatch ? parseInt(hopMatch[1]!, 10) : 0;
+    incomingAgentHopAt = Date.now();
   } else {
     incomingAgentHop = null;
   }
@@ -534,11 +543,14 @@ function emitMessage(message: Message, image?: MessageImage) {
     }
   }
 
-  const content = message.text.trim().length > 0
+  let content = message.text.trim().length > 0
     ? message.text
     : image
       ? "(image)"
       : message.text;
+  if (message.source.startsWith("agent:")) {
+    content += `\n\n(a2a message from agent '${meta.user}' — to answer THEM use send_to_agent('${meta.user}'); the reply tool goes to your own human's chat, not to them)`;
+  }
 
   log(`emitMessage sending mcp notification message_id=${message.id} content_len=${content.length}`);
   mcp.notification({

@@ -100,4 +100,7 @@ pub struct ChannelConfig {
     #[primary_key]
     pub id: u32,
     pub a2a_enabled: bool,
+    pub a2a_cooldown_secs: u32,
+    pub a2a_hourly_limit: u32,
+    pub a2a_max_hops: u32,
 }

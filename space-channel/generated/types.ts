@@ -59,6 +59,9 @@ export type CallState = __Infer<typeof CallState>;
 export const ChannelConfig = __t.object("ChannelConfig", {
   id: __t.u32(),
   a2AEnabled: __t.bool(),
+  a2ACooldownSecs: __t.u32(),
+  a2AHourlyLimit: __t.u32(),
+  a2AMaxHops: __t.u32(),
 });
 export type ChannelConfig = __Infer<typeof ChannelConfig>;
 

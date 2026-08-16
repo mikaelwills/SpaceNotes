@@ -68,6 +68,7 @@ import RespondToQuestionReducer from "./respond_to_question_reducer";
 import SendAudioFrameReducer from "./send_audio_frame_reducer";
 import SendVideoFrameReducer from "./send_video_frame_reducer";
 import SetA2AEnabledReducer from "./set_a_2_a_enabled_reducer";
+import SetA2ALimitsReducer from "./set_a_2_a_limits_reducer";
 import SetDisplayNameReducer from "./set_display_name_reducer";
 import UpdateFileContentReducer from "./update_file_content_reducer";
 import UpdateFilePathReducer from "./update_file_path_reducer";
@@ -319,6 +320,7 @@ const reducersSchema = __reducers(
   __reducerSchema("send_audio_frame", SendAudioFrameReducer),
   __reducerSchema("send_video_frame", SendVideoFrameReducer),
   __reducerSchema("set_a2a_enabled", SetA2AEnabledReducer),
+  __reducerSchema("set_a2a_limits", SetA2ALimitsReducer),
   __reducerSchema("set_display_name", SetDisplayNameReducer),
   __reducerSchema("update_file_content", UpdateFileContentReducer),
   __reducerSchema("update_file_path", UpdateFilePathReducer),
