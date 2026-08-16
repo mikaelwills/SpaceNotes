@@ -89,6 +89,7 @@ const mcp = new Server(
       'Messages from the user arrive as <channel source="space-channel" ...>.',
       "If the tag has a file_path attribute, Read that file — it is an image from the user.",
       "Reply using the reply tool. Use edit_message to update a previous reply by id.",
+      "Use send_to_agent to message another agent's channel directly; it arrives in their session like a user message, attributed to you.",
     ].join(" "),
   }
 );
@@ -106,6 +107,9 @@ const ReplyArgsSchema = z.object({ text: z.string().min(1) }).strict();
 const EditMessageArgsSchema = z
   .object({ id: z.string().min(1), text: z.string().min(1) })
   .strict();
+const SendToAgentArgsSchema = z
+  .object({ agent: z.string().min(1), text: z.string().min(1) })
+  .strict();
 
 mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
@@ -119,6 +123,20 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
           text: { type: "string", description: "The message to send" },
         },
         required: ["text"],
+        additionalProperties: false,
+      },
+    },
+    {
+      name: "send_to_agent",
+      description:
+        "Send a message to another agent's channel. It arrives in that agent's Claude session like a user message, attributed to this agent. `agent` is the full agent id (e.g. 'workflow-agent@Robert'); the target must have a running session to receive it.",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          agent: { type: "string", description: "Target agent id, e.g. 'workflow-agent@Robert'" },
+          text: { type: "string", description: "The message to send" },
+        },
+        required: ["agent", "text"],
         additionalProperties: false,
       },
     },
@@ -159,6 +177,24 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
       lastKnownState = "idle";
       await conn.reducers.pushStatus({ agentId: AGENT_ID, state: "idle" });
       return { content: [{ type: "text" as const, text: `sent (id: ${id})` }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: `FAILED: ${e}` }], isError: true };
+    }
+  }
+
+  if (req.params.name === "send_to_agent") {
+    const parsed = SendToAgentArgsSchema.safeParse(req.params.arguments);
+    if (!parsed.success) {
+      return {
+        content: [{ type: "text" as const, text: `FAILED: invalid arguments for send_to_agent — ${describeZodError(parsed.error)}` }],
+        isError: true,
+      };
+    }
+    const { agent, text } = parsed.data;
+    const id = `a2a-${Date.now()}`;
+    try {
+      await conn.reducers.pushMessage({ id, agentId: agent, role: "user", text, source: `agent:${AGENT_ID}` });
+      return { content: [{ type: "text" as const, text: `sent to ${agent} (id: ${id})` }] };
     } catch (e) {
       return { content: [{ type: "text" as const, text: `FAILED: ${e}` }], isError: true };
     }
@@ -280,8 +316,8 @@ function connectToStdb() {
         .subscribe([
           `SELECT * FROM permission_request WHERE agent_id = '${AGENT_ID}'`,
           `SELECT * FROM question_request WHERE agent_id = '${AGENT_ID}'`,
-          `SELECT * FROM message WHERE agent_id = '${AGENT_ID}' AND role = 'user' AND source = 'flutter'`,
-          `SELECT message_image.* FROM message_image JOIN message ON message.id = message_image.message_id WHERE message.agent_id = '${AGENT_ID}' AND message.role = 'user' AND message.source = 'flutter'`,
+          `SELECT * FROM message WHERE agent_id = '${AGENT_ID}' AND role = 'user'`,
+          `SELECT message_image.* FROM message_image JOIN message ON message.id = message_image.message_id WHERE message.agent_id = '${AGENT_ID}' AND message.role = 'user'`,
         ]);
 
       conn.db.permission_request.onUpdate((_ctx, _oldRow, newRow) => {
@@ -362,7 +398,8 @@ function scheduleReconnect() {
 
 function handleIncomingMessage(row: Message) {
   log(`handleIncomingMessage entered id=${row.id} role=${row.role} source=${row.source}`);
-  if (row.role !== "user" || row.source !== "flutter") {
+  const fromAgent = row.source.startsWith("agent:");
+  if (row.role !== "user" || (row.source !== "flutter" && !fromAgent)) {
     log(`handleIncomingMessage skipping id=${row.id} (role/source filter)`);
     return;
   }
@@ -407,7 +444,9 @@ function emitMessage(message: Message, image?: MessageImage) {
   const meta: Record<string, string> = {
     chat_id: "flutter",
     message_id: message.id,
-    user: "flutter",
+    user: message.source.startsWith("agent:")
+      ? message.source.slice("agent:".length)
+      : "flutter",
     ts: new Date().toISOString(),
   };
 
