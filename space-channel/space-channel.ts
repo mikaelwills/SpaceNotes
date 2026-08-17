@@ -72,8 +72,10 @@ let userHasEngaged = false;
 
 function markActivity(fromUser = false) {
   lastActivityAt = Date.now();
-  wrapUpFired = false;
-  if (fromUser) userHasEngaged = true;
+  if (fromUser) {
+    wrapUpFired = false;
+    userHasEngaged = true;
+  }
 }
 
 const mcp = new Server(
@@ -567,7 +569,7 @@ function checkIdleWrapUp() {
   if (Date.now() - lastActivityAt < IDLE_WRAPUP_MS) return;
   if (lastKnownState !== "idle" && lastKnownState !== "thinking") return;
   wrapUpFired = true;
-  const content = "Auto wrap up, follow the wrap up procedures in ~/Productivity/workflows/workflow-agent/execution-flow.md (section \"On Session End\")";
+  const content = `Auto wrap up, follow the wrap up procedures in the SpaceNotes vault note Workflows/${args.agent}/execution-flow.md (section "On Session End"), read via the spacenotes-mcp get_note tool`;
   log(`Idle wrap-up firing after ${Math.round((Date.now() - lastActivityAt) / 60000)}min`);
   mcp.notification({
     method: "notifications/claude/channel",
