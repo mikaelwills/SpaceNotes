@@ -66,14 +66,22 @@ let lastKnownState: string = "idle";
 let lastInputSource: "terminal" | "flutter" = "terminal";
 const pendingFlutterPrompts: string[] = [];
 const IDLE_WRAPUP_MS = 6 * 60 * 60 * 1000;
+const WRAPUP_REARM_MS = 6 * 60 * 60 * 1000;
 let lastActivityAt = Date.now();
 let wrapUpFired = false;
 let userHasEngaged = false;
 
 function markActivity(fromUser = false) {
-  lastActivityAt = Date.now();
-  wrapUpFired = false;
-  if (fromUser) userHasEngaged = true;
+  if (fromUser) {
+    lastActivityAt = Date.now();
+    wrapUpFired = false;
+    userHasEngaged = true;
+    return;
+  }
+  if (wrapUpFired && Date.now() - lastActivityAt >= IDLE_WRAPUP_MS + WRAPUP_REARM_MS) {
+    lastActivityAt = Date.now();
+    wrapUpFired = false;
+  }
 }
 
 const mcp = new Server(
@@ -567,7 +575,7 @@ function checkIdleWrapUp() {
   if (Date.now() - lastActivityAt < IDLE_WRAPUP_MS) return;
   if (lastKnownState !== "idle" && lastKnownState !== "thinking") return;
   wrapUpFired = true;
-  const content = "Auto wrap up, follow the wrap up procedures in ~/Productivity/workflows/workflow-agent/execution-flow.md (section \"On Session End\")";
+  const content = `Auto wrap up, follow the wrap up procedures in the SpaceNotes vault note Workflows/${args.agent}/execution-flow.md (section "On Session End"), read via the spacenotes-mcp get_note tool`;
   log(`Idle wrap-up firing after ${Math.round((Date.now() - lastActivityAt) / 60000)}min`);
   mcp.notification({
     method: "notifications/claude/channel",
