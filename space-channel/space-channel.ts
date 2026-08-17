@@ -66,15 +66,21 @@ let lastKnownState: string = "idle";
 let lastInputSource: "terminal" | "flutter" = "terminal";
 const pendingFlutterPrompts: string[] = [];
 const IDLE_WRAPUP_MS = 6 * 60 * 60 * 1000;
+const WRAPUP_REARM_MS = 6 * 60 * 60 * 1000;
 let lastActivityAt = Date.now();
 let wrapUpFired = false;
 let userHasEngaged = false;
 
 function markActivity(fromUser = false) {
-  lastActivityAt = Date.now();
   if (fromUser) {
+    lastActivityAt = Date.now();
     wrapUpFired = false;
     userHasEngaged = true;
+    return;
+  }
+  if (wrapUpFired && Date.now() - lastActivityAt >= IDLE_WRAPUP_MS + WRAPUP_REARM_MS) {
+    lastActivityAt = Date.now();
+    wrapUpFired = false;
   }
 }
 
