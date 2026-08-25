@@ -8,6 +8,7 @@ mod file_reducers;
 mod folder_reducers;
 mod space_channel_reducers;
 mod space_channel_tables;
+mod todo_sweep;
 
 // =============================================================================
 // Tables
@@ -69,6 +70,16 @@ pub fn init(ctx: &ReducerContext) {
             scheduled_id: 0,
             scheduled_at: TimeDuration::from_micros(60 * 60 * 1_000_000).into(),
         });
+    }
+
+    {
+        use todo_sweep::{todo_sweep_schedule, TodoSweepSchedule, MONTHLY_MICROS};
+        if ctx.db.todo_sweep_schedule().iter().next().is_none() {
+            ctx.db.todo_sweep_schedule().insert(TodoSweepSchedule {
+                scheduled_id: 0,
+                scheduled_at: TimeDuration::from_micros(MONTHLY_MICROS).into(),
+            });
+        }
     }
 
     {
