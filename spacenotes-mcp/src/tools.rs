@@ -354,7 +354,7 @@ pub struct ToolCallParams {
 pub fn get_tools() -> Vec<Tool> {
     vec![
         Tool {
-            name: "search_notes".to_string(),
+            name: "search_files".to_string(),
             description: "Search notes by title, path, or content. Use this first to find notes.".to_string(),
             input_schema: json!({
                 "type": "object",
@@ -371,7 +371,7 @@ pub fn get_tools() -> Vec<Tool> {
             }),
         },
         Tool {
-            name: "search_notes_content".to_string(),
+            name: "search_files_content".to_string(),
             description: "Search notes and return content excerpts around matches. Use after search_notes to find specific text within notes.".to_string(),
             input_schema: json!({
                 "type": "object",
@@ -407,7 +407,7 @@ pub fn get_tools() -> Vec<Tool> {
             }),
         },
         Tool {
-            name: "get_note".to_string(),
+            name: "get_file".to_string(),
             description: "Get a note's full content by ID or path. Line numbers are for locating text only; pass raw:true to get the exact bytes when building an old_string for edit_note.".to_string(),
             input_schema: json!({
                 "type": "object",
@@ -422,7 +422,7 @@ pub fn get_tools() -> Vec<Tool> {
             }),
         },
         Tool {
-            name: "get_notes".to_string(),
+            name: "get_files".to_string(),
             description: "Get multiple notes' full content by IDs or paths in a single request".to_string(),
             input_schema: json!({
                 "type": "object",
@@ -441,7 +441,7 @@ pub fn get_tools() -> Vec<Tool> {
             }),
         },
         Tool {
-            name: "create_note".to_string(),
+            name: "create_file".to_string(),
             description: "Create a new note with content".to_string(),
             input_schema: json!({
                 "type": "object",
@@ -489,7 +489,7 @@ pub fn get_tools() -> Vec<Tool> {
             }),
         },
         Tool {
-            name: "delete_note".to_string(),
+            name: "delete_file".to_string(),
             description: "Delete a note by id or path".to_string(),
             input_schema: json!({
                 "type": "object",
@@ -501,7 +501,7 @@ pub fn get_tools() -> Vec<Tool> {
             }),
         },
         Tool {
-            name: "delete_notes".to_string(),
+            name: "delete_files".to_string(),
             description: "Delete multiple notes by ID in a single operation".to_string(),
             input_schema: json!({
                 "type": "object",
@@ -516,7 +516,7 @@ pub fn get_tools() -> Vec<Tool> {
             }),
         },
         Tool {
-            name: "move_note".to_string(),
+            name: "move_file".to_string(),
             description: "Move a note to a new path".to_string(),
             input_schema: json!({
                 "type": "object",
@@ -551,7 +551,7 @@ pub fn get_tools() -> Vec<Tool> {
             }),
         },
         Tool {
-            name: "replace_across_notes".to_string(),
+            name: "replace_across_files".to_string(),
             description: "Find and replace the same text across many notes at once. Previews by default; pass dry_run: false to commit.".to_string(),
             input_schema: json!({
                 "type": "object",
@@ -580,7 +580,7 @@ pub fn get_tools() -> Vec<Tool> {
             }),
         },
         Tool {
-            name: "append_to_note".to_string(),
+            name: "append_to_file".to_string(),
             description: "Append content to the end of an existing note".to_string(),
             input_schema: json!({
                 "type": "object",
@@ -593,7 +593,7 @@ pub fn get_tools() -> Vec<Tool> {
             }),
         },
         Tool {
-            name: "prepend_to_note".to_string(),
+            name: "prepend_to_file".to_string(),
             description: "Prepend content to the beginning of an existing note".to_string(),
             input_schema: json!({
                 "type": "object",
@@ -606,7 +606,7 @@ pub fn get_tools() -> Vec<Tool> {
             }),
         },
         Tool {
-            name: "edit_note".to_string(),
+            name: "edit_file".to_string(),
             description: "Edit a note by finding and replacing text.".to_string(),
             input_schema: json!({
                 "type": "object",
@@ -637,7 +637,7 @@ pub fn get_tools() -> Vec<Tool> {
             }),
         },
         Tool {
-            name: "move_notes_to_folder".to_string(),
+            name: "move_files_to_folder".to_string(),
             description: "Move multiple notes to a destination folder in a single operation".to_string(),
             input_schema: json!({
                 "type": "object",
@@ -724,7 +724,7 @@ pub async fn execute_tool(
     client.await_ready().await.map_err(|e| e.to_string())?;
 
     match params.name.as_str() {
-        "search_notes" => {
+        "search_files" => {
             let query: String = serde_json::from_value(params.arguments["query"].clone())
                 .map_err(|e| e.to_string())?;
             let limit = params
@@ -772,7 +772,7 @@ pub async fn execute_tool(
                 }]
             }))
         }
-        "search_notes_content" => {
+        "search_files_content" => {
             let query: String = serde_json::from_value(params.arguments["query"].clone())
                 .map_err(|e| e.to_string())?;
             let context_lines = params.arguments.get("context_lines")
@@ -818,7 +818,7 @@ pub async fn execute_tool(
                 }]
             }))
         }
-        "get_note" => {
+        "get_file" => {
             let file = if let Some(id) = params.arguments.get("id").and_then(|v| v.as_str()) {
                 client.get_file_by_id(id).map_err(|e| e.to_string())?
             } else if let Some(path) = params.arguments.get("path").and_then(|v| v.as_str()) {
@@ -859,7 +859,7 @@ pub async fn execute_tool(
                 None => Ok(json!({"content": [{"type": "text", "text": "Note not found"}]})),
             }
         }
-        "get_notes" => {
+        "get_files" => {
             let files = if let Some(ids) = params.arguments.get("ids").and_then(|v| v.as_array()) {
                 let ids: Vec<String> = ids
                     .iter()
@@ -896,7 +896,7 @@ pub async fn execute_tool(
 
             Ok(json!({"content": [{"type": "text", "text": format!("Found {} notes:\n\n{}", files.len(), result)}]}))
         }
-        "create_note" => {
+        "create_file" => {
             let path: String = serde_json::from_value(params.arguments["path"].clone())
                 .map_err(|e| e.to_string())?;
             let content: String = serde_json::from_value(params.arguments["content"].clone())
@@ -1013,14 +1013,14 @@ pub async fn execute_tool(
             let text = format!("{}\n\n{}\n\n{}", readme, latest, knowledge);
             Ok(json!({"content": [{"type": "text", "text": text}]}))
         }
-        "delete_note" => {
+        "delete_file" => {
             let id = resolve_file_id(client, &params.arguments)?;
 
             client.delete_file(id.clone()).await.map_err(|e| e.to_string())?;
 
             Ok(json!({"content": [{"type": "text", "text": format!("Deleted note: {}", id)}]}))
         }
-        "delete_notes" => {
+        "delete_files" => {
             let ids: Vec<String> = serde_json::from_value(params.arguments["ids"].clone())
                 .map_err(|e| e.to_string())?;
 
@@ -1041,7 +1041,7 @@ pub async fn execute_tool(
 
             Ok(json!({"content": [{"type": "text", "text": result}]}))
         }
-        "move_note" => {
+        "move_file" => {
             let old_path: String = serde_json::from_value(params.arguments["old_path"].clone())
                 .map_err(|e| e.to_string())?;
             let new_path: String = serde_json::from_value(params.arguments["new_path"].clone())
@@ -1104,7 +1104,7 @@ pub async fn execute_tool(
 
             Ok(json!({"content": [{"type": "text", "text": format!("Deleted folder: {}", path)}]}))
         }
-        "append_to_note" => {
+        "append_to_file" => {
             let path = resolve_note_path(client, &params.arguments)?;
             let content: String = serde_json::from_value(params.arguments["content"].clone())
                 .map_err(|e| e.to_string())?;
@@ -1116,7 +1116,7 @@ pub async fn execute_tool(
 
             Ok(json!({"content": [{"type": "text", "text": format!("Appended to note: {}", path)}]}))
         }
-        "prepend_to_note" => {
+        "prepend_to_file" => {
             let path = resolve_note_path(client, &params.arguments)?;
             let content: String = serde_json::from_value(params.arguments["content"].clone())
                 .map_err(|e| e.to_string())?;
@@ -1128,7 +1128,7 @@ pub async fn execute_tool(
 
             Ok(json!({"content": [{"type": "text", "text": format!("Prepended to note: {}", path)}]}))
         }
-        "edit_note" => {
+        "edit_file" => {
             let path = resolve_note_path(client, &params.arguments)?;
             if let Some(edits) = params.arguments.get("edits").and_then(|v| v.as_array()) {
                 if edits.is_empty() {
@@ -1291,7 +1291,7 @@ pub async fn execute_tool(
             );
             Ok(json!({"content": [{"type": "text", "text": summary}]}))
         }
-        "replace_across_notes" => {
+        "replace_across_files" => {
             let old_string: String = params.arguments.get("old_string")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string())
@@ -1450,7 +1450,7 @@ pub async fn execute_tool(
             }
             Ok(json!({"content": [{"type": "text", "text": text}]}))
         }
-        "move_notes_to_folder" => {
+        "move_files_to_folder" => {
             let paths: Vec<String> = serde_json::from_value(params.arguments["paths"].clone())
                 .map_err(|e| e.to_string())?;
             let destination_folder: String = serde_json::from_value(params.arguments["destination_folder"].clone())
@@ -1747,8 +1747,8 @@ mod tests {
 
     #[test]
     fn tool_call_params_tolerate_missing_arguments() {
-        let params: ToolCallParams = serde_json::from_value(json!({"name": "get_note"})).unwrap();
-        assert_eq!(params.name, "get_note");
+        let params: ToolCallParams = serde_json::from_value(json!({"name": "get_file"})).unwrap();
+        assert_eq!(params.name, "get_file");
         assert!(params.arguments.is_null());
     }
 
@@ -1761,7 +1761,7 @@ mod tests {
     fn edit_note_declares_both_single_and_multi_edit_shapes() {
         // new_string cannot be schema-required now that `edits` is an alternative; the
         // single-edit path still enforces it at runtime.
-        let edit = get_tools().into_iter().find(|t| t.name == "edit_note").unwrap();
+        let edit = get_tools().into_iter().find(|t| t.name == "edit_file").unwrap();
         let props = edit.input_schema["properties"].as_object().unwrap();
         assert!(props.contains_key("new_string"));
         assert!(props.contains_key("edits"));
@@ -1773,7 +1773,7 @@ mod tests {
 
     #[test]
     fn path_bound_write_tools_accept_an_id_alternative() {
-        for name in ["edit_note", "append_to_note", "prepend_to_note", "regex_replace"] {
+        for name in ["edit_file", "append_to_file", "prepend_to_file", "regex_replace"] {
             let tool = get_tools().into_iter().find(|t| t.name == name).unwrap();
             let props = tool.input_schema["properties"].as_object().unwrap();
             assert!(props.contains_key("id"), "{} missing id", name);
@@ -1850,7 +1850,7 @@ mod tests {
     fn replace_across_notes_is_registered_and_defaults_to_preview() {
         let tool = get_tools()
             .into_iter()
-            .find(|t| t.name == "replace_across_notes")
+            .find(|t| t.name == "replace_across_files")
             .expect("tool missing");
         let props = tool.input_schema["properties"].as_object().unwrap();
         assert!(props.contains_key("dry_run"));
@@ -1861,7 +1861,7 @@ mod tests {
 
     #[test]
     fn search_notes_declares_caps() {
-        let tool = get_tools().into_iter().find(|t| t.name == "search_notes").unwrap();
+        let tool = get_tools().into_iter().find(|t| t.name == "search_files").unwrap();
         let props = tool.input_schema["properties"].as_object().unwrap();
         assert!(props.contains_key("limit"));
         assert!(props.contains_key("count_only"));
@@ -1869,7 +1869,7 @@ mod tests {
 
     #[test]
     fn get_note_declares_range_and_heading_reads() {
-        let tool = get_tools().into_iter().find(|t| t.name == "get_note").unwrap();
+        let tool = get_tools().into_iter().find(|t| t.name == "get_file").unwrap();
         let props = tool.input_schema["properties"].as_object().unwrap();
         assert!(props.contains_key("line_start"));
         assert!(props.contains_key("line_end"));
@@ -1975,7 +1975,7 @@ mod tests {
     fn replace_across_notes_declares_regex_and_recursive() {
         let tool = get_tools()
             .into_iter()
-            .find(|t| t.name == "replace_across_notes")
+            .find(|t| t.name == "replace_across_files")
             .unwrap();
         let props = tool.input_schema["properties"].as_object().unwrap();
         assert!(props.contains_key("regex"));
@@ -1984,14 +1984,14 @@ mod tests {
 
     #[test]
     fn search_notes_declares_paths_only() {
-        let tool = get_tools().into_iter().find(|t| t.name == "search_notes").unwrap();
+        let tool = get_tools().into_iter().find(|t| t.name == "search_files").unwrap();
         let props = tool.input_schema["properties"].as_object().unwrap();
         assert!(props.contains_key("paths_only"));
     }
 
     #[test]
     fn delete_note_accepts_a_path_as_well_as_an_id() {
-        let tool = get_tools().into_iter().find(|t| t.name == "delete_note").unwrap();
+        let tool = get_tools().into_iter().find(|t| t.name == "delete_file").unwrap();
         let props = tool.input_schema["properties"].as_object().unwrap();
         assert!(props.contains_key("id"));
         assert!(props.contains_key("path"));
@@ -2007,13 +2007,13 @@ mod tests {
 
     #[test]
     fn every_tool_name_is_still_the_external_contract() {
-        // Tool names are bound by string in skills, hooks, allowlists and python callers.
-        // Renaming one silently breaks callers, so pin the *_note surface.
+        // Tool names are the external contract other callers key off of. Pin the
+        // current *_file surface so a future rename is deliberate, not accidental.
         let names: Vec<String> = get_tools().into_iter().map(|t| t.name).collect();
         for expected in [
-            "get_note", "get_notes", "create_note", "edit_note", "delete_note", "delete_notes",
-            "move_note", "move_notes_to_folder", "append_to_note", "prepend_to_note",
-            "search_notes", "search_notes_content", "list_folder",
+            "get_file", "get_files", "create_file", "edit_file", "delete_file", "delete_files",
+            "move_file", "move_files_to_folder", "append_to_file", "prepend_to_file",
+            "search_files", "search_files_content", "list_folder",
             "log_session", "get_latest_session", "list_agents", "delete_agent", "clear_all_agents",
         ] {
             assert!(names.contains(&expected.to_string()), "missing tool: {}", expected);
