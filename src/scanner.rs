@@ -10,7 +10,18 @@ use crate::sanitize::sanitize_path;
 
 const TEXT_EXTENSIONS: [&str; 6] = ["md", "yaml", "yml", "json", "toml", "txt"];
 
-const BINARY_EXTENSIONS: [&str; 1] = ["gpg"];
+const BINARY_EXTENSIONS: [&str; 18] = [
+    "gpg",
+    "mp3", "wav", "m4a", "aac", "flac", "ogg",
+    "jpg", "jpeg", "png", "gif", "webp", "heic",
+    "mp4", "mov", "m4v", "webm",
+    "pdf",
+];
+
+/// Above this, a binary file's bytes are never read into `content` — the row
+/// carries metadata only and the file is served separately (nginx `/files/`).
+/// Below it, content is base64-encoded inline, same as `.gpg` today.
+const INLINE_BINARY_MAX_BYTES: u64 = 20 * 1024;
 
 fn extension_of(path: &Path) -> Option<String> {
     path.extension()
@@ -97,9 +108,16 @@ pub fn read_file_at(vault_path: &Path, abs_path: &Path) -> Result<Option<SpaceFi
         .to_string_lossy()
         .to_string());
 
+    let metadata = std::fs::metadata(abs_path)?;
+    let size = metadata.len();
+
     let content = if is_binary(abs_path) {
-        let bytes = std::fs::read(abs_path)?;
-        encode_binary_content(&bytes)
+        if size >= INLINE_BINARY_MAX_BYTES {
+            String::new()
+        } else {
+            let bytes = std::fs::read(abs_path)?;
+            encode_binary_content(&bytes)
+        }
     } else {
         let bytes = std::fs::read(abs_path)?;
         String::from_utf8(bytes).map_err(|e| {
@@ -110,10 +128,6 @@ pub fn read_file_at(vault_path: &Path, abs_path: &Path) -> Result<Option<SpaceFi
             )
         })?
     };
-
-    let metadata = std::fs::metadata(abs_path)?;
-
-    let size = metadata.len();
     let modified = metadata
         .modified()?
         .duration_since(UNIX_EPOCH)?
@@ -319,7 +333,7 @@ mod tests {
         let vault = temp_vault("non-md");
         std::fs::write(vault.join("config.yaml"), "key: value\n").unwrap();
         std::fs::write(vault.join("data.json"), "{}\n").unwrap();
-        std::fs::write(vault.join("ignored.png"), "binary").unwrap();
+        std::fs::write(vault.join("ignored.exe"), "binary").unwrap();
 
         let mut files = scan_files(&vault).unwrap();
         files.sort_by(|a, b| a.path.cmp(&b.path));
@@ -350,7 +364,7 @@ mod tests {
     #[test]
     fn a_file_outside_both_lists_is_not_ingested() {
         let vault = temp_vault("unlisted");
-        let path = vault.join("clip.wav");
+        let path = vault.join("app.exe");
         std::fs::write(&path, [0x52, 0x49, 0x46, 0x46, 0x00, 0xFF]).unwrap();
 
         assert!(!is_text(&path));
@@ -368,5 +382,50 @@ mod tests {
         assert!(!is_credential_store_path("All Notes"));
         assert!(!is_credential_store_path(".password-store-other"));
         assert!(!is_credential_store_path("notes/.password-store"));
+    }
+
+    #[test]
+    fn a_small_binary_under_the_threshold_is_stored_inline() {
+        let vault = temp_vault("small-binary");
+        let path = vault.join("icon.png");
+        let bytes = vec![0xFFu8; 100];
+        std::fs::write(&path, &bytes).unwrap();
+
+        let file = read_file_at(&vault, &path).unwrap().unwrap();
+
+        assert!(!file.content.is_empty());
+        assert_eq!(decode_binary_content(&file.content).unwrap(), bytes);
+        assert_eq!(file.size, 100);
+
+        let _ = std::fs::remove_dir_all(&vault);
+    }
+
+    #[test]
+    fn a_large_binary_at_or_over_the_threshold_stores_empty_content() {
+        let vault = temp_vault("large-binary");
+        let path = vault.join("clip.mp4");
+        let bytes = vec![0xAAu8; INLINE_BINARY_MAX_BYTES as usize];
+        std::fs::write(&path, &bytes).unwrap();
+
+        let file = read_file_at(&vault, &path).unwrap().unwrap();
+
+        assert_eq!(file.content, "");
+        assert_eq!(file.size, INLINE_BINARY_MAX_BYTES);
+
+        let _ = std::fs::remove_dir_all(&vault);
+    }
+
+    #[test]
+    fn newly_allowlisted_extensions_are_ingestible() {
+        for ext in ["mp3", "jpg", "png", "mp4", "webm", "pdf"] {
+            let vault = temp_vault(&format!("allowlist-{ext}"));
+            let path = vault.join(format!("file.{ext}"));
+            std::fs::write(&path, [0x00, 0x01]).unwrap();
+
+            assert!(is_binary(&path), "{ext} should be recognised as binary");
+            assert!(read_file_at(&vault, &path).unwrap().is_some());
+
+            let _ = std::fs::remove_dir_all(&vault);
+        }
     }
 }

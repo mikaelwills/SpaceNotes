@@ -53,6 +53,11 @@ RUN apt-get update && apt-get install -y \
     nginx \
     && rm -rf /var/lib/apt/lists/*
 
+# nginx serves /files/ (GET + dav PUT) straight from the vault mount, which is
+# owned by the host user's uid:users (gid 100) at mode 770 — www-data needs
+# group membership to read/write it.
+RUN usermod -aG users www-data
+
 # Copy SpacetimeDB from official image (both CLI and standalone server)
 COPY --from=spacetime /opt/spacetime /opt/spacetime
 RUN ln -s /opt/spacetime/spacetimedb-cli /usr/local/bin/spacetime && \
