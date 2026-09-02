@@ -245,7 +245,7 @@ async fn main() -> Result<()> {
             } else {
                 use std::os::unix::fs::PermissionsExt;
                 if let Err(e) =
-                    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o770))
+                    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o777))
                 {
                     tracing::error!(
                         "Failed to set permissions on folder {}: {}",
