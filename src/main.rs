@@ -243,6 +243,16 @@ async fn main() -> Result<()> {
             if let Err(e) = std::fs::create_dir_all(&path) {
                 tracing::error!("Failed to create folder {}: {}", new_folder.path, e);
             } else {
+                use std::os::unix::fs::PermissionsExt;
+                if let Err(e) =
+                    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o770))
+                {
+                    tracing::error!(
+                        "Failed to set permissions on folder {}: {}",
+                        new_folder.path,
+                        e
+                    );
+                }
                 tracing::info!("Created local folder: {}", new_folder.path);
             }
         }
