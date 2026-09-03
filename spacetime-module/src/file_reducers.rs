@@ -25,6 +25,16 @@ fn folder_path_of(path: &str) -> String {
     }
 }
 
+fn require_non_root_path(path: &str) -> Result<(), String> {
+    if !path.contains('/') {
+        return Err(format!(
+            "Cannot place a file at the vault root: '{}' must live inside a folder",
+            path
+        ));
+    }
+    Ok(())
+}
+
 // =============================================================================
 // File Reducers
 // =============================================================================
@@ -43,6 +53,8 @@ pub fn create_file(
     created_time: u64,
     modified_time: u64,
 ) -> Result<(), String> {
+    require_non_root_path(&path)?;
+
     // Check if file already exists by ID
     if ctx.db.space_file().id().find(&id).is_some() {
         return Err(format!("File already exists with ID: {}", id));
@@ -157,6 +169,8 @@ pub fn delete_file(ctx: &ReducerContext, id: String) -> Result<(), String> {
 
 #[spacetimedb::reducer]
 pub fn update_file_path(ctx: &ReducerContext, id: String, new_path: String) -> Result<(), String> {
+    require_non_root_path(&new_path)?;
+
     if let Some(existing) = ctx.db.space_file().id().find(&id) {
         if let Some(collision) = ctx.db.space_file().path().find(&new_path) {
             if collision.id != id {
@@ -192,6 +206,8 @@ pub fn update_file_path(ctx: &ReducerContext, id: String, new_path: String) -> R
 
 #[spacetimedb::reducer]
 pub fn move_file(ctx: &ReducerContext, old_path: String, new_path: String) -> Result<(), String> {
+    require_non_root_path(&new_path)?;
+
     if let Some(existing) = ctx.db.space_file().path().find(&old_path) {
         // Without this the delete+insert below violates the unique path constraint and panics.
         if let Some(collision) = ctx.db.space_file().path().find(&new_path) {
@@ -241,6 +257,8 @@ pub fn upsert_file(
     created_time: u64,
     modified_time: u64,
 ) -> Result<(), String> {
+    require_non_root_path(&path)?;
+
     if let Some(existing) = ctx.db.space_file().id().find(&id) {
         if existing.path == path
             && existing.content == content
