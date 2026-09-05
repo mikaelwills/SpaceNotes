@@ -453,6 +453,28 @@ pub fn get_tools() -> Vec<Tool> {
             }),
         },
         Tool {
+            name: "upload_file".to_string(),
+            description: "Prepare to upload a binary file (audio, image, pdf, anything) into a vault folder. Does NOT transfer bytes through this tool — returns a PUT URL. Read the local file yourself and PUT its raw bytes to that URL (e.g. `curl -T <local_path> '<url>'`); the sync daemon then picks it up and creates the SpaceFile row automatically. Use create_file instead when you're generating markdown content, not moving an existing file.".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Full destination path including filename (e.g., 'Music/Blood Bound Master.wav')"}
+                },
+                "required": ["path"]
+            }),
+        },
+        Tool {
+            name: "download_file".to_string(),
+            description: "Prepare to download a binary file (audio, image, pdf, anything) from the vault. Does NOT transfer bytes through this tool — returns a GET URL. Fetch it yourself and save the bytes locally (e.g. `curl -o <local_path> '<url>'`). Use get_file instead when you want a markdown note's text content.".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Full vault path including filename (e.g., 'Music/Blood Bound Master.wav')"}
+                },
+                "required": ["path"]
+            }),
+        },
+        Tool {
             name: "log_session".to_string(),
             description: "Write a workflow session log. ALWAYS use this instead of create_note for a session log — it owns the numbering: the new file is `<date>-1-<slug>.md` and existing same-day `<date>-N-*` bump +1, so lower N is always newer and get_latest_session resolves correctly. Creating one by hand breaks that ordering. Returns the path.".to_string(),
             input_schema: json!({
@@ -927,6 +949,59 @@ pub async fn execute_tool(
             Ok(
                 json!({"content": [{"type": "text", "text": format!("Created note: {} (id: {})", path, id)}]}),
             )
+        }
+        "upload_file" => {
+            let path: String = serde_json::from_value(params.arguments["path"].clone())
+                .map_err(|e| e.to_string())?;
+
+            validate_note_path(&path)?;
+
+            if let Some(existing) = client.get_file_by_path(&path).map_err(|e| e.to_string())? {
+                return Err(format!(
+                    "A file already exists at '{}' (id: {}). Choose a different name or delete it first.",
+                    path, existing.id
+                ));
+            }
+
+            let folder_path = folder_path_of(&path);
+            client
+                .ensure_folder_ancestry(&folder_path)
+                .await
+                .map_err(|e| e.to_string())?;
+
+            let encoded_path = path
+                .split('/')
+                .map(|segment| urlencoding::encode(segment).into_owned())
+                .collect::<Vec<_>>()
+                .join("/");
+            let url = format!("{}/files/{}", client.files_host, encoded_path);
+
+            Ok(json!({"content": [{"type": "text", "text": format!(
+                "PUT the file's raw bytes to this URL to upload it:\n{}\n\nExample: curl -T <local_path> '{}'",
+                url, url
+            )}]}))
+        }
+        "download_file" => {
+            let path: String = serde_json::from_value(params.arguments["path"].clone())
+                .map_err(|e| e.to_string())?;
+
+            validate_note_path(&path)?;
+
+            if client.get_file_by_path(&path).map_err(|e| e.to_string())?.is_none() {
+                return Err(format!("No file found at '{}'.", path));
+            }
+
+            let encoded_path = path
+                .split('/')
+                .map(|segment| urlencoding::encode(segment).into_owned())
+                .collect::<Vec<_>>()
+                .join("/");
+            let url = format!("{}/files/{}", client.files_host, encoded_path);
+
+            Ok(json!({"content": [{"type": "text", "text": format!(
+                "GET this URL to download the file's raw bytes:\n{}\n\nExample: curl -o <local_path> '{}'",
+                url, url
+            )}]}))
         }
         "log_session" => {
             let workflow: String = serde_json::from_value(params.arguments["workflow"].clone())

@@ -21,3 +21,4 @@ uuid = { version = "1.0", features = ["v4", "serde"] }
 tracing = "0.1"
 tracing-subscriber = "0.3"
 regex = "1.10"
+urlencoding = "2.1"

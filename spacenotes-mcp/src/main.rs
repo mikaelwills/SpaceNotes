@@ -19,12 +19,16 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|_| "http://127.0.0.1:3000".to_string());
     let spacetime_db = std::env::var("SPACETIME_DB")
         .unwrap_or_else(|_| "spacenotes".to_string());
+    let files_host = std::env::var("SPACENOTES_FILES_HOST")
+        .unwrap_or_else(|_| "http://127.0.0.1:5051".to_string());
 
     tracing::info!("Connecting to SpacetimeDB at {}/{}", spacetime_host, spacetime_db);
+    tracing::info!("Files server reachable at {}", files_host);
 
     let client = spacetime_client::SpacetimeClient::connect(
         &spacetime_host,
-        &spacetime_db
+        &spacetime_db,
+        &files_host,
     )?;
 
     let client = Arc::new(client);

@@ -67,10 +67,11 @@ pub struct SpacetimeClient {
     // watch::Sender::send is a no-op once every Receiver is dropped, which would leave the
     // gate permanently closed. Holding one keeps the channel live.
     _ready_keepalive: watch::Receiver<bool>,
+    pub files_host: String,
 }
 
 impl SpacetimeClient {
-    pub fn connect(host: &str, db_name: &str) -> Result<Self> {
+    pub fn connect(host: &str, db_name: &str, files_host: &str) -> Result<Self> {
         tracing::info!("Connecting to SpacetimeDB at {} (db: {})", host, db_name);
 
         let (ready, ready_keepalive) = watch::channel(false);
@@ -111,6 +112,7 @@ impl SpacetimeClient {
             conn,
             ready,
             _ready_keepalive: ready_keepalive,
+            files_host: files_host.to_string(),
         })
     }
 
