@@ -77,6 +77,7 @@ pub fn create_file(
         created_time,
         modified_time,
         db_updated_at: ctx.timestamp,
+        has_thumbnail: false,
     });
     log::info!("Created file: {}", path);
     Ok(())
@@ -106,6 +107,7 @@ pub fn update_file_content(
             created_time: existing.created_time,
             modified_time,
             db_updated_at: ctx.timestamp,
+            has_thumbnail: existing.has_thumbnail,
         });
         log::info!("Updated content for file: {} (ID: {})", existing.path, id);
     } else {
@@ -148,6 +150,7 @@ pub fn rename_file(
             created_time: existing.created_time,
             modified_time: existing.modified_time,
             db_updated_at: ctx.timestamp,
+            has_thumbnail: existing.has_thumbnail,
         });
         log::info!("Renamed file: {} -> {} (ID: {})", existing.path, new_path, id);
     } else {
@@ -196,6 +199,7 @@ pub fn update_file_path(ctx: &ReducerContext, id: String, new_path: String) -> R
             created_time: existing.created_time,
             modified_time: existing.modified_time,
             db_updated_at: ctx.timestamp,
+            has_thumbnail: existing.has_thumbnail,
         });
         log::info!("Updated path for file {}: {}", id, new_path);
     } else {
@@ -222,6 +226,7 @@ pub fn move_file(ctx: &ReducerContext, old_path: String, new_path: String) -> Re
         let new_extension = extension_of(&new_path);
 
         let id = existing.id.clone();
+        let has_thumbnail = existing.has_thumbnail;
         ctx.db.space_file().id().delete(&id);
         ctx.db.space_file().insert(SpaceFile {
             id,
@@ -235,6 +240,7 @@ pub fn move_file(ctx: &ReducerContext, old_path: String, new_path: String) -> Re
             created_time: existing.created_time,
             modified_time: existing.modified_time,
             db_updated_at: ctx.timestamp,
+            has_thumbnail,
         });
         log::info!("Moved file: {} -> {}", old_path, new_path);
     } else {
@@ -259,7 +265,7 @@ pub fn upsert_file(
 ) -> Result<(), String> {
     require_non_root_path(&path)?;
 
-    if let Some(existing) = ctx.db.space_file().id().find(&id) {
+    let has_thumbnail = if let Some(existing) = ctx.db.space_file().id().find(&id) {
         if existing.path == path
             && existing.content == content
             && existing.folder_path == folder_path
@@ -270,7 +276,10 @@ pub fn upsert_file(
             return Ok(());
         }
         ctx.db.space_file().id().delete(&id);
-    }
+        existing.has_thumbnail
+    } else {
+        false
+    };
     ctx.db.space_file().insert(SpaceFile {
         id,
         path,
@@ -283,6 +292,7 @@ pub fn upsert_file(
         created_time,
         modified_time,
         db_updated_at: ctx.timestamp,
+        has_thumbnail,
     });
     Ok(())
 }
@@ -308,6 +318,7 @@ pub fn append_to_file(ctx: &ReducerContext, path: String, content: String) -> Re
             created_time: existing.created_time,
             modified_time: now,
             db_updated_at: ctx.timestamp,
+            has_thumbnail: existing.has_thumbnail,
         });
         log::info!("Appended {} bytes to file: {}", content.len(), path);
     } else {
@@ -337,10 +348,36 @@ pub fn prepend_to_file(ctx: &ReducerContext, path: String, content: String) -> R
             created_time: existing.created_time,
             modified_time: now,
             db_updated_at: ctx.timestamp,
+            has_thumbnail: existing.has_thumbnail,
         });
         log::info!("Prepended {} bytes to file: {}", content.len(), path);
     } else {
         return Err(format!("File not found for prepend: {}", path));
+    }
+    Ok(())
+}
+
+#[spacetimedb::reducer]
+pub fn set_thumbnail_available(ctx: &ReducerContext, id: String) -> Result<(), String> {
+    if let Some(existing) = ctx.db.space_file().id().find(&id) {
+        ctx.db.space_file().id().delete(&id);
+        ctx.db.space_file().insert(SpaceFile {
+            id: id.clone(),
+            path: existing.path.clone(),
+            name: existing.name.clone(),
+            content: existing.content,
+            folder_path: existing.folder_path.clone(),
+            depth: existing.depth,
+            extension: existing.extension.clone(),
+            size: existing.size,
+            created_time: existing.created_time,
+            modified_time: existing.modified_time,
+            db_updated_at: existing.db_updated_at,
+            has_thumbnail: true,
+        });
+        log::info!("Marked thumbnail available for file: {} (ID: {})", existing.path, id);
+    } else {
+        return Err(format!("File not found for thumbnail update: {}", id));
     }
     Ok(())
 }
@@ -382,6 +419,7 @@ pub fn find_replace_in_file(
             created_time: existing.created_time,
             modified_time: now,
             db_updated_at: ctx.timestamp,
+            has_thumbnail: existing.has_thumbnail,
         });
         log::info!("REDUCER_EXECUTED: find_replace_in_file path={}, new_size={}", path, new_size);
     } else {

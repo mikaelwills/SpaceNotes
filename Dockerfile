@@ -43,14 +43,17 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry-${TARG
     cargo build --release --target wasm32-unknown-unknown && \
     cp /build/spacetime-module/target/wasm32-unknown-unknown/release/spacenotes_module.wasm /build/spacenotes_module.wasm
 
-# Runtime stage - Ubuntu 24.04 has glibc 2.39
-FROM ubuntu:24.04
+# Runtime stage - Debian trixie has glibc 2.40+ and ships ffmpeg 7.1 (needed for
+# HEIC/HEIF decode - Ubuntu 24.04's ffmpeg 6.1 predates FFmpeg's HEIF demuxer,
+# added in 7.0).
+FROM debian:trixie-slim
 
 # Install dependencies
 RUN apt-get update && apt-get install -y \
     ca-certificates \
     curl \
     nginx \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # nginx serves /files/ (GET + dav PUT) straight from the vault mount, which is

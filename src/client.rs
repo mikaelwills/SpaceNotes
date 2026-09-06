@@ -12,6 +12,7 @@ use crate::spacetime_bindings::{
     folder_type::Folder as DbFolder,
     space_file_table::SpaceFileTableAccess,
     space_file_type::SpaceFile as DbSpaceFile,
+    set_thumbnail_available_reducer::set_thumbnail_available,
     upsert_folder_reducer::upsert_folder,
     upsert_file_reducer::upsert_file,
     DbConnection,
@@ -262,13 +263,29 @@ impl SpacetimeClient {
         }
     }
 
-    pub fn delete_file(&self, id: &str) {
+    pub fn delete_file(&self, vault_path: &std::path::Path, id: &str) {
         let _ = self.conn.reducers().delete_file(id.to_string());
+        crate::thumbnail::remove_thumbnail_file(vault_path, id);
         tracing::debug!("Deleted file with ID: {}", id);
     }
 
     pub fn delete_folder(&self, path: &str) {
         let _ = self.conn.reducers().delete_folder(path.to_string());
         tracing::debug!("Deleted folder: {}", path);
+    }
+
+    pub fn set_thumbnail_available(&self, id: &str) {
+        let _ = self.conn.reducers().set_thumbnail_available(id.to_string());
+        tracing::debug!("Marked thumbnail available for ID: {}", id);
+    }
+
+    pub fn has_thumbnail(&self, id: &str) -> bool {
+        self.conn
+            .db
+            .space_file()
+            .id()
+            .find(&id.to_string())
+            .map(|db_file| db_file.has_thumbnail)
+            .unwrap_or(false)
     }
 }

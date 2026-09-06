@@ -133,6 +133,7 @@ pub fn move_folder(ctx: &ReducerContext, old_path: String, new_path: String) -> 
             created_time: file.created_time,
             modified_time: file.modified_time,
             db_updated_at: ctx.timestamp,
+            has_thumbnail: file.has_thumbnail,
         });
     }
 

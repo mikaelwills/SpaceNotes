@@ -7,6 +7,7 @@ use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub struct ConnectedUser {
+    pub connection_id: String,
     pub identity: __sdk::Identity,
     pub connected_at: u64,
     pub name: String,
@@ -20,6 +21,7 @@ impl __sdk::InModule for ConnectedUser {
 ///
 /// Provides typed access to columns for query building.
 pub struct ConnectedUserCols {
+    pub connection_id: __sdk::__query_builder::Col<ConnectedUser, String>,
     pub identity: __sdk::__query_builder::Col<ConnectedUser, __sdk::Identity>,
     pub connected_at: __sdk::__query_builder::Col<ConnectedUser, u64>,
     pub name: __sdk::__query_builder::Col<ConnectedUser, String>,
@@ -29,6 +31,7 @@ impl __sdk::__query_builder::HasCols for ConnectedUser {
     type Cols = ConnectedUserCols;
     fn cols(table_name: &'static str) -> Self::Cols {
         ConnectedUserCols {
+            connection_id: __sdk::__query_builder::Col::new(table_name, "connection_id"),
             identity: __sdk::__query_builder::Col::new(table_name, "identity"),
             connected_at: __sdk::__query_builder::Col::new(table_name, "connected_at"),
             name: __sdk::__query_builder::Col::new(table_name, "name"),
@@ -40,6 +43,7 @@ impl __sdk::__query_builder::HasCols for ConnectedUser {
 ///
 /// Provides typed access to indexed columns for query building.
 pub struct ConnectedUserIxCols {
+    pub connection_id: __sdk::__query_builder::IxCol<ConnectedUser, String>,
     pub identity: __sdk::__query_builder::IxCol<ConnectedUser, __sdk::Identity>,
 }
 
@@ -47,6 +51,7 @@ impl __sdk::__query_builder::HasIxCols for ConnectedUser {
     type IxCols = ConnectedUserIxCols;
     fn ix_cols(table_name: &'static str) -> Self::IxCols {
         ConnectedUserIxCols {
+            connection_id: __sdk::__query_builder::IxCol::new(table_name, "connection_id"),
             identity: __sdk::__query_builder::IxCol::new(table_name, "identity"),
         }
     }

@@ -8,6 +8,7 @@ use crate::isolation::run_isolated;
 use crate::journal::{self, FileRecord, Journal};
 use crate::space_file::SpaceFile;
 use crate::scanner::scan_files;
+use crate::thumbnail::ThumbnailQueue;
 use crate::tracker::ContentTracker;
 use crate::writer::{write_file_to_disk, WriteOutcome};
 
@@ -239,6 +240,7 @@ fn decide_orphan(row: &FileRecord, server: Option<&SpaceFile>) -> OrphanDecision
 }
 
 fn propagate_offline_deletes(
+    vault_path: &Path,
     client: &SpacetimeClient,
     tracker: &ContentTracker,
     journal: &Journal,
@@ -265,7 +267,7 @@ fn propagate_offline_deletes(
                     tracing::error!("Journal tombstone failed for {}: {}", row.path, e);
                     continue;
                 }
-                client.delete_file(&row.uuid);
+                client.delete_file(vault_path, &row.uuid);
                 tracker.remove(&row.uuid);
                 server_map.remove(&row.uuid);
                 tracing::info!("Propagated offline delete: {} (ID: {})", row.path, row.uuid);
@@ -496,6 +498,7 @@ pub fn reconcile_on_startup(
     client: &SpacetimeClient,
     tracker: &ContentTracker,
     journal: &Journal,
+    thumbnails: &ThumbnailQueue,
 ) -> Result<()> {
     let server_files = client.get_all_files();
     let local_files = scan_files(vault_path)?;
@@ -515,6 +518,7 @@ pub fn reconcile_on_startup(
         resolve_offline_identities(journal, vault_path, &mut records, &server_ids_by_path, now)?;
     let relinked = outcome.relinked;
     propagate_offline_deletes(
+        vault_path,
         client,
         tracker,
         journal,
@@ -565,6 +569,10 @@ pub fn reconcile_on_startup(
             Outcome::Unchanged => unchanged += 1,
             Outcome::Skipped => {}
             Outcome::SkippedBinary => skipped_binary += 1,
+        }
+
+        if let Some(file) = local_map.get(id) {
+            thumbnails.enqueue(file);
         }
     }
 

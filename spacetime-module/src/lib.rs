@@ -30,6 +30,7 @@ pub struct SpaceFile {
     pub modified_time: u64, // ms since epoch (filesystem)
     #[index(btree)]
     pub db_updated_at: Timestamp, // SpacetimeDB transaction time
+    pub has_thumbnail: bool,
 }
 
 #[spacetimedb::table(accessor = folder, public)]

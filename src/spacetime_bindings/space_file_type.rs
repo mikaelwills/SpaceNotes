@@ -18,6 +18,7 @@ pub struct SpaceFile {
     pub created_time: u64,
     pub modified_time: u64,
     pub db_updated_at: __sdk::Timestamp,
+    pub has_thumbnail: bool,
 }
 
 impl __sdk::InModule for SpaceFile {
@@ -39,6 +40,7 @@ pub struct SpaceFileCols {
     pub created_time: __sdk::__query_builder::Col<SpaceFile, u64>,
     pub modified_time: __sdk::__query_builder::Col<SpaceFile, u64>,
     pub db_updated_at: __sdk::__query_builder::Col<SpaceFile, __sdk::Timestamp>,
+    pub has_thumbnail: __sdk::__query_builder::Col<SpaceFile, bool>,
 }
 
 impl __sdk::__query_builder::HasCols for SpaceFile {
@@ -56,6 +58,7 @@ impl __sdk::__query_builder::HasCols for SpaceFile {
             created_time: __sdk::__query_builder::Col::new(table_name, "created_time"),
             modified_time: __sdk::__query_builder::Col::new(table_name, "modified_time"),
             db_updated_at: __sdk::__query_builder::Col::new(table_name, "db_updated_at"),
+            has_thumbnail: __sdk::__query_builder::Col::new(table_name, "has_thumbnail"),
         }
     }
 }

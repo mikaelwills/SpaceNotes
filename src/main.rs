@@ -9,6 +9,7 @@ mod reconcile;
 mod sanitize;
 mod scanner;
 mod spacetime_bindings;
+mod thumbnail;
 mod tracker;
 mod watcher;
 mod writer;
@@ -83,6 +84,11 @@ async fn main() -> Result<()> {
         migration.failed
     );
 
+    let thumbnails = Arc::new(thumbnail::ThumbnailQueue::start(
+        absolute_vault_path.clone(),
+        client.clone(),
+    )?);
+
     // Reconcile local vault with server (two-way sync)
     tracing::info!("Reconciling with server...");
     reconcile::reconcile_on_startup(
@@ -90,6 +96,7 @@ async fn main() -> Result<()> {
         &client,
         &tracker,
         &opened_journal.journal,
+        &thumbnails,
     )?;
 
     // Reconcile folders (two-way sync)
@@ -190,6 +197,7 @@ async fn main() -> Result<()> {
     let tracker_clone = tracker.clone();
     let journal_clone = opened_journal.journal.clone();
     client.on_file_deleted(move |old_file| {
+        thumbnail::remove_thumbnail_file(&vault_clone, &old_file.id);
         let path = match writer::resolve_vault_path(&vault_clone, &old_file.path) {
             Ok(p) => p,
             Err(e) => {
@@ -334,7 +342,8 @@ async fn main() -> Result<()> {
 
     // Start file watcher
     let watcher_journal = opened_journal.journal.clone();
-    watcher::start_watcher(absolute_vault_path, client, tracker, watcher_journal).await?;
+    watcher::start_watcher(absolute_vault_path, client, tracker, watcher_journal, thumbnails)
+        .await?;
 
     Ok(())
 }

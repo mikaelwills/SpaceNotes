@@ -14,6 +14,7 @@ use crate::journal::{self, FileRecord, Journal};
 use crate::space_file::SpaceFile;
 use crate::sanitize::sanitize_path;
 use crate::scanner::read_file_at;
+use crate::thumbnail::ThumbnailQueue;
 use crate::tracker::ContentTracker;
 
 enum Action {
@@ -353,6 +354,7 @@ fn apply_actions(
     client: &SpacetimeClient,
     tracker: &ContentTracker,
     journal: &Journal,
+    thumbnails: &ThumbnailQueue,
     actions: Vec<Action>,
 ) {
     for action in actions {
@@ -362,9 +364,10 @@ fn apply_actions(
                 client.upsert_file(&file);
                 tracker.update(&file.id, &file.content);
                 tracing::debug!("Synced: {} (ID: {})", file.name, file.id);
+                thumbnails.enqueue(&file);
             }
             Action::DeleteFile { id, path } => {
-                client.delete_file(&id);
+                client.delete_file(vault_path, &id);
                 tracker.remove(&id);
                 tracing::info!("Deleted file: {} (ID: {})", path, id);
             }
@@ -375,7 +378,9 @@ fn apply_actions(
             Action::FolderVanished(path) => {
                 handle_folder_vanished(vault_path, client, tracker, journal, &path);
             }
-            Action::Reconcile => run_full_reconcile(vault_path, client, tracker, journal),
+            Action::Reconcile => {
+                run_full_reconcile(vault_path, client, tracker, journal, thumbnails)
+            }
         }
     }
 }
@@ -418,7 +423,7 @@ fn handle_folder_vanished(
                 if let Err(e) = journal.tombstone(&file.id, journal::now_ms()) {
                     tracing::error!("Journal tombstone failed for {}: {}", file.path, e);
                 }
-                client.delete_file(&file.id);
+                client.delete_file(vault_path, &file.id);
                 tracker.remove(&file.id);
                 tracing::info!("Deleted file: {} (ID: {})", file.path, file.id);
             }
@@ -434,9 +439,12 @@ fn run_full_reconcile(
     client: &SpacetimeClient,
     tracker: &ContentTracker,
     journal: &Journal,
+    thumbnails: &ThumbnailQueue,
 ) {
     tracing::warn!("Watcher requested rescan; running full reconcile");
-    if let Err(e) = crate::reconcile::reconcile_on_startup(vault_path, client, tracker, journal) {
+    if let Err(e) =
+        crate::reconcile::reconcile_on_startup(vault_path, client, tracker, journal, thumbnails)
+    {
         tracing::error!("Reconcile after rescan failed: {:#}", e);
     }
 }
@@ -470,6 +478,7 @@ pub async fn start_watcher(
     client: Arc<SpacetimeClient>,
     tracker: Arc<ContentTracker>,
     journal: Arc<Journal>,
+    thumbnails: Arc<ThumbnailQueue>,
 ) -> Result<()> {
     let vault = vault_path.clone();
 
@@ -491,7 +500,7 @@ pub async fn start_watcher(
                         };
                         let actions =
                             dispatch_event(&ctx, &event.kind, &event.paths, event.need_rescan());
-                        apply_actions(&vault, &client, &tracker, &journal, actions);
+                        apply_actions(&vault, &client, &tracker, &journal, &thumbnails, actions);
                     });
                 }
             }
