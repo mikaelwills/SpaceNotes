@@ -14,6 +14,15 @@ pub struct SpaceFile {
     pub modified_time: u64,
 }
 
+impl SpaceFile {
+    pub fn change_signal(&self) -> String {
+        if self.content.is_empty() && self.size > 0 {
+            return format!("{}:{}", self.size, self.modified_time);
+        }
+        self.content.clone()
+    }
+}
+
 pub fn extension_of(path: &str) -> String {
     let base = path.rsplit('/').next().unwrap_or(path);
     match base.rsplit_once('.') {
