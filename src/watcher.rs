@@ -126,7 +126,7 @@ fn rename_md(ctx: &EventContext, from_rel: &str, to_abs: &Path) -> Vec<Action> {
     }
     file.id = row.uuid;
     record_in_journal(ctx, to_abs, &file.id);
-    ctx.tracker.is_modified(&file.id, &file.content);
+    ctx.tracker.is_modified(&file.id, &file.change_signal());
     tracing::info!(
         "Renamed file: {} -> {} (ID: {})",
         from_rel,
@@ -223,7 +223,7 @@ fn upsert_md(ctx: &EventContext, abs: &Path) -> Vec<Action> {
         }
     };
 
-    let signal = file.content.clone();
+    let signal = file.change_signal();
     if !ctx.tracker.has_changed(&file.id, &signal) {
         record_in_journal(ctx, abs, &file.id);
         tracing::debug!("Watcher ignoring echo: {}", file.path);
@@ -362,7 +362,7 @@ fn apply_actions(
             Action::UpsertFile(file) => {
                 backfill_ancestor_folders(client, &file.path);
                 client.upsert_file(&file);
-                tracker.update(&file.id, &file.content);
+                tracker.update(&file.id, &file.change_signal());
                 tracing::debug!("Synced: {} (ID: {})", file.name, file.id);
                 thumbnails.enqueue(&file);
             }
@@ -409,7 +409,7 @@ fn handle_folder_vanished(
                 Ok(Some(mut new_file)) => {
                     new_file.id = file.id.clone();
                     client.upsert_file(&new_file);
-                    tracker.update(&new_file.id, &new_file.content);
+                    tracker.update(&new_file.id, &new_file.change_signal());
                     tracing::info!("Updated file path: {} -> {}", file.path, new_file.path);
                 }
                 Ok(None) => {
@@ -658,6 +658,57 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn large_binary_overwrite_updates_the_server_row() {
+        let dir = temp_dir("large-binary-edit");
+        let vault = dir.join("vault");
+        std::fs::create_dir_all(&vault).unwrap();
+        std::fs::write(vault.join("clip.mp4"), vec![0x11u8; 25 * 1024]).unwrap();
+        let journal = Journal::open(&dir.join("journal.db")).unwrap();
+        let tracker = ContentTracker::new();
+
+        let ctx = EventContext {
+            vault_path: &vault,
+            journal: &journal,
+            tracker: &tracker,
+            known_file_id: &no_known_id,
+        };
+        let first = dispatch_event(
+            &ctx,
+            &EventKind::Create(CreateKind::File),
+            &[vault.join("clip.mp4")],
+            false,
+        );
+        assert_eq!(upserted_file_ids_and_paths(&first).len(), 1);
+
+        std::fs::write(vault.join("clip.mp4"), vec![0x22u8; 30 * 1024]).unwrap();
+        let second = dispatch_event(
+            &ctx,
+            &EventKind::Modify(ModifyKind::Data(DataChange::Content)),
+            &[vault.join("clip.mp4")],
+            false,
+        );
+
+        let upserts: Vec<&SpaceFile> = second
+            .iter()
+            .filter_map(|a| match a {
+                Action::UpsertFile(file) => Some(file),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(upserts.len(), 1);
+        assert_eq!(upserts[0].size, 30 * 1024);
+        assert!(upserts[0].content.is_empty());
+
+        let echo = dispatch_event(
+            &ctx,
+            &EventKind::Modify(ModifyKind::Data(DataChange::Content)),
+            &[vault.join("clip.mp4")],
+            false,
+        );
+        assert!(upserted_file_ids_and_paths(&echo).is_empty());
     }
 
     #[test]

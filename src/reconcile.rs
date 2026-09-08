@@ -21,7 +21,7 @@ enum Outcome {
 }
 
 fn signal_of(file: &SpaceFile) -> String {
-    file.content.clone()
+    file.change_signal()
 }
 
 pub struct LadderOutcome {

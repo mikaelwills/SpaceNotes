@@ -562,7 +562,7 @@ fn apply_server_update(
     new_file: &space_file::SpaceFile,
 ) {
     let path_changed = old_path != new_file.path;
-    let signal = new_file.content.clone();
+    let signal = new_file.change_signal();
     let content_changed = tracker.has_changed(&new_file.id, &signal);
 
     if !path_changed && !content_changed {

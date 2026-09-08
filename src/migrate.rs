@@ -33,7 +33,7 @@ pub fn run(
     let known_file_id = |path: &str| client.get_file_by_path(path).map(|n| n.id);
     sweep(journal, vault_path, &known_file_id, |file| {
         client.upsert_file(file);
-        tracker.update(&file.id, &file.content);
+        tracker.update(&file.id, &file.change_signal());
     })
 }
 
