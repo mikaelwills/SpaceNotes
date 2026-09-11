@@ -9,6 +9,10 @@ use crate::space_channel_tables::{
 const MESSAGE_TTL_MICROS: i64 = 48 * 60 * 60 * 1_000_000;
 const IMAGE_MAX_BYTES: usize = 4 * 1024 * 1024;
 
+/// Heartbeats arrive every HEARTBEAT_MS but only persist this often. Every
+/// write is a permanent commitlog entry, and the log is never compacted.
+const LAST_SEEN_WRITE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(300);
+
 fn ensure_agent_exists(ctx: &ReducerContext, agent_id: &str) {
     if ctx.db.agent().id().find(&agent_id.to_string()).is_some() {
         return;
@@ -77,6 +81,15 @@ pub fn heartbeat(ctx: &ReducerContext, agent_id: String) {
     let Some(existing) = ctx.db.agent().id().find(&agent_id) else {
         return;
     };
+
+    let elapsed = ctx
+        .timestamp
+        .duration_since(existing.last_seen)
+        .unwrap_or_default();
+    if elapsed < LAST_SEEN_WRITE_INTERVAL {
+        return;
+    }
+
     ctx.db.agent().id().update(Agent {
         last_seen: ctx.timestamp,
         ..existing
@@ -96,12 +109,14 @@ pub fn push_status(ctx: &ReducerContext, agent_id: String, state: String) {
     let now = ctx.timestamp;
 
     if let Some(existing) = ctx.db.agent_activity().agent_id().find(&agent_id) {
-        ctx.db.agent_activity().agent_id().update(AgentActivity {
-            agent_id: agent_id.clone(),
-            state,
-            last_tool_event: existing.last_tool_event,
-            updated_at: now,
-        });
+        if existing.state != state {
+            ctx.db.agent_activity().agent_id().update(AgentActivity {
+                agent_id: agent_id.clone(),
+                state,
+                last_tool_event: existing.last_tool_event,
+                updated_at: now,
+            });
+        }
     } else {
         ctx.db.agent_activity().insert(AgentActivity {
             agent_id: agent_id.clone(),
@@ -112,10 +127,13 @@ pub fn push_status(ctx: &ReducerContext, agent_id: String, state: String) {
     }
 
     if let Some(existing) = ctx.db.agent().id().find(&agent_id) {
-        ctx.db.agent().id().update(Agent {
-            last_seen: now,
-            ..existing
-        });
+        let elapsed = now.duration_since(existing.last_seen).unwrap_or_default();
+        if elapsed >= LAST_SEEN_WRITE_INTERVAL {
+            ctx.db.agent().id().update(Agent {
+                last_seen: now,
+                ..existing
+            });
+        }
     }
 }
 
