@@ -39,6 +39,11 @@ struct Args {
 
     #[arg(long, env = "DATA_DIR")]
     data_dir: Option<PathBuf>,
+
+    /// Port for the vault file server (`/files/`, `/thumbnails/`). nginx
+    /// proxies to this; it is not exposed outside the container.
+    #[arg(long, env = "FILES_PORT", default_value = "5057")]
+    files_port: u16,
 }
 
 #[tokio::main]
@@ -339,6 +344,21 @@ async fn main() -> Result<()> {
     });
 
     tracing::info!("Two-way sync initialized.");
+
+    // Serve vault bytes. Spawned rather than awaited: start_watcher parks
+    // forever, so this has to run alongside it.
+    let files_vault = absolute_vault_path.clone();
+    let files_port = args.files_port;
+    tokio::spawn(async move {
+        match tokio::net::TcpListener::bind(("0.0.0.0", files_port)).await {
+            Ok(listener) => {
+                if let Err(e) = spacenotes::files_http::serve(files_vault, listener).await {
+                    tracing::error!("File server stopped: {e}");
+                }
+            }
+            Err(e) => tracing::error!("File server could not bind port {files_port}: {e}"),
+        }
+    });
 
     // Start file watcher
     let watcher_journal = opened_journal.journal.clone();

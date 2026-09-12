@@ -265,6 +265,38 @@ fn put_cases() -> Vec<PutCase> {
     ]
 }
 
+/// Starts the daemon's file server in-process on an ephemeral port. Returns
+/// the port; the server task lives for the rest of the test binary.
+fn start_daemon(vault: &str) -> Option<u16> {
+    use std::sync::OnceLock;
+    static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+
+    let rt = RUNTIME.get_or_init(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("tokio runtime")
+    });
+
+    let vault = std::path::PathBuf::from(vault);
+    let listener = rt
+        .block_on(async { tokio::net::TcpListener::bind(("127.0.0.1", 0)).await })
+        .ok()?;
+    let port = listener.local_addr().ok()?.port();
+
+    rt.spawn(async move {
+        let _ = spacenotes::files_http::serve(vault, listener).await;
+    });
+
+    for _ in 0..50 {
+        if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
+            return Some(port);
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    None
+}
+
 fn docker_available() -> bool {
     Command::new("docker")
         .arg("info")
@@ -525,23 +557,29 @@ fn copy_dir(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()>
 #[test]
 fn baseline_matches_expectations() {
     let target = std::env::var("FILES_TARGET").unwrap_or_else(|_| "nginx".into());
-    if target != "nginx" {
-        eprintln!("SKIP: FILES_TARGET={target} not implemented yet");
-        return;
-    }
-    if !docker_available() {
-        eprintln!("SKIP: docker not available");
-        return;
-    }
-
     let root = env!("CARGO_MANIFEST_DIR");
     let vault = format!("{root}/tests/fixtures/vault");
     let conf = format!("{root}/nginx-client.conf");
-
     let name = "spacenotes-files-get";
-    let Some(port) = start_nginx(name, &vault, &conf) else {
-        stop_nginx(name);
-        panic!("could not start nginx baseline container");
+
+    let port = match target.as_str() {
+        "daemon" => match start_daemon(&vault) {
+            Some(p) => p,
+            None => panic!("could not start daemon file server"),
+        },
+        _ => {
+            if !docker_available() {
+                eprintln!("SKIP: docker not available");
+                return;
+            }
+            match start_nginx(name, &vault, &conf) {
+                Some(p) => p,
+                None => {
+                    stop_nginx(name);
+                    panic!("could not start nginx baseline container");
+                }
+            }
+        }
     };
 
     let mut failures = Vec::new();
@@ -616,7 +654,9 @@ fn baseline_matches_expectations() {
         }
     }
 
-    stop_nginx(name);
+    if target != "daemon" {
+        stop_nginx(name);
+    }
 
     println!("\n--- {target} transcript ---");
     for line in &transcript {
