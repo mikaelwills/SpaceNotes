@@ -14,6 +14,16 @@ pub type HttpResponse = (u16, Vec<(String, String)>, Vec<u8>);
 /// Starts the daemon's file server in-process on an ephemeral port. The task
 /// lives for the rest of the test binary.
 pub fn start_daemon(vault: &Path) -> Option<u16> {
+    start_daemon_on(vault, "127.0.0.1")
+}
+
+/// Binds `0.0.0.0` so a container can reach it, which the nginx proxy test
+/// needs and a loopback-only listener cannot provide.
+pub fn start_daemon_reachable(vault: &Path) -> Option<u16> {
+    start_daemon_on(vault, "0.0.0.0")
+}
+
+fn start_daemon_on(vault: &Path, addr: &str) -> Option<u16> {
     static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
 
     let rt = RUNTIME.get_or_init(|| {
@@ -25,7 +35,7 @@ pub fn start_daemon(vault: &Path) -> Option<u16> {
 
     let vault = vault.to_path_buf();
     let listener = rt
-        .block_on(async { tokio::net::TcpListener::bind(("127.0.0.1", 0)).await })
+        .block_on(async { tokio::net::TcpListener::bind((addr, 0)).await })
         .ok()?;
     let port = listener.local_addr().ok()?.port();
 
@@ -125,6 +135,80 @@ pub fn parse_response(raw: &[u8]) -> HttpResponse {
         .collect();
 
     (status, headers, body)
+}
+
+pub fn docker_available() -> bool {
+    std::process::Command::new("docker")
+        .arg("info")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// Boots nginx with the live `nginx-client.conf`, proxying to a daemon already
+/// running on the host.
+///
+/// This is the only rig that exercises the deployed shape. Testing the daemon
+/// directly hides anything the proxy layer gets wrong — a route nginx does not
+/// forward answers 405 from nginx while every direct test still passes.
+pub fn start_nginx_proxy(name: &str, daemon_port: u16) -> Option<u16> {
+    let root = env!("CARGO_MANIFEST_DIR");
+    let live_conf = std::fs::read_to_string(format!("{root}/nginx-client.conf")).ok()?;
+    let proxied = live_conf.replace("127.0.0.1:5057", &format!("host.docker.internal:{daemon_port}"));
+
+    let conf_path = std::env::temp_dir().join(format!("{name}-{}.conf", std::process::id()));
+    std::fs::write(&conf_path, proxied).ok()?;
+
+    let _ = std::process::Command::new("docker")
+        .args(["rm", "-f", name])
+        .output();
+
+    let out = std::process::Command::new("docker")
+        .args([
+            "run", "-d", "--name", name,
+            "-p", "0:80",
+            "-v", &format!("{}:/etc/nginx/conf.d/default.conf:ro", conf_path.display()),
+            "--add-host", "host.docker.internal:host-gateway",
+            "nginx:1.26",
+        ])
+        .output()
+        .ok()?;
+
+    if !out.status.success() {
+        eprintln!("docker run failed: {}", String::from_utf8_lossy(&out.stderr));
+        return None;
+    }
+
+    let port = std::process::Command::new("docker")
+        .args(["port", name, "80/tcp"])
+        .output()
+        .ok()
+        .and_then(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .next()?
+                .rsplit(':')
+                .next()?
+                .trim()
+                .parse::<u16>()
+                .ok()
+        })?;
+
+    for _ in 0..100 {
+        if let Ok((status, _, _)) = request(port, "GET", "/files/", &[]) {
+            if status != 0 {
+                return Some(port);
+            }
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    None
+}
+
+pub fn stop_nginx(name: &str) {
+    let _ = std::process::Command::new("docker")
+        .args(["rm", "-f", name])
+        .output();
 }
 
 pub fn header(headers: &[(String, String)], name: &str) -> Option<String> {

@@ -286,6 +286,69 @@ fn an_upload_path_cannot_escape_the_vault() {
     let _ = std::fs::remove_dir_all(&vault);
 }
 
+/// The deployed shape: client → nginx → daemon.
+///
+/// Every other test here talks to the daemon directly, which cannot catch a
+/// route nginx fails to forward. That is not hypothetical — `/uploads` was
+/// missing from the proxy config and answered 405 on the live NAS while the
+/// whole direct suite passed.
+#[test]
+fn the_protocol_works_through_nginx() {
+    if !common::docker_available() {
+        eprintln!("SKIP: docker not available");
+        return;
+    }
+
+    let vault = temp_vault("through-nginx");
+    let daemon_port =
+        common::start_daemon_reachable(&vault).expect("daemon did not start");
+
+    let name = "spacenotes-uploads-proxy";
+    let Some(port) = common::start_nginx_proxy(name, daemon_port) else {
+        common::stop_nginx(name);
+        panic!("could not start nginx proxy");
+    };
+
+    let data = payload(3 * 1024 * 1024);
+    let id = open_upload(port, "Music/proxied.wav", data.len());
+
+    let half = data.len() / 2;
+    let (status, headers, _) = request(
+        port,
+        "PATCH",
+        &format!("/uploads/{id}"),
+        &[("Upload-Offset", "0".to_string())],
+        &data[..half],
+    );
+    assert_eq!(status, 204, "nginx must forward a PATCH to the daemon");
+    assert_eq!(
+        header(&headers, "upload-offset").as_deref(),
+        Some(half.to_string().as_str())
+    );
+
+    let (status, headers, _) = request(port, "HEAD", &format!("/uploads/{id}"), &[], &[]);
+    assert_eq!(status, 200, "nginx must forward a HEAD to the daemon");
+    let offset: usize = header(&headers, "upload-offset")
+        .expect("offset survives the proxy")
+        .parse()
+        .expect("offset is a number");
+
+    let (status, _, _) = request(
+        port,
+        "PATCH",
+        &format!("/uploads/{id}"),
+        &[("Upload-Offset", offset.to_string())],
+        &data[offset..],
+    );
+    assert_eq!(status, 201, "the upload completes through the proxy");
+
+    let landed = std::fs::read(vault.join("Music/proxied.wav")).expect("file landed");
+    assert_eq!(landed, data, "bytes must survive the proxy unchanged");
+
+    common::stop_nginx(name);
+    let _ = std::fs::remove_dir_all(&vault);
+}
+
 #[test]
 fn an_unknown_upload_id_is_not_found() {
     let vault = temp_vault("unknown");
