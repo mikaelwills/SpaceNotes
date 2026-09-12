@@ -53,6 +53,11 @@ struct Args {
 /// only the vault path, and anything that waited for SpacetimeDB would turn a
 /// slow startup into 502s on every file request.
 fn spawn_file_server(vault_path: std::path::PathBuf, port: u16) {
+    match spacenotes::uploads::sweep_stale(&vault_path) {
+        0 => {}
+        swept => tracing::info!("Dropped {swept} abandoned upload(s)"),
+    }
+
     tokio::spawn(async move {
         match tokio::net::TcpListener::bind(("0.0.0.0", port)).await {
             Ok(listener) => {

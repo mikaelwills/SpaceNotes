@@ -25,6 +25,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
 use tower_http::services::ServeDir;
 
+use crate::uploads;
 use crate::vault_path;
 
 #[derive(Clone)]
@@ -47,6 +48,8 @@ pub fn router(vault_path: PathBuf) -> Router {
 
     Router::new()
         .route("/files/*path", any(files_route))
+        .route("/uploads", axum::routing::post(create_upload))
+        .route("/uploads/:id", any(upload_route))
         .with_state(state)
         .fallback_service(
             Router::new()
@@ -249,6 +252,238 @@ fn apply_date_header(target: &Path, headers: &HeaderMap) {
         since_epoch.subsec_nanos(),
     );
     let _ = filetime::set_file_mtime(target, mtime);
+}
+
+#[derive(serde::Deserialize)]
+struct CreateUpload {
+    path: String,
+    size: u64,
+}
+
+/// Opens an upload session. Collision is settled here and only here: a resume
+/// trusts the uniqueness established at this moment rather than re-checking.
+async fn create_upload(
+    State(state): State<FilesState>,
+    axum::Json(body): axum::Json<CreateUpload>,
+) -> Response {
+    let target = match vault_path::resolve_vault_path(&state.vault_path, &body.path) {
+        Ok(target) => target,
+        Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+    };
+
+    if target.exists() {
+        return StatusCode::CONFLICT.into_response();
+    }
+
+    let session = uploads::UploadSession {
+        id: uploads::new_id(),
+        path: body.path,
+        size: body.size,
+        created_ms: uploads::now_ms(),
+    };
+
+    if let Err(error) = uploads::write_session(&state.vault_path, &session) {
+        tracing::error!("Could not open upload session: {error}");
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+
+    (
+        StatusCode::CREATED,
+        [
+            (header::LOCATION, format!("/uploads/{}", session.id)),
+            (UPLOAD_OFFSET, "0".to_string()),
+        ],
+        axum::Json(serde_json::json!({ "id": session.id })),
+    )
+        .into_response()
+}
+
+const UPLOAD_OFFSET: header::HeaderName = header::HeaderName::from_static("upload-offset");
+const UPLOAD_LENGTH: header::HeaderName = header::HeaderName::from_static("upload-length");
+
+async fn upload_route(
+    State(state): State<FilesState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    request: Request,
+) -> Response {
+    if !uploads::is_valid_id(&id) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+
+    match *request.method() {
+        axum::http::Method::HEAD => head_upload(state, id),
+        axum::http::Method::PATCH => patch_upload(state, id, request).await,
+        axum::http::Method::DELETE => {
+            uploads::forget(&state.vault_path, &id);
+            StatusCode::NO_CONTENT.into_response()
+        }
+        _ => StatusCode::METHOD_NOT_ALLOWED.into_response(),
+    }
+}
+
+/// Reports how many bytes actually survived, which is what a resuming client
+/// asks before sending anything.
+fn head_upload(state: FilesState, id: String) -> Response {
+    let Ok(session) = uploads::read_session(&state.vault_path, &id) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+
+    let offset = uploads::current_offset(&state.vault_path, &id);
+
+    (
+        StatusCode::OK,
+        [
+            (UPLOAD_OFFSET, offset.to_string()),
+            (UPLOAD_LENGTH, session.size.to_string()),
+            (header::CACHE_CONTROL, "no-store".to_string()),
+        ],
+    )
+        .into_response()
+}
+
+/// Appends one chunk at the client's stated offset. A mismatch is a 409
+/// carrying the real offset, so a confused client can resynchronise instead
+/// of corrupting the file.
+async fn patch_upload(state: FilesState, id: String, request: Request) -> Response {
+    let (parts, body) = request.into_parts();
+
+    let Ok(session) = uploads::read_session(&state.vault_path, &id) else {
+        drain(body).await;
+        return StatusCode::NOT_FOUND.into_response();
+    };
+
+    let claimed = parts
+        .headers
+        .get(UPLOAD_OFFSET)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<u64>().ok());
+
+    let Some(claimed) = claimed else {
+        drain(body).await;
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+
+    let actual = uploads::current_offset(&state.vault_path, &id);
+    if claimed != actual {
+        drain(body).await;
+        return (
+            StatusCode::CONFLICT,
+            [(UPLOAD_OFFSET, actual.to_string())],
+        )
+            .into_response();
+    }
+
+    let remaining = session.size - actual;
+    if declared_length(&parts.headers).is_some_and(|declared| declared > remaining) {
+        drain(body).await;
+        return (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            [(UPLOAD_OFFSET, actual.to_string())],
+        )
+            .into_response();
+    }
+
+    let part = uploads::part_path(&state.vault_path, &id);
+    let written = match append_chunk(&part, body, remaining).await {
+        Ok(written) => written,
+        Err(error) => {
+            tracing::warn!("Upload {id} chunk failed: {error}");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                [(
+                    UPLOAD_OFFSET,
+                    uploads::current_offset(&state.vault_path, &id).to_string(),
+                )],
+            )
+                .into_response();
+        }
+    };
+
+    let offset = actual + written;
+
+    if offset < session.size {
+        return (StatusCode::NO_CONTENT, [(UPLOAD_OFFSET, offset.to_string())])
+            .into_response();
+    }
+
+    match finish_upload(&state.vault_path, &session).await {
+        Ok(()) => (
+            StatusCode::CREATED,
+            [
+                (header::LOCATION, format!("/files/{}", session.path)),
+                (UPLOAD_OFFSET, offset.to_string()),
+            ],
+        )
+            .into_response(),
+        Err(error) => {
+            tracing::error!("Upload {id} could not be finalised: {error}");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+/// Reads and discards a body being refused. Answering before the client has
+/// finished sending closes the connection under it, and the client sees a
+/// reset instead of the status explaining what went wrong.
+async fn drain(body: Body) {
+    let mut stream = body.into_data_stream();
+    while let Some(chunk) = stream.next().await {
+        if chunk.is_err() {
+            return;
+        }
+    }
+}
+
+fn declared_length(headers: &HeaderMap) -> Option<u64> {
+    headers
+        .get(header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<u64>().ok())
+}
+
+/// Appends to the part file, refusing to write past the declared size so a
+/// runaway client cannot fill the vault.
+async fn append_chunk(part: &Path, body: Body, remaining: u64) -> Result<u64> {
+    if let Some(parent) = part.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+
+    let mut handle = tokio::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(part)
+        .await?;
+
+    let mut stream = body.into_data_stream();
+    let mut written = 0u64;
+
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| anyhow::anyhow!("body stream failed: {e}"))?;
+        if written + chunk.len() as u64 > remaining {
+            handle.sync_all().await?;
+            anyhow::bail!("chunk exceeds declared upload size");
+        }
+        handle.write_all(&chunk).await?;
+        written += chunk.len() as u64;
+    }
+
+    handle.sync_all().await?;
+    Ok(written)
+}
+
+/// Moves the finished part file into the vault. The rename is atomic and on
+/// the same filesystem, so the watcher sees one complete file appear.
+async fn finish_upload(vault_root: &Path, session: &uploads::UploadSession) -> Result<()> {
+    let target = vault_path::resolve_vault_path(vault_root, &session.path)?;
+
+    if let Some(parent) = target.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+
+    let part = uploads::part_path(vault_root, &session.id);
+    tokio::fs::rename(&part, &target).await?;
+    let _ = tokio::fs::remove_file(uploads::meta_path(vault_root, &session.id)).await;
+    Ok(())
 }
 
 /// Serves until the process ends. Spawned alongside the watcher.
