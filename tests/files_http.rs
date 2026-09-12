@@ -19,6 +19,10 @@
 use std::process::Command;
 use std::time::Duration;
 
+mod common;
+
+use common::{request, request_with_body, start_daemon};
+
 const NGINX_IMAGE: &str = "nginx:1.26";
 
 /// What a single header must look like.
@@ -280,38 +284,6 @@ fn put_cases() -> Vec<PutCase> {
     ]
 }
 
-/// Starts the daemon's file server in-process on an ephemeral port. Returns
-/// the port; the server task lives for the rest of the test binary.
-fn start_daemon(vault: &str) -> Option<u16> {
-    use std::sync::OnceLock;
-    static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
-
-    let rt = RUNTIME.get_or_init(|| {
-        tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .expect("tokio runtime")
-    });
-
-    let vault = std::path::PathBuf::from(vault);
-    let listener = rt
-        .block_on(async { tokio::net::TcpListener::bind(("127.0.0.1", 0)).await })
-        .ok()?;
-    let port = listener.local_addr().ok()?.port();
-
-    rt.spawn(async move {
-        let _ = spacenotes::files_http::serve(vault, listener).await;
-    });
-
-    for _ in 0..50 {
-        if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
-            return Some(port);
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    None
-}
-
 fn docker_available() -> bool {
     Command::new("docker")
         .arg("info")
@@ -320,6 +292,12 @@ fn docker_available() -> bool {
         .unwrap_or(false)
 }
 
+/// Boots the nginx baseline and waits for it to actually answer.
+///
+/// Readiness is a real HTTP response, not an open socket: docker publishes the
+/// port before nginx is listening behind it, so a bare TCP connect succeeds
+/// while requests still fail. That showed up as all 20 cases reporting status
+/// 0 whenever both tests started a container at the same moment.
 fn start_nginx(name: &str, vault: &str, conf: &str) -> Option<u16> {
     let _ = Command::new("docker").args(["rm", "-f", name]).output();
 
@@ -356,10 +334,11 @@ fn start_nginx(name: &str, vault: &str, conf: &str) -> Option<u16> {
                 .ok()
         })?;
 
-    // Wait for it to accept connections rather than sleeping blind.
-    for _ in 0..50 {
-        if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
-            return Some(port);
+    for _ in 0..100 {
+        if let Ok((status, _, _)) = request(port, "GET", "/files/", &[]) {
+            if status != 0 {
+                return Some(port);
+            }
         }
         std::thread::sleep(Duration::from_millis(100));
     }
@@ -368,104 +347,6 @@ fn start_nginx(name: &str, vault: &str, conf: &str) -> Option<u16> {
 
 fn stop_nginx(name: &str) {
     let _ = Command::new("docker").args(["rm", "-f", name]).output();
-}
-
-fn request_with_body(
-    port: u16,
-    method: &str,
-    path: &str,
-    headers: &[(&str, String)],
-    body: &[u8],
-) -> std::io::Result<(u16, Vec<(String, String)>, Vec<u8>)> {
-    use std::io::{Read, Write};
-
-    let mut stream = std::net::TcpStream::connect(("127.0.0.1", port))?;
-    stream.set_read_timeout(Some(Duration::from_secs(30)))?;
-
-    let mut req = format!(
-        "{method} {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nContent-Length: {}\r\n",
-        body.len()
-    );
-    for (k, v) in headers {
-        req.push_str(&format!("{k}: {v}\r\n"));
-    }
-    req.push_str("\r\n");
-    stream.write_all(req.as_bytes())?;
-    stream.write_all(body)?;
-
-    let mut raw = Vec::new();
-    stream.read_to_end(&mut raw)?;
-    Ok(parse_response(&raw))
-}
-
-fn parse_response(raw: &[u8]) -> (u16, Vec<(String, String)>, Vec<u8>) {
-    let split = raw
-        .windows(4)
-        .position(|w| w == b"\r\n\r\n")
-        .map(|i| i + 4)
-        .unwrap_or(raw.len());
-    let head = String::from_utf8_lossy(&raw[..split]).to_string();
-    let body = raw[split..].to_vec();
-
-    let mut lines = head.lines();
-    let status = lines
-        .next()
-        .and_then(|l| l.split_whitespace().nth(1))
-        .and_then(|s| s.parse::<u16>().ok())
-        .unwrap_or(0);
-
-    let headers = lines
-        .filter_map(|l| l.split_once(':'))
-        .map(|(k, v)| (k.trim().to_ascii_lowercase(), v.trim().to_string()))
-        .collect();
-
-    (status, headers, body)
-}
-
-/// Minimal HTTP/1.1 client. Avoids a dev-dependency and keeps full control of
-/// the raw bytes, which matters when the point is asserting exact headers.
-fn request(
-    port: u16,
-    method: &str,
-    path: &str,
-    headers: &[(&str, String)],
-) -> std::io::Result<(u16, Vec<(String, String)>, Vec<u8>)> {
-    use std::io::{Read, Write};
-
-    let mut stream = std::net::TcpStream::connect(("127.0.0.1", port))?;
-    stream.set_read_timeout(Some(Duration::from_secs(30)))?;
-
-    let mut req = format!("{method} {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n");
-    for (k, v) in headers {
-        req.push_str(&format!("{k}: {v}\r\n"));
-    }
-    req.push_str("\r\n");
-    stream.write_all(req.as_bytes())?;
-
-    let mut raw = Vec::new();
-    stream.read_to_end(&mut raw)?;
-
-    let split = raw
-        .windows(4)
-        .position(|w| w == b"\r\n\r\n")
-        .map(|i| i + 4)
-        .unwrap_or(raw.len());
-    let head = String::from_utf8_lossy(&raw[..split]).to_string();
-    let body = raw[split..].to_vec();
-
-    let mut lines = head.lines();
-    let status = lines
-        .next()
-        .and_then(|l| l.split_whitespace().nth(1))
-        .and_then(|s| s.parse::<u16>().ok())
-        .unwrap_or(0);
-
-    let headers = lines
-        .filter_map(|l| l.split_once(':'))
-        .map(|(k, v)| (k.trim().to_ascii_lowercase(), v.trim().to_string()))
-        .collect();
-
-    Ok((status, headers, body))
 }
 
 #[test]
@@ -502,7 +383,7 @@ fn put_baseline_matches_expectations() {
             }
         }
     } else {
-        start_daemon(&scratch.to_string_lossy()).expect("could not start daemon file server")
+        start_daemon(&scratch).expect("could not start daemon file server")
     };
 
     let mut failures = Vec::new();
@@ -593,7 +474,7 @@ fn baseline_matches_expectations() {
     let name = "spacenotes-files-get";
 
     let port = match target.as_str() {
-        "daemon" => match start_daemon(&vault) {
+        "daemon" => match start_daemon(std::path::Path::new(&vault)) {
             Some(p) => p,
             None => panic!("could not start daemon file server"),
         },

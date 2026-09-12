@@ -7,49 +7,12 @@
 //!
 //! Run: `cargo test --test resumable_upload -- --nocapture`
 
-use std::io::{Read, Write};
-use std::sync::OnceLock;
+use std::io::Write;
 use std::time::Duration;
 
-fn start_daemon(vault: &std::path::Path) -> u16 {
-    static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+mod common;
 
-    let rt = RUNTIME.get_or_init(|| {
-        tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .expect("tokio runtime")
-    });
-
-    let vault = vault.to_path_buf();
-    let listener = rt
-        .block_on(async { tokio::net::TcpListener::bind(("127.0.0.1", 0)).await })
-        .expect("bind ephemeral port");
-    let port = listener.local_addr().expect("local addr").port();
-
-    rt.spawn(async move {
-        let _ = spacenotes::files_http::serve(vault, listener).await;
-    });
-
-    for _ in 0..50 {
-        if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
-            return port;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    panic!("daemon did not start");
-}
-
-fn temp_vault(name: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "spacenotes-resume-{}-{}",
-        name,
-        std::process::id()
-    ));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).expect("create vault");
-    dir
-}
+use common::{header, start_daemon, temp_vault};
 
 fn request(
     port: u16,
@@ -57,27 +20,8 @@ fn request(
     path: &str,
     headers: &[(&str, String)],
     body: &[u8],
-) -> (u16, Vec<(String, String)>, Vec<u8>) {
-    let mut stream =
-        std::net::TcpStream::connect(("127.0.0.1", port)).expect("connect to daemon");
-    stream
-        .set_read_timeout(Some(Duration::from_secs(30)))
-        .expect("set timeout");
-
-    let mut req = format!(
-        "{method} {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nContent-Length: {}\r\n",
-        body.len()
-    );
-    for (k, v) in headers {
-        req.push_str(&format!("{k}: {v}\r\n"));
-    }
-    req.push_str("\r\n");
-    stream.write_all(req.as_bytes()).expect("write request");
-    stream.write_all(body).expect("write body");
-
-    let mut raw = Vec::new();
-    stream.read_to_end(&mut raw).expect("read response");
-    parse_response(&raw)
+) -> common::HttpResponse {
+    common::request_with_body(port, method, path, headers, body).expect("request to daemon")
 }
 
 /// Sends a PATCH but hangs up partway through the declared body, which is
@@ -96,36 +40,6 @@ fn truncated_patch(port: u16, id: &str, offset: u64, declared: usize, actually_s
     drop(stream);
 
     std::thread::sleep(Duration::from_millis(300));
-}
-
-fn parse_response(raw: &[u8]) -> (u16, Vec<(String, String)>, Vec<u8>) {
-    let split = raw
-        .windows(4)
-        .position(|w| w == b"\r\n\r\n")
-        .unwrap_or(raw.len());
-    let head = String::from_utf8_lossy(&raw[..split]).to_string();
-    let body = raw.get(split + 4..).unwrap_or(&[]).to_vec();
-
-    let mut lines = head.lines();
-    let status = lines
-        .next()
-        .and_then(|l| l.split_whitespace().nth(1))
-        .and_then(|s| s.parse::<u16>().ok())
-        .unwrap_or(0);
-
-    let headers = lines
-        .filter_map(|l| l.split_once(':'))
-        .map(|(k, v)| (k.trim().to_ascii_lowercase(), v.trim().to_string()))
-        .collect();
-
-    (status, headers, body)
-}
-
-fn header(headers: &[(String, String)], name: &str) -> Option<String> {
-    headers
-        .iter()
-        .find(|(k, _)| k == name)
-        .map(|(_, v)| v.clone())
 }
 
 fn open_upload(port: u16, path: &str, size: usize) -> String {
@@ -154,7 +68,7 @@ fn payload(size: usize) -> Vec<u8> {
 #[test]
 fn an_interrupted_upload_resumes_from_what_survived() {
     let vault = temp_vault("interrupted");
-    let port = start_daemon(&vault);
+    let port = start_daemon(&vault).expect("daemon did not start");
 
     let data = payload(3 * 1024 * 1024);
     let id = open_upload(port, "Music/take 1.wav", data.len());
@@ -203,7 +117,7 @@ fn an_interrupted_upload_resumes_from_what_survived() {
 #[test]
 fn a_chunked_upload_lands_byte_identical() {
     let vault = temp_vault("chunked");
-    let port = start_daemon(&vault);
+    let port = start_daemon(&vault).expect("daemon did not start");
 
     let data = payload(5 * 1024 * 1024);
     let id = open_upload(port, "big.wav", data.len());
@@ -240,7 +154,7 @@ fn a_chunked_upload_lands_byte_identical() {
 #[test]
 fn a_wrong_offset_is_refused_and_reports_the_real_one() {
     let vault = temp_vault("bad-offset");
-    let port = start_daemon(&vault);
+    let port = start_daemon(&vault).expect("daemon did not start");
 
     let data = payload(64 * 1024);
     let id = open_upload(port, "a.wav", data.len());
@@ -274,7 +188,7 @@ fn a_wrong_offset_is_refused_and_reports_the_real_one() {
 #[test]
 fn an_upload_cannot_write_past_its_declared_size() {
     let vault = temp_vault("overflow");
-    let port = start_daemon(&vault);
+    let port = start_daemon(&vault).expect("daemon did not start");
 
     let id = open_upload(port, "small.wav", 1024);
     let (status, _, _) = request(
@@ -300,7 +214,7 @@ fn an_upload_cannot_write_past_its_declared_size() {
 #[test]
 fn a_partial_upload_never_appears_in_the_vault() {
     let vault = temp_vault("no-partial");
-    let port = start_daemon(&vault);
+    let port = start_daemon(&vault).expect("daemon did not start");
 
     let data = payload(2 * 1024 * 1024);
     let id = open_upload(port, "Music/pending.wav", data.len());
@@ -329,7 +243,7 @@ fn a_partial_upload_never_appears_in_the_vault() {
 fn opening_an_upload_over_an_existing_file_is_refused() {
     let vault = temp_vault("collision");
     std::fs::write(vault.join("taken.wav"), b"already here").unwrap();
-    let port = start_daemon(&vault);
+    let port = start_daemon(&vault).expect("daemon did not start");
 
     let body = br#"{"path":"taken.wav","size":10}"#;
     let (status, _, _) = request(
@@ -352,7 +266,7 @@ fn opening_an_upload_over_an_existing_file_is_refused() {
 #[test]
 fn an_upload_path_cannot_escape_the_vault() {
     let vault = temp_vault("traversal");
-    let port = start_daemon(&vault);
+    let port = start_daemon(&vault).expect("daemon did not start");
 
     let body = br#"{"path":"../escaped.wav","size":10}"#;
     let (status, _, _) = request(
@@ -375,7 +289,7 @@ fn an_upload_path_cannot_escape_the_vault() {
 #[test]
 fn an_unknown_upload_id_is_not_found() {
     let vault = temp_vault("unknown");
-    let port = start_daemon(&vault);
+    let port = start_daemon(&vault).expect("daemon did not start");
 
     let (status, _, _) = request(
         port,

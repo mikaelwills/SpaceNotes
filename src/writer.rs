@@ -2,6 +2,7 @@ use anyhow::Result;
 use std::path::Path;
 
 use crate::space_file::SpaceFile;
+use crate::vault_path::append_tmp_suffix;
 pub use crate::vault_path::resolve_vault_path;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -110,12 +111,6 @@ fn write_and_sync(tmp_path: &Path, payload: &[u8]) -> Result<()> {
     handle.write_all(payload)?;
     handle.sync_all()?;
     Ok(())
-}
-
-fn append_tmp_suffix(file_path: &Path) -> std::path::PathBuf {
-    let mut name = file_path.file_name().unwrap_or_default().to_os_string();
-    name.push(".tmp");
-    file_path.with_file_name(name)
 }
 
 const MAX_PLAUSIBLE_MS: u64 = 4_102_444_800_000;
@@ -509,22 +504,6 @@ pub(crate) mod tests {
                              KBiSHcSAADSAwEAAA==";
         let decoded = crate::scanner::decode_binary_content(dart_produced).unwrap();
         assert_eq!(decoded, ciphertext);
-    }
-
-    #[test]
-    fn temp_name_appends_so_siblings_sharing_a_stem_cannot_collide() {
-        assert_eq!(
-            append_tmp_suffix(Path::new("/v/a.md")),
-            Path::new("/v/a.md.tmp")
-        );
-        assert_ne!(
-            append_tmp_suffix(Path::new("/v/a.md")),
-            append_tmp_suffix(Path::new("/v/a.txt"))
-        );
-        assert_eq!(
-            append_tmp_suffix(Path::new("/v/.gpg-id")),
-            Path::new("/v/.gpg-id.tmp")
-        );
     }
 
     #[test]

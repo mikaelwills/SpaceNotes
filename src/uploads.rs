@@ -39,8 +39,9 @@ pub fn meta_path(vault_root: &Path, id: &str) -> PathBuf {
     uploads_dir(vault_root).join(format!("{id}.json"))
 }
 
-/// Ids are generated here and used as filenames, so anything that is not a
-/// plain hex id is a client that has gone off-protocol.
+/// Ids become filenames, so this is the guard that stops a crafted id from
+/// naming a path. Accepts only the hex-and-dash shape `new_id` produces,
+/// which excludes separators, dots and anything non-ASCII.
 pub fn is_valid_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 64
@@ -79,7 +80,8 @@ pub fn current_offset(vault_root: &Path, id: &str) -> u64 {
         .unwrap_or(0)
 }
 
-pub fn forget(vault_root: &Path, id: &str) {
+/// Deletes both the partial bytes and the sidecar.
+pub fn discard(vault_root: &Path, id: &str) {
     let _ = std::fs::remove_file(part_path(vault_root, id));
     let _ = std::fs::remove_file(meta_path(vault_root, id));
 }
@@ -112,7 +114,7 @@ pub fn sweep_stale(vault_root: &Path) -> usize {
         };
 
         if stale {
-            forget(vault_root, id);
+            discard(vault_root, id);
             removed += 1;
         }
     }

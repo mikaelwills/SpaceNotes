@@ -107,23 +107,10 @@ async fn put_file(state: FilesState, request: Request) -> Response {
     }
 
     let raw_path = request.uri().path().to_string();
-    let relative = match decode_vault_relative(&raw_path) {
-        Some(relative) => relative,
-        None => return StatusCode::NOT_FOUND.into_response(),
+    let (relative, target) = match writable_target(&state.vault_path, &raw_path) {
+        Ok(resolved) => resolved,
+        Err(status) => return status.into_response(),
     };
-
-    if relative.is_empty() || raw_path.ends_with('/') {
-        return StatusCode::CONFLICT.into_response();
-    }
-
-    let target = match vault_path::resolve_vault_path(&state.vault_path, &relative) {
-        Ok(target) => target,
-        Err(_) => return StatusCode::NOT_FOUND.into_response(),
-    };
-
-    if target.is_dir() {
-        return StatusCode::CONFLICT.into_response();
-    }
 
     let existed = target.exists();
 
@@ -143,6 +130,26 @@ async fn put_file(state: FilesState, request: Request) -> Response {
         let location = format!("/files/{raw}", raw = raw_path.trim_start_matches("/files/"));
         (StatusCode::CREATED, [(header::LOCATION, location)]).into_response()
     }
+}
+
+/// Resolves a request path to a file that may be written, or the status that
+/// says why it may not. A directory is a conflict rather than a miss: the name
+/// is taken by something that is not a file.
+fn writable_target(vault_root: &Path, raw_path: &str) -> Result<(String, PathBuf), StatusCode> {
+    let relative = decode_vault_relative(raw_path).ok_or(StatusCode::NOT_FOUND)?;
+
+    if relative.is_empty() || raw_path.ends_with('/') {
+        return Err(StatusCode::CONFLICT);
+    }
+
+    let target =
+        vault_path::resolve_vault_path(vault_root, &relative).map_err(|_| StatusCode::NOT_FOUND)?;
+
+    if target.is_dir() {
+        return Err(StatusCode::CONFLICT);
+    }
+
+    Ok((relative, target))
 }
 
 /// Percent-decodes each segment separately, so an encoded separator inside a
@@ -195,43 +202,28 @@ async fn stream_to_file(target: &Path, body: Body) -> Result<()> {
         tokio::fs::create_dir_all(parent).await?;
     }
 
-    let tmp = append_tmp_suffix(target);
-    let mut handle = tokio::fs::File::create(&tmp).await?;
+    let tmp = vault_path::append_tmp_suffix(target);
 
-    let mut stream = body.into_data_stream();
-    let mut write_result = Ok(());
-
-    while let Some(chunk) = stream.next().await {
-        match chunk {
-            Ok(bytes) => {
-                if let Err(error) = handle.write_all(&bytes).await {
-                    write_result = Err(anyhow::Error::from(error));
-                    break;
-                }
-            }
-            Err(error) => {
-                write_result = Err(anyhow::anyhow!("body stream failed: {error}"));
-                break;
-            }
+    match write_body(&tmp, body).await {
+        Ok(()) => tokio::fs::rename(&tmp, target).await.map_err(Into::into),
+        Err(error) => {
+            let _ = tokio::fs::remove_file(&tmp).await;
+            Err(error)
         }
     }
+}
 
-    if write_result.is_err() {
-        drop(handle);
-        let _ = tokio::fs::remove_file(&tmp).await;
-        return write_result;
+async fn write_body(tmp: &Path, body: Body) -> Result<()> {
+    let mut handle = tokio::fs::File::create(tmp).await?;
+    let mut stream = body.into_data_stream();
+
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| anyhow::anyhow!("body stream failed: {e}"))?;
+        handle.write_all(&chunk).await?;
     }
 
     handle.sync_all().await?;
-    drop(handle);
-    tokio::fs::rename(&tmp, target).await?;
     Ok(())
-}
-
-fn append_tmp_suffix(target: &Path) -> PathBuf {
-    let mut name = target.file_name().unwrap_or_default().to_os_string();
-    name.push(".tmp");
-    target.with_file_name(name)
 }
 
 /// Honours a client-supplied `Date` so an uploaded file keeps its own
@@ -314,7 +306,7 @@ async fn upload_route(
         axum::http::Method::HEAD => head_upload(state, id),
         axum::http::Method::PATCH => patch_upload(state, id, request).await,
         axum::http::Method::DELETE => {
-            uploads::forget(&state.vault_path, &id);
+            uploads::discard(&state.vault_path, &id);
             StatusCode::NO_CONTENT.into_response()
         }
         _ => StatusCode::METHOD_NOT_ALLOWED.into_response(),

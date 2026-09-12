@@ -28,6 +28,16 @@ pub fn resolve_vault_path(vault_root: &Path, rel: &str) -> Result<PathBuf> {
     Ok(resolved)
 }
 
+/// The scratch name a file is written under before being renamed into place.
+///
+/// Appends rather than replacing the extension, so `a.md` and `a.txt` cannot
+/// collide on a shared `a.tmp`.
+pub fn append_tmp_suffix(file_path: &Path) -> PathBuf {
+    let mut name = file_path.file_name().unwrap_or_default().to_os_string();
+    name.push(".tmp");
+    file_path.with_file_name(name)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -46,6 +56,22 @@ mod tests {
         assert_eq!(
             resolve_vault_path(vault, ".gpg-id").unwrap(),
             Path::new("/vault/.gpg-id")
+        );
+    }
+
+    #[test]
+    fn temp_name_appends_so_siblings_sharing_a_stem_cannot_collide() {
+        assert_eq!(
+            append_tmp_suffix(Path::new("/v/a.md")),
+            Path::new("/v/a.md.tmp")
+        );
+        assert_ne!(
+            append_tmp_suffix(Path::new("/v/a.md")),
+            append_tmp_suffix(Path::new("/v/a.txt"))
+        );
+        assert_eq!(
+            append_tmp_suffix(Path::new("/v/.gpg-id")),
+            Path::new("/v/.gpg-id.tmp")
         );
     }
 
