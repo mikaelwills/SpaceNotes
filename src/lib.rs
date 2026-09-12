@@ -7,3 +7,4 @@
 //! connection, journal or watcher.
 
 pub mod files_http;
+pub mod vault_path;

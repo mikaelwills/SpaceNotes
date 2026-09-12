@@ -1,31 +1,13 @@
 use anyhow::Result;
-use std::path::{Component, Path, PathBuf};
+use std::path::Path;
 
 use crate::space_file::SpaceFile;
+pub use crate::vault_path::resolve_vault_path;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WriteOutcome {
     Written,
     SkippedBinary,
-}
-
-pub fn resolve_vault_path(vault_root: &Path, rel: &str) -> Result<PathBuf> {
-    let mut resolved = vault_root.to_path_buf();
-    let mut depth = 0usize;
-    for component in Path::new(rel).components() {
-        match component {
-            Component::Normal(part) => {
-                resolved.push(part);
-                depth += 1;
-            }
-            Component::CurDir => {}
-            _ => anyhow::bail!("Security violation: Path {:?} escapes the vault", rel),
-        }
-    }
-    if depth == 0 {
-        anyhow::bail!("Security violation: Path {:?} resolves to the vault root", rel);
-    }
-    Ok(resolved)
 }
 
 pub fn credential_write_is_valid(vault_root: &Path, file: &SpaceFile) -> bool {
@@ -187,34 +169,6 @@ pub(crate) mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
-    }
-
-    #[test]
-    fn resolve_vault_path_joins_normal_relative_paths() {
-        let vault = Path::new("/vault");
-        assert_eq!(
-            resolve_vault_path(vault, "notes/a.md").unwrap(),
-            Path::new("/vault/notes/a.md")
-        );
-        assert_eq!(
-            resolve_vault_path(vault, "notes/./a.md").unwrap(),
-            Path::new("/vault/notes/a.md")
-        );
-        assert_eq!(
-            resolve_vault_path(vault, ".gpg-id").unwrap(),
-            Path::new("/vault/.gpg-id")
-        );
-    }
-
-    #[test]
-    fn resolve_vault_path_rejects_traversal_absolute_and_empty_paths() {
-        let vault = Path::new("/vault");
-        assert!(resolve_vault_path(vault, "../a.md").is_err());
-        assert!(resolve_vault_path(vault, "notes/../../a.md").is_err());
-        assert!(resolve_vault_path(vault, "notes/../a.md").is_err());
-        assert!(resolve_vault_path(vault, "/etc/passwd").is_err());
-        assert!(resolve_vault_path(vault, "").is_err());
-        assert!(resolve_vault_path(vault, ".").is_err());
     }
 
     #[test]

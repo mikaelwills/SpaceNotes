@@ -175,6 +175,8 @@ struct PutCase {
     body: &'static str,
     headers: Vec<(&'static str, String)>,
     status: u16,
+    /// Known, accepted daemon divergence from the nginx status.
+    either_status: Option<u16>,
     /// Relative path that must exist afterwards with this exact content.
     lands_at: Option<(&'static str, &'static str)>,
 }
@@ -187,6 +189,7 @@ fn put_cases() -> Vec<PutCase> {
             body: "fresh\n",
             headers: vec![],
             status: 201,
+            either_status: None,
             lands_at: Some(("put-new.md", "fresh\n")),
         },
         PutCase {
@@ -195,6 +198,7 @@ fn put_cases() -> Vec<PutCase> {
             body: "replaced\n",
             headers: vec![],
             status: 204,
+            either_status: None,
             lands_at: Some(("sub/Heaper test.md", "replaced\n")),
         },
         PutCase {
@@ -203,6 +207,7 @@ fn put_cases() -> Vec<PutCase> {
             body: "nested\n",
             headers: vec![],
             status: 201,
+            either_status: None,
             lands_at: Some(("deep/deeper/new.md", "nested\n")),
         },
         PutCase {
@@ -211,6 +216,7 @@ fn put_cases() -> Vec<PutCase> {
             body: "",
             headers: vec![],
             status: 201,
+            either_status: None,
             lands_at: Some(("empty.md", "")),
         },
         PutCase {
@@ -219,6 +225,7 @@ fn put_cases() -> Vec<PutCase> {
             body: "unicode\n",
             headers: vec![],
             status: 201,
+            either_status: None,
             lands_at: Some(("Café 🎵.md", "unicode\n")),
         },
         // THE blocker for resumable upload: nginx refuses a ranged PUT.
@@ -229,6 +236,7 @@ fn put_cases() -> Vec<PutCase> {
             body: "partial",
             headers: vec![("Content-Range", "bytes 0-6/100".to_string())],
             status: 501,
+            either_status: None,
             lands_at: None,
         },
         // A plain Range header is IGNORED, not rejected — full overwrite.
@@ -238,6 +246,7 @@ fn put_cases() -> Vec<PutCase> {
             body: "whole\n",
             headers: vec![("Range", "bytes=0-4".to_string())],
             status: 201,
+            either_status: None,
             lands_at: Some(("rangeheader.md", "whole\n")),
         },
         PutCase {
@@ -246,6 +255,7 @@ fn put_cases() -> Vec<PutCase> {
             body: "nope\n",
             headers: vec![],
             status: 409,
+            either_status: None,
             lands_at: None,
         },
         // MEASURED, not what the config implies: nginx normalises the
@@ -260,6 +270,7 @@ fn put_cases() -> Vec<PutCase> {
             body: "evil\n",
             headers: vec![],
             status: 500,
+            either_status: Some(404),
             lands_at: None,
         },
     ]
@@ -456,11 +467,7 @@ fn request(
 #[test]
 fn put_baseline_matches_expectations() {
     let target = std::env::var("FILES_TARGET").unwrap_or_else(|_| "nginx".into());
-    if target != "nginx" {
-        eprintln!("SKIP: FILES_TARGET={target} not implemented yet");
-        return;
-    }
-    if !docker_available() {
+    if target == "nginx" && !docker_available() {
         eprintln!("SKIP: docker not available");
         return;
     }
@@ -470,7 +477,7 @@ fn put_baseline_matches_expectations() {
     // Unique per run: a shared scratch dir meant a re-run saw the previous
     // run's files and got 204 (overwrite) where 201 (created) was expected.
     let scratch = std::env::temp_dir().join(format!(
-        "spacenotes-put-baseline-{}",
+        "spacenotes-put-{target}-{}",
         std::process::id()
     ));
     let _ = std::fs::remove_dir_all(&scratch);
@@ -480,11 +487,18 @@ fn put_baseline_matches_expectations() {
     )
     .expect("copy fixture vault");
 
-    let conf = format!("{root}/nginx-client.conf");
     let name = "spacenotes-files-put";
-    let Some(port) = start_nginx(name, &scratch.to_string_lossy(), &conf) else {
-        stop_nginx(name);
-        panic!("could not start nginx baseline container");
+    let port = if target == "nginx" {
+        let conf = format!("{root}/nginx-client.conf");
+        match start_nginx(name, &scratch.to_string_lossy(), &conf) {
+            Some(port) => port,
+            None => {
+                stop_nginx(name);
+                panic!("could not start nginx baseline container");
+            }
+        }
+    } else {
+        start_daemon(&scratch.to_string_lossy()).expect("could not start daemon file server")
     };
 
     let mut failures = Vec::new();
@@ -499,11 +513,21 @@ fn put_baseline_matches_expectations() {
 
         transcript.push(format!("{:<30} {:>3}", case.name, status));
 
-        if status != case.status {
+        let status_ok = status == case.status || case.either_status == Some(status);
+        if !status_ok {
             failures.push(format!(
-                "{}: status {}, expected {}",
-                case.name, status, case.status
+                "{}: status {}, expected {}{}",
+                case.name,
+                status,
+                case.status,
+                case.either_status
+                    .map(|s| format!(" (or {s})"))
+                    .unwrap_or_default()
             ));
+            continue;
+        }
+
+        if case.either_status == Some(status) && status != case.status {
             continue;
         }
 
@@ -524,7 +548,9 @@ fn put_baseline_matches_expectations() {
         failures.push("traversal PUT wrote outside the vault".to_string());
     }
 
-    stop_nginx(name);
+    if target == "nginx" {
+        stop_nginx(name);
+    }
     let _ = std::fs::remove_dir_all(&scratch);
 
     println!("\n--- {target} PUT transcript ---");

@@ -11,6 +11,7 @@ mod scanner;
 mod spacetime_bindings;
 mod thumbnail;
 mod tracker;
+mod vault_path;
 mod watcher;
 mod writer;
 

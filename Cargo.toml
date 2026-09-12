@@ -32,3 +32,6 @@ notify-debouncer-full = "0.7.0"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
 axum = "0.7"
 tower-http = { version = "0.5", features = ["fs"] }
+futures-util = "0.3.34"
+httpdate = "1.0.3"
+tower = "0.5.3"
