@@ -47,6 +47,24 @@ struct Args {
     files_port: u16,
 }
 
+/// Serves vault bytes for nginx to proxy at `/files/`.
+///
+/// Called before any database work and spawned rather than awaited: it needs
+/// only the vault path, and anything that waited for SpacetimeDB would turn a
+/// slow startup into 502s on every file request.
+fn spawn_file_server(vault_path: std::path::PathBuf, port: u16) {
+    tokio::spawn(async move {
+        match tokio::net::TcpListener::bind(("0.0.0.0", port)).await {
+            Ok(listener) => {
+                if let Err(e) = spacenotes::files_http::serve(vault_path, listener).await {
+                    tracing::error!("File server stopped: {e}");
+                }
+            }
+            Err(e) => tracing::error!("File server could not bind port {port}: {e}"),
+        }
+    });
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
@@ -62,6 +80,8 @@ async fn main() -> Result<()> {
 
     tracing::info!("Vault path: {:?}", absolute_vault_path);
     tracing::info!("SpacetimeDB: {}/{}", args.spacetime_host, args.database);
+
+    spawn_file_server(absolute_vault_path.clone(), args.files_port);
 
     let data_dir = args.data_dir.clone().unwrap_or_else(default_data_dir);
     tracing::info!("Data dir: {:?}", data_dir);
@@ -345,21 +365,6 @@ async fn main() -> Result<()> {
     });
 
     tracing::info!("Two-way sync initialized.");
-
-    // Serve vault bytes. Spawned rather than awaited: start_watcher parks
-    // forever, so this has to run alongside it.
-    let files_vault = absolute_vault_path.clone();
-    let files_port = args.files_port;
-    tokio::spawn(async move {
-        match tokio::net::TcpListener::bind(("0.0.0.0", files_port)).await {
-            Ok(listener) => {
-                if let Err(e) = spacenotes::files_http::serve(files_vault, listener).await {
-                    tracing::error!("File server stopped: {e}");
-                }
-            }
-            Err(e) => tracing::error!("File server could not bind port {files_port}: {e}"),
-        }
-    });
 
     // Start file watcher
     let watcher_journal = opened_journal.journal.clone();

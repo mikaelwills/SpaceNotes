@@ -1,13 +1,17 @@
 //! Behavioural baseline for `/files/` and `/thumbnails/`.
 //!
 //! One expectation table, run against two targets:
-//!   `FILES_TARGET=nginx` boots nginx in docker with the real `nginx-client.conf`
-//!   `FILES_TARGET=daemon` runs the Rust server (once it exists)
+//!   `FILES_TARGET=nginx` boots nginx in docker with `tests/fixtures/nginx-baseline.conf`
+//!   `FILES_TARGET=daemon` runs the Rust server in-process
 //!
 //! The table is written against nginx FIRST, so it records what nginx actually
 //! does rather than what the config appears to say. The daemon then has to
 //! match it. Deliberate differences are `Expect::Either`, so every divergence
 //! is visible in one place instead of silently accepted.
+//!
+//! The baseline config is a frozen copy of how `nginx-client.conf` served
+//! these routes before the daemon took them over. The live config now proxies
+//! to the daemon, so it can no longer describe the behaviour being matched.
 //!
 //! Run: `cargo test --test files_http -- --nocapture`
 //! Skips (does not fail) when its target isn't reachable.
@@ -489,7 +493,7 @@ fn put_baseline_matches_expectations() {
 
     let name = "spacenotes-files-put";
     let port = if target == "nginx" {
-        let conf = format!("{root}/nginx-client.conf");
+        let conf = format!("{root}/tests/fixtures/nginx-baseline.conf");
         match start_nginx(name, &scratch.to_string_lossy(), &conf) {
             Some(port) => port,
             None => {
@@ -585,7 +589,7 @@ fn baseline_matches_expectations() {
     let target = std::env::var("FILES_TARGET").unwrap_or_else(|_| "nginx".into());
     let root = env!("CARGO_MANIFEST_DIR");
     let vault = format!("{root}/tests/fixtures/vault");
-    let conf = format!("{root}/nginx-client.conf");
+    let conf = format!("{root}/tests/fixtures/nginx-baseline.conf");
     let name = "spacenotes-files-get";
 
     let port = match target.as_str() {
