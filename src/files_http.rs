@@ -96,9 +96,17 @@ fn strip_files_prefix(mut request: Request) -> Request {
     request
 }
 
-/// Whole-file upload. A `Content-Range` PUT keeps nginx's 501 until the
-/// resumable endpoint exists, so a client can never mistake a full overwrite
-/// for a partial write.
+/// Whole-file upload, refusing to overwrite.
+///
+/// Collision is settled here rather than by the client asking first. A client
+/// that checks and then uploads races anything that lands between the two
+/// calls, and can only check what its local view already knows — which on a
+/// client still hydrating its subscription is nothing at all. The filesystem
+/// is the only authority that cannot be stale.
+///
+/// `Overwrite: allow` opts out, for a caller that genuinely means to replace.
+/// A `Content-Range` PUT keeps nginx's 501: the resumable endpoint owns
+/// partial writes, so a client can never mistake one for a full overwrite.
 async fn put_file(state: FilesState, request: Request) -> Response {
     let headers = request.headers().clone();
 
@@ -113,6 +121,15 @@ async fn put_file(state: FilesState, request: Request) -> Response {
     };
 
     let existed = target.exists();
+    if existed && !overwrite_allowed(&headers) {
+        drain(request.into_body()).await;
+        return (
+            StatusCode::CONFLICT,
+            [(header::CONTENT_TYPE, "text/plain")],
+            format!("{relative} already exists"),
+        )
+            .into_response();
+    }
 
     match stream_to_file(&target, request.into_body()).await {
         Ok(()) => {}
@@ -130,6 +147,13 @@ async fn put_file(state: FilesState, request: Request) -> Response {
         let location = format!("/files/{raw}", raw = raw_path.trim_start_matches("/files/"));
         (StatusCode::CREATED, [(header::LOCATION, location)]).into_response()
     }
+}
+
+fn overwrite_allowed(headers: &HeaderMap) -> bool {
+    headers
+        .get("overwrite")
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.eq_ignore_ascii_case("allow"))
 }
 
 /// Resolves a request path to a file that may be written, or the status that

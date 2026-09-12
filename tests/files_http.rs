@@ -200,14 +200,28 @@ fn put_cases() -> Vec<PutCase> {
             either_status: None,
             lands_at: Some(("put-new.md", "fresh\n")),
         },
+        // DELIBERATE DIVERGENCE. nginx overwrites silently (204); the daemon
+        // refuses (409). The spec says an upload never replaces an existing
+        // file, and the daemon is the only party that can enforce that without
+        // a stale view or a race — a client checking first sees only what its
+        // subscription has hydrated, which pre-hydration is nothing.
         PutCase {
             name: "put_overwrite",
             path: "/files/sub/Heaper%20test.md",
             body: "replaced\n",
             headers: vec![],
             status: 204,
-            either_status: None,
+            either_status: Some(409),
             lands_at: Some(("sub/Heaper test.md", "replaced\n")),
+        },
+        PutCase {
+            name: "put_overwrite_opt_in",
+            path: "/files/sub/Heaper%20test.md",
+            body: "deliberate\n",
+            headers: vec![("Overwrite", "allow".to_string())],
+            status: 204,
+            either_status: None,
+            lands_at: Some(("sub/Heaper test.md", "deliberate\n")),
         },
         PutCase {
             name: "put_nested_creates_dirs",
