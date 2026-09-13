@@ -21,7 +21,6 @@ pub struct SpaceFile {
     #[unique]
     pub path: String, // "Projects/my-note.md"
     pub name: String, // "my-note"
-    pub content: String,
     pub folder_path: String, // "Projects/"
     pub depth: u32,
     pub extension: String,
@@ -31,6 +30,24 @@ pub struct SpaceFile {
     #[index(btree)]
     pub db_updated_at: Timestamp, // SpacetimeDB transaction time
     pub has_thumbnail: bool,
+}
+
+/// A file's body, kept out of `SpaceFile` so clients can hydrate metadata
+/// without it.
+///
+/// A subscription must return whole rows — SpacetimeDB rejects selecting a
+/// subset of columns — so the only way for a client to list 2000 notes without
+/// downloading 5MB of prose is for the prose to live in its own table. Clients
+/// subscribe to one row of this when a note is opened.
+///
+/// Holds exactly what carries inline content today: text of any size, and
+/// binaries under `INLINE_BINARY_MAX_BYTES`. A large binary has no row here at
+/// all — its bytes are served over HTTP.
+#[spacetimedb::table(accessor = file_content, public)]
+pub struct FileContent {
+    #[primary_key]
+    pub file_id: String,
+    pub content: String,
 }
 
 #[spacetimedb::table(accessor = folder, public)]

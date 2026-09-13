@@ -1,6 +1,6 @@
 use spacetimedb::{ReducerContext, ScheduleAt, Table};
 
-use crate::{SpaceFile, space_file};
+use crate::{SpaceFile, file_content, space_file};
 
 const ONE_MONTH_DAYS: i64 = 30;
 const MICROS_PER_DAY: i64 = 24 * 60 * 60 * 1_000_000;
@@ -94,11 +94,13 @@ fn parse_created_days(value: &str) -> Option<i64> {
     days_from_civil(year, month, day)
 }
 
-fn should_expire(file: &SpaceFile, today_days: i64) -> bool {
+/// Content is passed in rather than read from `file`, which no longer carries
+/// it — and that keeps the tests able to call this without a database.
+fn should_expire(file: &SpaceFile, content: &str, today_days: i64) -> bool {
     if !is_workflow_todo(&file.path) {
         return false;
     }
-    match created_value(&file.content).and_then(parse_created_days) {
+    match created_value(content).and_then(parse_created_days) {
         Some(created_days) => today_days - created_days > ONE_MONTH_DAYS,
         None => true,
     }
@@ -130,12 +132,14 @@ pub fn sweep_expired_todos(ctx: &ReducerContext, _schedule: TodoSweepSchedule) {
         .db
         .space_file()
         .iter()
-        .filter(|f| should_expire(f, today_days))
+        .filter(|f| should_expire(f, &crate::file_reducers::content_of(ctx, &f.id), today_days))
         .map(|f| (f.id.clone(), f.path.clone()))
         .collect();
 
     for (id, path) in &expired {
         ctx.db.space_file().id().delete(id);
+        // Cascade, same as delete_file — otherwise the swept todo's body stays.
+        ctx.db.file_content().file_id().delete(id);
         log::info!("sweep_expired_todos: deleted {} (ID: {})", path, id);
     }
 
@@ -202,12 +206,13 @@ mod tests {
         assert!(parse_created_days("2000-02-29").is_some());
     }
 
-    fn todo(path: &str, content: &str) -> SpaceFile {
-        SpaceFile {
+    /// Returns the row and its body separately, since a file's content no
+    /// longer lives on the row.
+    fn todo(path: &str, content: &str) -> (SpaceFile, String) {
+        let file = SpaceFile {
             id: "id".to_string(),
             path: path.to_string(),
             name: "n".to_string(),
-            content: content.to_string(),
             folder_path: "Workflows/spacenotes/status/todos/".to_string(),
             depth: 4,
             extension: "md".to_string(),
@@ -215,7 +220,13 @@ mod tests {
             created_time: 0,
             modified_time: 0,
             db_updated_at: spacetimedb::Timestamp::from_micros_since_unix_epoch(0),
-        }
+            has_thumbnail: false,
+        };
+        (file, content.to_string())
+    }
+
+    fn expires(todo: &(SpaceFile, String), today: i64) -> bool {
+        should_expire(&todo.0, &todo.1, today)
     }
 
     #[test]
@@ -224,22 +235,22 @@ mod tests {
         let p = "Workflows/spacenotes/status/todos/t.md";
 
         let fresh = todo(p, "---\ncreated: 2026-08-20\n---\n");
-        assert!(!should_expire(&fresh, today));
+        assert!(!expires(&fresh, today));
 
         let exactly_a_month = todo(p, "---\ncreated: 2026-07-26\n---\n");
-        assert!(!should_expire(&exactly_a_month, today));
+        assert!(!expires(&exactly_a_month, today));
 
         let old = todo(p, "---\ncreated: 2026-07-01\n---\n");
-        assert!(should_expire(&old, today));
+        assert!(expires(&old, today));
 
         let undated = todo(p, "---\nworkflow: spacenotes\n---\n");
-        assert!(should_expire(&undated, today));
+        assert!(expires(&undated, today));
 
         let unparseable = todo(p, "---\ncreated: whenever\n---\n");
-        assert!(should_expire(&unparseable, today));
+        assert!(expires(&unparseable, today));
 
         let no_frontmatter = todo(p, "# Just a todo\n");
-        assert!(should_expire(&no_frontmatter, today));
+        assert!(expires(&no_frontmatter, today));
     }
 
     #[test]
@@ -248,12 +259,12 @@ mod tests {
         let ancient = "---\ncreated: 2020-01-01\n---\n";
 
         let session = todo("Workflows/spacenotes/status/sessions/s.md", ancient);
-        assert!(!should_expire(&session, today));
+        assert!(!expires(&session, today));
 
         let knowledge = todo("Workflows/spacenotes/knowledge/k.md", ancient);
-        assert!(!should_expire(&knowledge, today));
+        assert!(!expires(&knowledge, today));
 
         let undated_session = todo("Workflows/spacenotes/status/sessions/s.md", "# x\n");
-        assert!(!should_expire(&undated_session, today));
+        assert!(!expires(&undated_session, today));
     }
 }

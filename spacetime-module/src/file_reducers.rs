@@ -1,6 +1,46 @@
 use spacetimedb::{ReducerContext, Table};
 
-use crate::{SpaceFile, space_file};
+use crate::{FileContent, SpaceFile, file_content, space_file};
+
+/// A file's body, or empty if it has none.
+///
+/// Empty covers two different things and callers do not need to tell them
+/// apart: a large binary that never had a row, and a file whose body is
+/// genuinely empty.
+pub fn content_of(ctx: &ReducerContext, id: &str) -> String {
+    ctx.db
+        .file_content()
+        .file_id()
+        .find(&id.to_string())
+        .map(|row| row.content)
+        .unwrap_or_default()
+}
+
+/// Writes a file's body, replacing any existing one.
+fn put_content(ctx: &ReducerContext, id: &str, content: String) {
+    ctx.db.file_content().file_id().delete(&id.to_string());
+    ctx.db.file_content().insert(FileContent {
+        file_id: id.to_string(),
+        content,
+    });
+}
+
+fn drop_content(ctx: &ReducerContext, id: &str) {
+    ctx.db.file_content().file_id().delete(&id.to_string());
+}
+
+/// Replaces a file's metadata row, stamping the transaction time.
+///
+/// Every reducer here previously rebuilt this struct by hand, which is why a
+/// field added to `SpaceFile` meant editing eleven places. Content is absent
+/// on purpose: a rename or move does not touch the body at all now.
+fn replace_metadata(ctx: &ReducerContext, file: SpaceFile) {
+    ctx.db.space_file().id().delete(&file.id);
+    ctx.db.space_file().insert(SpaceFile {
+        db_updated_at: ctx.timestamp,
+        ..file
+    });
+}
 
 pub fn extension_of(path: &str) -> String {
     let name = path.rsplit('/').next().unwrap_or(path);
@@ -66,10 +106,9 @@ pub fn create_file(
     }
 
     ctx.db.space_file().insert(SpaceFile {
-        id,
+        id: id.clone(),
         path: path.clone(),
         name,
-        content,
         folder_path,
         depth,
         extension,
@@ -79,6 +118,7 @@ pub fn create_file(
         db_updated_at: ctx.timestamp,
         has_thumbnail: false,
     });
+    put_content(ctx, &id, content);
     log::info!("Created file: {}", path);
     Ok(())
 }
@@ -92,27 +132,22 @@ pub fn update_file_content(
     size: u64,
     modified_time: u64,
 ) -> Result<(), String> {
-    if let Some(existing) = ctx.db.space_file().id().find(&id) {
-        // Only update content-related fields, path remains unchanged
-        ctx.db.space_file().id().delete(&id);
-        ctx.db.space_file().insert(SpaceFile {
-            id: id.clone(),
-            path: existing.path.clone(),
-            name: existing.name.clone(),
-            content,
-            folder_path: existing.folder_path.clone(),
-            depth: existing.depth,
-            extension: existing.extension.clone(),
-            size,
-            created_time: existing.created_time,
-            modified_time,
-            db_updated_at: ctx.timestamp,
-            has_thumbnail: existing.has_thumbnail,
-        });
-        log::info!("Updated content for file: {} (ID: {})", existing.path, id);
-    } else {
+    let Some(existing) = ctx.db.space_file().id().find(&id) else {
         return Err(format!("File not found for content update: {}", id));
-    }
+    };
+
+    let path = existing.path.clone();
+    replace_metadata(
+        ctx,
+        SpaceFile {
+            size,
+            modified_time,
+            ..existing
+        },
+    );
+    put_content(ctx, &id, content);
+
+    log::info!("Updated content for file: {} (ID: {})", path, id);
     Ok(())
 }
 
@@ -137,22 +172,19 @@ pub fn rename_file(
         let new_depth = new_path.matches('/').count() as u32;
         let new_extension = extension_of(&new_path);
 
-        ctx.db.space_file().id().delete(&id);
-        ctx.db.space_file().insert(SpaceFile {
-            id: id.clone(),
-            path: new_path.clone(),
-            name: new_name,
-            content: existing.content,
-            folder_path: new_folder_path,
-            depth: new_depth,
-            extension: new_extension,
-            size: existing.size,
-            created_time: existing.created_time,
-            modified_time: existing.modified_time,
-            db_updated_at: ctx.timestamp,
-            has_thumbnail: existing.has_thumbnail,
-        });
-        log::info!("Renamed file: {} -> {} (ID: {})", existing.path, new_path, id);
+        let old_path = existing.path.clone();
+        replace_metadata(
+            ctx,
+            SpaceFile {
+                path: new_path.clone(),
+                name: new_name,
+                folder_path: new_folder_path,
+                depth: new_depth,
+                extension: new_extension,
+                ..existing
+            },
+        );
+        log::info!("Renamed file: {} -> {} (ID: {})", old_path, new_path, id);
     } else {
         return Err(format!("File not found for rename: {}", id));
     }
@@ -163,6 +195,8 @@ pub fn rename_file(
 pub fn delete_file(ctx: &ReducerContext, id: String) -> Result<(), String> {
     if ctx.db.space_file().id().find(&id).is_some() {
         ctx.db.space_file().id().delete(&id);
+        // Cascade: an orphaned content row is invisible and would accumulate.
+        drop_content(ctx, &id);
         log::info!("Deleted file with ID: {}", id);
     } else {
         return Err(format!("File not found for deletion: {}", id));
@@ -186,21 +220,17 @@ pub fn update_file_path(ctx: &ReducerContext, id: String, new_path: String) -> R
         let new_depth = new_path.matches('/').count() as u32;
         let new_extension = extension_of(&new_path);
 
-        ctx.db.space_file().id().delete(&id);
-        ctx.db.space_file().insert(SpaceFile {
-            id: id.clone(),
-            path: new_path.clone(),
-            name: new_name,
-            content: existing.content,
-            folder_path: new_folder_path,
-            depth: new_depth,
-            extension: new_extension,
-            size: existing.size,
-            created_time: existing.created_time,
-            modified_time: existing.modified_time,
-            db_updated_at: ctx.timestamp,
-            has_thumbnail: existing.has_thumbnail,
-        });
+        replace_metadata(
+            ctx,
+            SpaceFile {
+                path: new_path.clone(),
+                name: new_name,
+                folder_path: new_folder_path,
+                depth: new_depth,
+                extension: new_extension,
+                ..existing
+            },
+        );
         log::info!("Updated path for file {}: {}", id, new_path);
     } else {
         return Err(format!("File not found for path update: {}", id));
@@ -225,23 +255,17 @@ pub fn move_file(ctx: &ReducerContext, old_path: String, new_path: String) -> Re
         let new_depth = new_path.matches('/').count() as u32;
         let new_extension = extension_of(&new_path);
 
-        let id = existing.id.clone();
-        let has_thumbnail = existing.has_thumbnail;
-        ctx.db.space_file().id().delete(&id);
-        ctx.db.space_file().insert(SpaceFile {
-            id,
-            path: new_path.clone(),
-            name: new_name,
-            content: existing.content,
-            folder_path: new_folder_path,
-            depth: new_depth,
-            extension: new_extension,
-            size: existing.size,
-            created_time: existing.created_time,
-            modified_time: existing.modified_time,
-            db_updated_at: ctx.timestamp,
-            has_thumbnail,
-        });
+        replace_metadata(
+            ctx,
+            SpaceFile {
+                path: new_path.clone(),
+                name: new_name,
+                folder_path: new_folder_path,
+                depth: new_depth,
+                extension: new_extension,
+                ..existing
+            },
+        );
         log::info!("Moved file: {} -> {}", old_path, new_path);
     } else {
         return Err(format!("File not found for move: {}", old_path));
@@ -266,12 +290,15 @@ pub fn upsert_file(
     require_non_root_path(&path)?;
 
     let has_thumbnail = if let Some(existing) = ctx.db.space_file().id().find(&id) {
+        // The unchanged check still compares content, so an ingest that finds
+        // nothing new writes nothing — the property that keeps the commitlog
+        // from growing on every scan.
         if existing.path == path
-            && existing.content == content
             && existing.folder_path == folder_path
             && existing.depth == depth
             && existing.size == size
             && existing.modified_time == modified_time
+            && content_of(ctx, &id) == content
         {
             return Ok(());
         }
@@ -280,11 +307,13 @@ pub fn upsert_file(
     } else {
         false
     };
+
+    // Both tables in one reducer call, so there is never a moment where a
+    // client can see a file row whose content has not arrived.
     ctx.db.space_file().insert(SpaceFile {
-        id,
+        id: id.clone(),
         path,
         name,
-        content,
         folder_path,
         depth,
         extension,
@@ -294,6 +323,7 @@ pub fn upsert_file(
         db_updated_at: ctx.timestamp,
         has_thumbnail,
     });
+    put_content(ctx, &id, content);
     Ok(())
 }
 
@@ -301,25 +331,20 @@ pub fn upsert_file(
 #[spacetimedb::reducer]
 pub fn append_to_file(ctx: &ReducerContext, path: String, content: String) -> Result<(), String> {
     if let Some(existing) = ctx.db.space_file().path().find(&path) {
-        let new_content = format!("{}{}", existing.content, content);
+        let id = existing.id.clone();
+        let new_content = format!("{}{}", content_of(ctx, &id), content);
         let new_size = new_content.len() as u64;
         let now = ctx.timestamp.to_micros_since_unix_epoch() as u64 / 1_000;
 
-        ctx.db.space_file().id().delete(&existing.id);
-        ctx.db.space_file().insert(SpaceFile {
-            id: existing.id.clone(),
-            path: existing.path,
-            name: existing.name,
-            content: new_content,
-            folder_path: existing.folder_path,
-            depth: existing.depth,
-            extension: existing.extension,
-            size: new_size,
-            created_time: existing.created_time,
-            modified_time: now,
-            db_updated_at: ctx.timestamp,
-            has_thumbnail: existing.has_thumbnail,
-        });
+        replace_metadata(
+            ctx,
+            SpaceFile {
+                size: new_size,
+                modified_time: now,
+                ..existing
+            },
+        );
+        put_content(ctx, &id, new_content);
         log::info!("Appended {} bytes to file: {}", content.len(), path);
     } else {
         return Err(format!("File not found for append: {}", path));
@@ -331,25 +356,20 @@ pub fn append_to_file(ctx: &ReducerContext, path: String, content: String) -> Re
 #[spacetimedb::reducer]
 pub fn prepend_to_file(ctx: &ReducerContext, path: String, content: String) -> Result<(), String> {
     if let Some(existing) = ctx.db.space_file().path().find(&path) {
-        let new_content = format!("{}{}", content, existing.content);
+        let id = existing.id.clone();
+        let new_content = format!("{}{}", content, content_of(ctx, &id));
         let new_size = new_content.len() as u64;
         let now = ctx.timestamp.to_micros_since_unix_epoch() as u64 / 1_000;
 
-        ctx.db.space_file().id().delete(&existing.id);
-        ctx.db.space_file().insert(SpaceFile {
-            id: existing.id.clone(),
-            path: existing.path,
-            name: existing.name,
-            content: new_content,
-            folder_path: existing.folder_path,
-            depth: existing.depth,
-            extension: existing.extension,
-            size: new_size,
-            created_time: existing.created_time,
-            modified_time: now,
-            db_updated_at: ctx.timestamp,
-            has_thumbnail: existing.has_thumbnail,
-        });
+        replace_metadata(
+            ctx,
+            SpaceFile {
+                size: new_size,
+                modified_time: now,
+                ..existing
+            },
+        );
+        put_content(ctx, &id, new_content);
         log::info!("Prepended {} bytes to file: {}", content.len(), path);
     } else {
         return Err(format!("File not found for prepend: {}", path));
@@ -360,22 +380,16 @@ pub fn prepend_to_file(ctx: &ReducerContext, path: String, content: String) -> R
 #[spacetimedb::reducer]
 pub fn set_thumbnail_available(ctx: &ReducerContext, id: String) -> Result<(), String> {
     if let Some(existing) = ctx.db.space_file().id().find(&id) {
+        let path = existing.path.clone();
+        // Keeps the existing db_updated_at rather than stamping a new one, so
+        // a thumbnail arriving does not read as a content change. That is why
+        // this cannot go through replace_metadata.
         ctx.db.space_file().id().delete(&id);
         ctx.db.space_file().insert(SpaceFile {
-            id: id.clone(),
-            path: existing.path.clone(),
-            name: existing.name.clone(),
-            content: existing.content,
-            folder_path: existing.folder_path.clone(),
-            depth: existing.depth,
-            extension: existing.extension.clone(),
-            size: existing.size,
-            created_time: existing.created_time,
-            modified_time: existing.modified_time,
-            db_updated_at: existing.db_updated_at,
             has_thumbnail: true,
+            ..existing
         });
-        log::info!("Marked thumbnail available for file: {} (ID: {})", existing.path, id);
+        log::info!("Marked thumbnail available for file: {} (ID: {})", path, id);
     } else {
         return Err(format!("File not found for thumbnail update: {}", id));
     }
@@ -392,35 +406,31 @@ pub fn find_replace_in_file(
     replace_all: bool,
 ) -> Result<(), String> {
     if let Some(existing) = ctx.db.space_file().path().find(&path) {
+        let id = existing.id.clone();
+        let current = content_of(ctx, &id);
         let new_content = if replace_all {
-            existing.content.replace(&old_text, &new_text)
+            current.replace(&old_text, &new_text)
         } else {
-            existing.content.replacen(&old_text, &new_text, 1)
+            current.replacen(&old_text, &new_text, 1)
         };
 
         // Check if anything changed
-        if new_content == existing.content {
+        if new_content == current {
             return Err(format!("No match found for replacement in file: {}", path));
         }
 
         let new_size = new_content.len() as u64;
         let now = ctx.timestamp.to_micros_since_unix_epoch() as u64 / 1_000;
 
-        ctx.db.space_file().id().delete(&existing.id);
-        ctx.db.space_file().insert(SpaceFile {
-            id: existing.id.clone(),
-            path: existing.path,
-            name: existing.name,
-            content: new_content,
-            folder_path: existing.folder_path,
-            depth: existing.depth,
-            extension: existing.extension,
-            size: new_size,
-            created_time: existing.created_time,
-            modified_time: now,
-            db_updated_at: ctx.timestamp,
-            has_thumbnail: existing.has_thumbnail,
-        });
+        replace_metadata(
+            ctx,
+            SpaceFile {
+                size: new_size,
+                modified_time: now,
+                ..existing
+            },
+        );
+        put_content(ctx, &id, new_content);
         log::info!("REDUCER_EXECUTED: find_replace_in_file path={}, new_size={}", path, new_size);
     } else {
         return Err(format!("File not found for find/replace: {}", path));

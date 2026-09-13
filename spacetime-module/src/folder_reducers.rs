@@ -119,21 +119,15 @@ pub fn move_folder(ctx: &ReducerContext, old_path: String, new_path: String) -> 
         let new_file_path = file.path.replacen(&old_path_with_slash, &new_path_with_slash, 1);
         let new_file_depth = new_file_path.matches('/').count() as u32;
 
-        // Delete old entry and insert with updated paths
+        // Paths only — the body lives in its own table and a folder rename
+        // does not touch it.
         ctx.db.space_file().id().delete(&file.id);
         ctx.db.space_file().insert(crate::SpaceFile {
-            id: file.id.clone(),
             path: new_file_path,
-            name: file.name,
-            content: file.content,
             folder_path: new_file_folder_path,
             depth: new_file_depth,
-            extension: file.extension,
-            size: file.size,
-            created_time: file.created_time,
-            modified_time: file.modified_time,
             db_updated_at: ctx.timestamp,
-            has_thumbnail: file.has_thumbnail,
+            ..file
         });
     }
 

@@ -25,11 +25,13 @@ use crate::bindings::{
     delete_folder_reducer::delete_folder,
     delete_file_reducer::delete_file,
     delete_agent_reducer::delete_agent as delete_agent_reducer_fn,
+    file_content_table::FileContentTableAccess,
     find_replace_in_file_reducer::find_replace_in_file,
     folder_table::FolderTableAccess,
     move_folder_reducer::move_folder,
     move_file_reducer::move_file,
     space_file_table::SpaceFileTableAccess,
+    space_file_type::SpaceFile,
     prepend_to_file_reducer::prepend_to_file,
     rename_file_reducer::rename_file,
     agent_activity_table::AgentActivityTableAccess,
@@ -45,16 +47,6 @@ fn flatten_outcome(
     match outcome {
         Ok(inner) => inner,
         Err(panicked) => Err(panicked.to_string()),
-    }
-}
-
-fn full_file(file: crate::bindings::space_file_type::SpaceFile) -> FullSpaceFile {
-    FullSpaceFile {
-        id: file.id.clone(),
-        path: file.path.clone(),
-        name: file.name.clone(),
-        content: file.content.clone(),
-        folder_path: file.folder_path.clone(),
     }
 }
 
@@ -101,6 +93,7 @@ impl SpacetimeClient {
             })
             .subscribe(vec![
                 "SELECT * FROM space_file",
+                "SELECT * FROM file_content",
                 "SELECT * FROM folder",
                 "SELECT * FROM agent",
                 "SELECT * FROM agent_activity",
@@ -166,6 +159,28 @@ impl SpacetimeClient {
                 "SpacetimeDB still syncing after {}s; retry shortly",
                 READINESS_TIMEOUT.as_secs()
             ),
+        }
+    }
+
+    /// Note bodies live in `file_content`, keyed by `SpaceFile.id`. A missing row is not an
+    /// error: binaries at or above the size cutoff have no row and are served over HTTP.
+    fn content_of(&self, id: &str) -> String {
+        self.conn
+            .db()
+            .file_content()
+            .file_id()
+            .find(&id.to_string())
+            .map(|row| row.content)
+            .unwrap_or_default()
+    }
+
+    fn full_file(&self, file: SpaceFile) -> FullSpaceFile {
+        FullSpaceFile {
+            content: self.content_of(&file.id),
+            id: file.id,
+            path: file.path,
+            name: file.name,
+            folder_path: file.folder_path,
         }
     }
 
@@ -262,13 +277,7 @@ impl SpacetimeClient {
             .space_file()
             .id()
             .find(&id.to_string())
-            .map(|file| FullSpaceFile {
-                id: file.id.clone(),
-                path: file.path.clone(),
-                name: file.name.clone(),
-                content: file.content.clone(),
-                folder_path: file.folder_path.clone(),
-            });
+            .map(|file| self.full_file(file));
 
         Ok(file)
     }
@@ -282,13 +291,7 @@ impl SpacetimeClient {
             .space_file()
             .path()
             .find(&path.to_string())
-            .map(|file| FullSpaceFile {
-                id: file.id.clone(),
-                path: file.path.clone(),
-                name: file.name.clone(),
-                content: file.content.clone(),
-                folder_path: file.folder_path.clone(),
-            });
+            .map(|file| self.full_file(file));
 
         Ok(file)
     }
@@ -304,13 +307,7 @@ impl SpacetimeClient {
                     .space_file()
                     .path()
                     .find(path)
-                    .map(|file| FullSpaceFile {
-                        id: file.id.clone(),
-                        path: file.path.clone(),
-                        name: file.name.clone(),
-                        content: file.content.clone(),
-                        folder_path: file.folder_path.clone(),
-                    })
+                    .map(|file| self.full_file(file))
             })
             .collect();
 
@@ -329,13 +326,7 @@ impl SpacetimeClient {
                     .space_file()
                     .id()
                     .find(id)
-                    .map(|file| FullSpaceFile {
-                        id: file.id.clone(),
-                        path: file.path.clone(),
-                        name: file.name.clone(),
-                        content: file.content.clone(),
-                        folder_path: file.folder_path.clone(),
-                    })
+                    .map(|file| self.full_file(file))
             })
             .collect();
 
@@ -567,7 +558,7 @@ impl SpacetimeClient {
                         f.path.starts_with(&prefix)
                             && (recursive || f.folder_path == prefix)
                     })
-                    .map(full_file)
+                    .map(|file| self.full_file(file))
                     .collect()
             }
             (None, Some(paths)) => {
@@ -577,7 +568,7 @@ impl SpacetimeClient {
                     .space_file()
                     .iter()
                     .filter(|f| wanted.contains(f.path.as_str()))
-                    .map(full_file)
+                    .map(|file| self.full_file(file))
                     .collect()
             }
             (None, None) => Vec::new(),
@@ -607,7 +598,8 @@ impl SpacetimeClient {
             .filter_map(|file| {
                 let name_lower = file.name.to_lowercase();
                 let path_lower = file.path.to_lowercase();
-                let content_lower = file.content.to_lowercase();
+                let content = self.content_of(&file.id);
+                let content_lower = content.to_lowercase();
 
                 let matches_all = tokens.iter().all(|token| {
                     name_lower.contains(token)
@@ -619,7 +611,7 @@ impl SpacetimeClient {
                 }
 
                 let excerpts = context_lines.map(|ctx| {
-                    let lines: Vec<&str> = file.content.lines().collect();
+                    let lines: Vec<&str> = content.lines().collect();
                     let total = lines.len();
                     let ctx = ctx as usize;
                     let mut matched_ranges: Vec<(usize, usize)> = Vec::new();
@@ -703,9 +695,10 @@ impl SpacetimeClient {
             .map(|n| (n.id.clone(), (n.name.clone(), n.path.clone())))
             .collect();
 
+        let content = self.content_of(&file.id);
         let mut seen = HashSet::new();
         let mut links = Vec::new();
-        for cap in spacenote_link_re().captures_iter(&file.content) {
+        for cap in spacenote_link_re().captures_iter(&content) {
             let target_id = cap.get(2).unwrap().as_str().to_string();
             if !seen.insert(target_id.clone()) {
                 continue;
@@ -744,7 +737,7 @@ impl SpacetimeClient {
                 continue;
             }
             let mut references_target = false;
-            for cap in spacenote_link_re().captures_iter(&file.content) {
+            for cap in spacenote_link_re().captures_iter(&self.content_of(&file.id)) {
                 if cap.get(2).unwrap().as_str() == id {
                     references_target = true;
                     break;

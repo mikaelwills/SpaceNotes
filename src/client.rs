@@ -8,6 +8,7 @@ use crate::space_file::SpaceFile as LocalSpaceFile;
 use crate::spacetime_bindings::{
     delete_folder_reducer::delete_folder,
     delete_file_reducer::delete_file,
+    file_content_table::FileContentTableAccess,
     folder_table::FolderTableAccess,
     folder_type::Folder as DbFolder,
     space_file_table::SpaceFileTableAccess,
@@ -15,8 +16,32 @@ use crate::spacetime_bindings::{
     set_thumbnail_available_reducer::set_thumbnail_available,
     upsert_folder_reducer::upsert_folder,
     upsert_file_reducer::upsert_file,
-    DbConnection,
+    DbConnection, RemoteTables,
 };
+
+/// Bodies live in `file_content`, keyed by `SpaceFile.id`, so the client can list
+/// files without downloading every body. A file with no row has empty content by
+/// design: large binaries are never stored there and are served over HTTP instead.
+fn to_local_file(db: &RemoteTables, db_file: DbSpaceFile) -> LocalSpaceFile {
+    let content = db
+        .file_content()
+        .file_id()
+        .find(&db_file.id)
+        .map(|row| row.content)
+        .unwrap_or_default();
+    LocalSpaceFile {
+        id: db_file.id,
+        path: db_file.path,
+        name: db_file.name,
+        content,
+        folder_path: db_file.folder_path,
+        depth: db_file.depth,
+        extension: db_file.extension,
+        size: db_file.size,
+        created_time: db_file.created_time,
+        modified_time: db_file.modified_time,
+    }
+}
 
 pub struct SpacetimeClient {
     conn: DbConnection,
@@ -48,6 +73,7 @@ impl SpacetimeClient {
             })
             .subscribe(vec![
                 "SELECT * FROM space_file",
+                "SELECT * FROM file_content",
                 "SELECT * FROM folder"
             ]);
 
@@ -82,18 +108,7 @@ impl SpacetimeClient {
             .db
             .space_file()
             .iter()
-            .map(|db_file| LocalSpaceFile {
-                id: db_file.id,
-                path: db_file.path,
-                name: db_file.name,
-                content: db_file.content,
-                folder_path: db_file.folder_path,
-                depth: db_file.depth,
-                extension: db_file.extension,
-                size: db_file.size,
-                created_time: db_file.created_time,
-                modified_time: db_file.modified_time,
-            })
+            .map(|db_file| to_local_file(&self.conn.db, db_file))
             .collect()
     }
 
@@ -118,18 +133,7 @@ impl SpacetimeClient {
             .space_file()
             .iter()
             .find(|n| n.path == path)
-            .map(|db_file| LocalSpaceFile {
-                id: db_file.id,
-                path: db_file.path,
-                name: db_file.name,
-                content: db_file.content,
-                folder_path: db_file.folder_path,
-                depth: db_file.depth,
-                extension: db_file.extension,
-                size: db_file.size,
-                created_time: db_file.created_time,
-                modified_time: db_file.modified_time,
-            })
+            .map(|db_file| to_local_file(&self.conn.db, db_file))
     }
 
     pub fn get_file_by_id(&self, id: &str) -> Option<LocalSpaceFile> {
@@ -138,18 +142,7 @@ impl SpacetimeClient {
             .space_file()
             .id()
             .find(&id.to_string())
-            .map(|db_file| LocalSpaceFile {
-                id: db_file.id,
-                path: db_file.path,
-                name: db_file.name,
-                content: db_file.content,
-                folder_path: db_file.folder_path,
-                depth: db_file.depth,
-                extension: db_file.extension,
-                size: db_file.size,
-                created_time: db_file.created_time,
-                modified_time: db_file.modified_time,
-            })
+            .map(|db_file| to_local_file(&self.conn.db, db_file))
     }
 
     pub fn get_files_in_folder(&self, folder_path_prefix: &str) -> Vec<LocalSpaceFile> {
@@ -158,38 +151,27 @@ impl SpacetimeClient {
             .space_file()
             .iter()
             .filter(|n| n.path.starts_with(folder_path_prefix))
-            .map(|db_file| LocalSpaceFile {
-                id: db_file.id,
-                path: db_file.path,
-                name: db_file.name,
-                content: db_file.content,
-                folder_path: db_file.folder_path,
-                depth: db_file.depth,
-                extension: db_file.extension,
-                size: db_file.size,
-                created_time: db_file.created_time,
-                modified_time: db_file.modified_time,
-            })
+            .map(|db_file| to_local_file(&self.conn.db, db_file))
             .collect()
     }
 
     /// Register callback for file updates
     pub fn on_file_updated<F>(&self, mut callback: F)
     where
-        F: FnMut(&DbSpaceFile, &DbSpaceFile) + Send + 'static,
+        F: FnMut(&DbSpaceFile, LocalSpaceFile) + Send + 'static,
     {
-        self.conn.db.space_file().on_update(move |_ctx, old, new| {
-            callback(old, new);
+        self.conn.db.space_file().on_update(move |ctx, old, new| {
+            callback(old, to_local_file(&ctx.db, new.clone()));
         });
     }
 
     /// Register callback for file inserts
     pub fn on_file_inserted<F>(&self, mut callback: F)
     where
-        F: FnMut(&DbSpaceFile) + Send + 'static,
+        F: FnMut(LocalSpaceFile) + Send + 'static,
     {
-        self.conn.db.space_file().on_insert(move |_ctx, new| {
-            callback(new);
+        self.conn.db.space_file().on_insert(move |ctx, new| {
+            callback(to_local_file(&ctx.db, new.clone()));
         });
     }
 

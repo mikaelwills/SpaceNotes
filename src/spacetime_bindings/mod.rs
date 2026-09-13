@@ -33,6 +33,8 @@ pub mod delete_folder_reducer;
 pub mod edit_message_reducer;
 pub mod end_agent_reducer;
 pub mod end_call_reducer;
+pub mod file_content_table;
+pub mod file_content_type;
 pub mod find_replace_in_file_reducer;
 pub mod folder_table;
 pub mod folder_type;
@@ -109,6 +111,8 @@ pub use delete_folder_reducer::delete_folder;
 pub use edit_message_reducer::edit_message;
 pub use end_agent_reducer::end_agent;
 pub use end_call_reducer::end_call;
+pub use file_content_table::*;
+pub use file_content_type::FileContent;
 pub use find_replace_in_file_reducer::find_replace_in_file;
 pub use folder_table::*;
 pub use folder_type::Folder;
@@ -741,6 +745,7 @@ pub struct DbUpdate {
     call_session: __sdk::TableUpdate<CallSession>,
     channel_config: __sdk::TableUpdate<ChannelConfig>,
     connected_user: __sdk::TableUpdate<ConnectedUser>,
+    file_content: __sdk::TableUpdate<FileContent>,
     folder: __sdk::TableUpdate<Folder>,
     message: __sdk::TableUpdate<Message>,
     message_image: __sdk::TableUpdate<MessageImage>,
@@ -776,6 +781,9 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "connected_user" => db_update
                     .connected_user
                     .append(connected_user_table::parse_table_update(table_update)?),
+                "file_content" => db_update
+                    .file_content
+                    .append(file_content_table::parse_table_update(table_update)?),
                 "folder" => db_update
                     .folder
                     .append(folder_table::parse_table_update(table_update)?),
@@ -845,6 +853,9 @@ impl __sdk::DbUpdate for DbUpdate {
         diff.connected_user = cache
             .apply_diff_to_table::<ConnectedUser>("connected_user", &self.connected_user)
             .with_updates_by_pk(|row| &row.connection_id);
+        diff.file_content = cache
+            .apply_diff_to_table::<FileContent>("file_content", &self.file_content)
+            .with_updates_by_pk(|row| &row.file_id);
         diff.folder = cache
             .apply_diff_to_table::<Folder>("folder", &self.folder)
             .with_updates_by_pk(|row| &row.path);
@@ -897,6 +908,9 @@ impl __sdk::DbUpdate for DbUpdate {
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "connected_user" => db_update
                     .connected_user
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "file_content" => db_update
+                    .file_content
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "folder" => db_update
                     .folder
@@ -956,6 +970,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "connected_user" => db_update
                     .connected_user
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "file_content" => db_update
+                    .file_content
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "folder" => db_update
                     .folder
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -1004,6 +1021,7 @@ pub struct AppliedDiff<'r> {
     call_session: __sdk::TableAppliedDiff<'r, CallSession>,
     channel_config: __sdk::TableAppliedDiff<'r, ChannelConfig>,
     connected_user: __sdk::TableAppliedDiff<'r, ConnectedUser>,
+    file_content: __sdk::TableAppliedDiff<'r, FileContent>,
     folder: __sdk::TableAppliedDiff<'r, Folder>,
     message: __sdk::TableAppliedDiff<'r, Message>,
     message_image: __sdk::TableAppliedDiff<'r, MessageImage>,
@@ -1046,6 +1064,11 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
         callbacks.invoke_table_row_callbacks::<ConnectedUser>(
             "connected_user",
             &self.connected_user,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<FileContent>(
+            "file_content",
+            &self.file_content,
             event,
         );
         callbacks.invoke_table_row_callbacks::<Folder>("folder", &self.folder, event);
@@ -1739,6 +1762,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         call_session_table::register_table(client_cache);
         channel_config_table::register_table(client_cache);
         connected_user_table::register_table(client_cache);
+        file_content_table::register_table(client_cache);
         folder_table::register_table(client_cache);
         message_table::register_table(client_cache);
         message_image_table::register_table(client_cache);
@@ -1756,6 +1780,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "call_session",
         "channel_config",
         "connected_user",
+        "file_content",
         "folder",
         "message",
         "message_image",

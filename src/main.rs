@@ -167,21 +167,7 @@ async fn main() -> Result<()> {
     let vault_clone = absolute_vault_path.clone();
     let tracker_clone = tracker.clone();
     let journal_clone = opened_journal.journal.clone();
-    client.on_file_updated(move |old_file, new_file| {
-        // Convert DbSpaceFile to LocalSpaceFile for writer
-        let file = space_file::SpaceFile {
-            id: new_file.id.clone(),
-            path: new_file.path.clone(),
-            name: new_file.name.clone(),
-            content: new_file.content.clone(),
-            folder_path: new_file.folder_path.clone(),
-            depth: new_file.depth,
-            extension: new_file.extension.clone(),
-            size: new_file.size,
-            created_time: new_file.created_time,
-            modified_time: new_file.modified_time,
-        };
-
+    client.on_file_updated(move |old_file, file| {
         apply_server_update(
             &vault_clone,
             &tracker_clone,
@@ -195,26 +181,13 @@ async fn main() -> Result<()> {
     let vault_clone = absolute_vault_path.clone();
     let tracker_clone = tracker.clone();
     let journal_clone = opened_journal.journal.clone();
-    client.on_file_inserted(move |db_file| {
-        let signal = db_file.content.clone();
+    client.on_file_inserted(move |file| {
+        let signal = file.content.clone();
         // Skip if we already have this content (echo from our own upload)
-        if !tracker_clone.has_changed(&db_file.id, &signal) {
-            tracing::debug!("Skipping insert echo: {}", db_file.path);
+        if !tracker_clone.has_changed(&file.id, &signal) {
+            tracing::debug!("Skipping insert echo: {}", file.path);
             return;
         }
-
-        let file = space_file::SpaceFile {
-            id: db_file.id.clone(),
-            path: db_file.path.clone(),
-            name: db_file.name.clone(),
-            content: db_file.content.clone(),
-            folder_path: db_file.folder_path.clone(),
-            depth: db_file.depth,
-            extension: db_file.extension.clone(),
-            size: db_file.size,
-            created_time: db_file.created_time,
-            modified_time: db_file.modified_time,
-        };
 
         if download_server_file(&journal_clone, &vault_clone, &file, "Downloaded new")
             == Some(writer::WriteOutcome::Written)
