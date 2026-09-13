@@ -1,6 +1,47 @@
 use spacetimedb::{ReducerContext, Table};
 
-use crate::{Folder, folder, space_file};
+use crate::{Folder, file_content, folder, space_file};
+
+fn require_deletable_folder(path: &str) -> Result<(), String> {
+    if matches!(path, "" | "." | ".." | "/") {
+        return Err(format!(
+            "Refusing to operate on the vault root: '{}' is not a deletable folder",
+            path
+        ));
+    }
+    Ok(())
+}
+
+fn purge_folder_contents(ctx: &ReducerContext, normalized_path: &str) -> (usize, usize) {
+    let path_with_slash = format!("{}/", normalized_path);
+
+    let files_to_delete: Vec<String> = ctx
+        .db
+        .space_file()
+        .iter()
+        .filter(|file| file.folder_path.starts_with(&path_with_slash))
+        .map(|file| file.id.clone())
+        .collect();
+
+    for file_id in &files_to_delete {
+        ctx.db.space_file().id().delete(file_id);
+        ctx.db.file_content().file_id().delete(file_id);
+    }
+
+    let subfolders_to_delete: Vec<String> = ctx
+        .db
+        .folder()
+        .iter()
+        .filter(|f| f.path.starts_with(&path_with_slash))
+        .map(|f| f.path.clone())
+        .collect();
+
+    for subfolder_path in &subfolders_to_delete {
+        ctx.db.folder().path().delete(subfolder_path);
+    }
+
+    (files_to_delete.len(), subfolders_to_delete.len())
+}
 
 // =============================================================================
 // Folder Reducers
@@ -29,50 +70,47 @@ pub fn delete_folder(ctx: &ReducerContext, path: String) -> Result<(), String> {
     // Normalize: strip trailing slash to match storage standard
     let normalized_path = path.trim_end_matches('/').to_string();
 
+    require_deletable_folder(&normalized_path)?;
+
     if ctx.db.folder().path().find(&normalized_path).is_none() {
         return Err(format!("Folder not found for deletion: {}", normalized_path));
     }
 
-    // For cascade operations, use path with slash to match space_file.folder_path
-    let path_with_slash = format!("{}/", normalized_path);
+    let (files_deleted, subfolders_deleted) = purge_folder_contents(ctx, &normalized_path);
 
-    // CASCADE: Delete all files inside this folder (and subfolders)
-    let files_to_delete: Vec<String> = ctx
-        .db
-        .space_file()
-        .iter()
-        .filter(|file| file.folder_path.starts_with(&path_with_slash))
-        .map(|file| file.id.clone())
-        .collect();
-
-    for file_id in &files_to_delete {
-        ctx.db.space_file().id().delete(file_id);
+    if files_deleted > 0 {
+        log::info!("Cascade deleted {} files from folder: {}", files_deleted, normalized_path);
     }
 
-    if !files_to_delete.is_empty() {
-        log::info!("Cascade deleted {} files from folder: {}", files_to_delete.len(), normalized_path);
-    }
-
-    // CASCADE: Delete all subfolders (use normalized path for comparison)
-    let subfolders_to_delete: Vec<String> = ctx
-        .db
-        .folder()
-        .iter()
-        .filter(|f| f.path.starts_with(&path_with_slash))
-        .map(|f| f.path.clone())
-        .collect();
-
-    for subfolder_path in &subfolders_to_delete {
-        ctx.db.folder().path().delete(subfolder_path);
-    }
-
-    if !subfolders_to_delete.is_empty() {
-        log::info!("Cascade deleted {} subfolders from: {}", subfolders_to_delete.len(), normalized_path);
+    if subfolders_deleted > 0 {
+        log::info!("Cascade deleted {} subfolders from: {}", subfolders_deleted, normalized_path);
     }
 
     // Delete the folder itself
     ctx.db.folder().path().delete(&normalized_path);
     log::info!("Deleted folder: {}", normalized_path);
+    Ok(())
+}
+
+#[spacetimedb::reducer]
+pub fn empty_folder(ctx: &ReducerContext, path: String) -> Result<(), String> {
+    // Normalize: strip trailing slash to match storage standard
+    let normalized_path = path.trim_end_matches('/').to_string();
+
+    require_deletable_folder(&normalized_path)?;
+
+    if ctx.db.folder().path().find(&normalized_path).is_none() {
+        return Err(format!("Folder not found: {}", normalized_path));
+    }
+
+    let (files_deleted, subfolders_deleted) = purge_folder_contents(ctx, &normalized_path);
+
+    log::info!(
+        "Emptied folder: {} ({} files, {} subfolders)",
+        normalized_path,
+        files_deleted,
+        subfolders_deleted
+    );
     Ok(())
 }
 
@@ -182,6 +220,33 @@ pub fn move_folder(ctx: &ReducerContext, old_path: String, new_path: String) -> 
     log::info!("Moved folder: {} -> {} (with {} files, {} subfolders)",
                old_normalized, new_normalized, files_count, subfolders_count);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::require_deletable_folder;
+
+    #[test]
+    fn root_shaped_paths_are_refused() {
+        for path in ["", ".", "..", "/"] {
+            assert!(
+                require_deletable_folder(path).is_err(),
+                "expected refusal for {:?}",
+                path
+            );
+        }
+    }
+
+    #[test]
+    fn real_folders_are_allowed() {
+        for path in ["Workflows", "Software Development/SpaceNotes/ClientLogs"] {
+            assert!(
+                require_deletable_folder(path).is_ok(),
+                "expected {:?} to be allowed",
+                path
+            );
+        }
+    }
 }
 
 #[spacetimedb::reducer]

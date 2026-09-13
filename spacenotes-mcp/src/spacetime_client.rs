@@ -23,6 +23,7 @@ use crate::bindings::{
     create_folder_reducer::create_folder,
     create_file_reducer::create_file,
     delete_folder_reducer::delete_folder,
+    empty_folder_reducer::empty_folder,
     delete_file_reducer::delete_file,
     delete_agent_reducer::delete_agent as delete_agent_reducer_fn,
     file_content_table::FileContentTableAccess,
@@ -429,6 +430,15 @@ impl SpacetimeClient {
             let _ = tx.send(flatten_outcome(outcome));
         })?;
         self.await_reducer("delete_folder", rx).await
+    }
+
+    pub async fn empty_folder(&self, path: String) -> Result<()> {
+        tracing::info!("Emptying folder: {}", path);
+        let (tx, rx) = oneshot::channel();
+        self.conn.reducers().empty_folder_then(path, move |_ctx, outcome| {
+            let _ = tx.send(flatten_outcome(outcome));
+        })?;
+        self.await_reducer("empty_folder", rx).await
     }
 
     pub async fn append_to_file(&self, path: String, content: String) -> Result<()> {

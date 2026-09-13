@@ -31,6 +31,7 @@ pub mod delete_agent_reducer;
 pub mod delete_file_reducer;
 pub mod delete_folder_reducer;
 pub mod edit_message_reducer;
+pub mod empty_folder_reducer;
 pub mod end_agent_reducer;
 pub mod end_call_reducer;
 pub mod file_content_table;
@@ -109,6 +110,7 @@ pub use delete_agent_reducer::delete_agent;
 pub use delete_file_reducer::delete_file;
 pub use delete_folder_reducer::delete_folder;
 pub use edit_message_reducer::edit_message;
+pub use empty_folder_reducer::empty_folder;
 pub use end_agent_reducer::end_agent;
 pub use end_call_reducer::end_call;
 pub use file_content_table::*;
@@ -210,6 +212,9 @@ pub enum Reducer {
     EditMessage {
         id: String,
         text: String,
+    },
+    EmptyFolder {
+        path: String,
     },
     EndAgent {
         agent_id: String,
@@ -378,6 +383,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::DeleteFile { .. } => "delete_file",
             Reducer::DeleteFolder { .. } => "delete_folder",
             Reducer::EditMessage { .. } => "edit_message",
+            Reducer::EmptyFolder { .. } => "empty_folder",
             Reducer::EndAgent { .. } => "end_agent",
             Reducer::EndCall { .. } => "end_call",
             Reducer::FindReplaceInFile { .. } => "find_replace_in_file",
@@ -483,6 +489,9 @@ impl __sdk::Reducer for Reducer {
                     id: id.clone(),
                     text: text.clone(),
                 })
+            }
+            Reducer::EmptyFolder { path } => {
+                __sats::bsatn::to_vec(&empty_folder_reducer::EmptyFolderArgs { path: path.clone() })
             }
             Reducer::EndAgent { agent_id } => {
                 __sats::bsatn::to_vec(&end_agent_reducer::EndAgentArgs {

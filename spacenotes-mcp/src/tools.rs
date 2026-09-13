@@ -602,6 +602,17 @@ pub fn get_tools() -> Vec<Tool> {
             }),
         },
         Tool {
+            name: "empty_folder".to_string(),
+            description: "Delete everything inside a folder, recursively, keeping the folder itself.".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Folder path to empty"}
+                },
+                "required": ["path"]
+            }),
+        },
+        Tool {
             name: "append_to_file".to_string(),
             description: "Append content to the end of an existing note".to_string(),
             input_schema: json!({
@@ -1178,6 +1189,17 @@ pub async fn execute_tool(
                 .map_err(|e| e.to_string())?;
 
             Ok(json!({"content": [{"type": "text", "text": format!("Deleted folder: {}", path)}]}))
+        }
+        "empty_folder" => {
+            let path: String = serde_json::from_value(params.arguments["path"].clone())
+                .map_err(|e| e.to_string())?;
+
+            client
+                .empty_folder(path.clone())
+                .await
+                .map_err(|e| e.to_string())?;
+
+            Ok(json!({"content": [{"type": "text", "text": format!("Emptied folder: {}", path)}]}))
         }
         "append_to_file" => {
             let path = resolve_note_path(client, &params.arguments)?;
@@ -2088,7 +2110,7 @@ mod tests {
         for expected in [
             "get_file", "get_files", "create_file", "edit_file", "delete_file", "delete_files",
             "move_file", "move_files_to_folder", "append_to_file", "prepend_to_file",
-            "search_files", "search_files_content", "list_folder",
+            "search_files", "search_files_content", "list_folder", "empty_folder",
             "log_session", "get_latest_session", "list_agents", "delete_agent", "clear_all_agents",
         ] {
             assert!(names.contains(&expected.to_string()), "missing tool: {}", expected);
