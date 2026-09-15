@@ -575,7 +575,7 @@ function checkIdleWrapUp() {
   if (Date.now() - lastActivityAt < IDLE_WRAPUP_MS) return;
   if (lastKnownState !== "idle" && lastKnownState !== "thinking") return;
   wrapUpFired = true;
-  const content = `Auto wrap up, follow the wrap up procedures in the SpaceNotes vault note Workflows/${args.agent}/execution-flow.md (section "On Session End"), read via the spacenotes-mcp get_note tool`;
+  const content = `Auto wrap up. Follow this session's wrap-up procedure — if the workflow defines its own, use that; otherwise read the SpaceNotes vault note Workflows/workflow-agent/execution-flow.md (section "On Session End") via the spacenotes-mcp get_note tool`;
   log(`Idle wrap-up firing after ${Math.round((Date.now() - lastActivityAt) / 60000)}min`);
   mcp.notification({
     method: "notifications/claude/channel",
