@@ -5,6 +5,6 @@ spacetime-module/target/
 *.md
 docker-compose.yml
 Dockerfile.local
-deploy-to-nas.sh
+deploy-nas-from-ghcr.sh
 CLAUDE.md
 PLAN.md
