@@ -20,6 +20,22 @@ enum Outcome {
     SkippedBinary,
 }
 
+/// Current process RSS in MB, read straight from the kernel. Linux-only
+/// (this daemon only ever runs in the Debian container), best-effort: any
+/// parse failure just yields 0.0 rather than failing reconcile over a metric.
+fn resident_memory_mb() -> f64 {
+    let Ok(status) = std::fs::read_to_string("/proc/self/status") else {
+        return 0.0;
+    };
+    status
+        .lines()
+        .find_map(|line| line.strip_prefix("VmRSS:"))
+        .and_then(|rest| rest.trim().split_whitespace().next())
+        .and_then(|kb| kb.parse::<f64>().ok())
+        .map(|kb| kb / 1024.0)
+        .unwrap_or(0.0)
+}
+
 fn signal_of(file: &SpaceFile) -> String {
     file.change_signal()
 }
@@ -51,7 +67,14 @@ pub fn resolve_offline_identities(
     server_ids_by_path: &HashMap<String, String>,
     now: i64,
 ) -> Result<LadderOutcome> {
+    let live_started = std::time::Instant::now();
     let live = journal.live_files()?;
+    tracing::info!(
+        "journal.live_files returned {} rows in {:.1}s, RSS {:.0}MB",
+        live.len(),
+        live_started.elapsed().as_secs_f64(),
+        resident_memory_mb()
+    );
     let disk_paths: HashSet<String> = records.iter().map(|r| r.path.clone()).collect();
     let live_by_path: HashMap<String, FileRecord> = live
         .iter()
@@ -67,8 +90,18 @@ pub fn resolve_offline_identities(
 
     let mut relinked = HashSet::new();
     let mut leftover: Vec<usize> = Vec::new();
+    let identity_loop_started = std::time::Instant::now();
 
     for idx in 0..records.len() {
+        if idx > 0 && idx % 250 == 0 {
+            tracing::info!(
+                "Identity resolution progress: {}/{} records in {:.1}s, RSS {:.0}MB",
+                idx,
+                records.len(),
+                identity_loop_started.elapsed().as_secs_f64(),
+                resident_memory_mb()
+            );
+        }
         let record = &mut records[idx];
         if let Some(row) = live_by_path.get(&record.path) {
             record.uuid = row.uuid.clone();
@@ -305,6 +338,12 @@ fn reconcile_one(
         (Some(local), Some(server)) => {
             let moved_locally = relinked.contains(id) && local.path != server.path;
             if server.modified_time > local.modified_time {
+                // server_map is metadata-only (see get_all_files_metadata) —
+                // every other branch below only reads local content, but this
+                // one is about to write server bytes to disk, so fetch the
+                // real row now instead of paying that cost for every file.
+                let server = client.get_file_by_id(id).unwrap_or_else(|| server.clone());
+                let server = &server;
                 if moved_locally {
                     let merged = SpaceFile::new(
                         server.id.clone(),
@@ -361,7 +400,10 @@ fn reconcile_one(
             }
         }
 
-        (None, Some(server)) => download_missing(vault_path, tracker, server, id),
+        (None, Some(server)) => {
+            let server = client.get_file_by_id(id).unwrap_or_else(|| server.clone());
+            download_missing(vault_path, tracker, &server, id)
+        }
 
         (Some(local), None) => {
             client.upsert_file(local);
@@ -500,8 +542,15 @@ pub fn reconcile_on_startup(
     journal: &Journal,
     thumbnails: &ThumbnailQueue,
 ) -> Result<()> {
-    let server_files = client.get_all_files();
+    let started = std::time::Instant::now();
+    let server_files = client.get_all_files_metadata();
     let local_files = scan_files(vault_path)?;
+    tracing::info!(
+        "Reconcile scan: {} local files read from disk in {:.1}s, RSS {:.0}MB",
+        local_files.len(),
+        started.elapsed().as_secs_f64(),
+        resident_memory_mb()
+    );
 
     let mut server_map: HashMap<String, SpaceFile> = server_files
         .into_iter()
@@ -513,9 +562,16 @@ pub fn reconcile_on_startup(
         .collect();
 
     let now = journal::now_ms();
+    let identities_started = std::time::Instant::now();
     let mut records = disk_records(vault_path, &local_files);
-    let outcome =
-        resolve_offline_identities(journal, vault_path, &mut records, &server_ids_by_path, now)?;
+    let outcome = journal.with_transaction(|| {
+        resolve_offline_identities(journal, vault_path, &mut records, &server_ids_by_path, now)
+    })?;
+    tracing::info!(
+        "Reconcile identities resolved in {:.1}s, RSS {:.0}MB",
+        identities_started.elapsed().as_secs_f64(),
+        resident_memory_mb()
+    );
     let relinked = outcome.relinked;
     propagate_offline_deletes(
         vault_path,
@@ -546,8 +602,20 @@ pub fn reconcile_on_startup(
     let mut uploaded = 0;
     let mut unchanged = 0;
     let mut skipped_binary = 0;
+    let total = all_ids.len();
+    let loop_started = std::time::Instant::now();
 
-    for id in all_ids {
+    for (processed, id) in all_ids.into_iter().enumerate() {
+        let id: &String = id;
+        if processed > 0 && processed % 250 == 0 {
+            tracing::info!(
+                "Reconcile progress: {}/{} files in {:.1}s, RSS {:.0}MB",
+                processed,
+                total,
+                loop_started.elapsed().as_secs_f64(),
+                resident_memory_mb()
+            );
+        }
         let mut outcome: Result<Outcome> = Ok(Outcome::Skipped);
 
         let context = format!("reconcile file (ID: {})", id);

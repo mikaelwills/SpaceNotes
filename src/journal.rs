@@ -197,6 +197,29 @@ impl Journal {
         Ok(())
     }
 
+    /// Wraps `f` in a single SQLite transaction instead of autocommit-per-call.
+    /// `Journal`'s methods each take and release the connection lock for their
+    /// own body, so this doesn't hold the lock across `f` — it only sets the
+    /// DB's transaction state, so a reconcile loop that calls `upsert`/
+    /// `observe`/`relink` hundreds of times commits once instead of once per
+    /// call, which is the difference between one disk fsync and hundreds.
+    pub fn with_transaction<T>(&self, f: impl FnOnce() -> Result<T>) -> Result<T> {
+        let begin_started = std::time::Instant::now();
+        self.conn().execute_batch("BEGIN")?;
+        tracing::info!(
+            "journal BEGIN took {:.1}s",
+            begin_started.elapsed().as_secs_f64()
+        );
+        let result = f();
+        match &result {
+            Ok(_) => self.conn().execute_batch("COMMIT")?,
+            Err(_) => {
+                let _ = self.conn().execute_batch("ROLLBACK");
+            }
+        }
+        result
+    }
+
     pub fn observe(&self, record: &FileRecord, op: &str) -> Result<bool> {
         let conn = self.conn();
         let existing: Option<String> = conn

@@ -102,13 +102,29 @@ impl SpacetimeClient {
         }
     }
 
-    /// Get all files from the local cache
-    pub fn get_all_files(&self) -> Vec<LocalSpaceFile> {
+    /// Get all files' metadata without joining `file_content`. Reconcile's
+    /// bulk identity/path comparison never reads `.content` on most rows —
+    /// only the handful actually being merged do — so paying for that join
+    /// on every one of potentially thousands of rows up front just to build
+    /// a path/id index is pure waste; fetch content per-file via
+    /// `get_file_by_id` only where it's actually read.
+    pub fn get_all_files_metadata(&self) -> Vec<LocalSpaceFile> {
         self.conn
             .db
             .space_file()
             .iter()
-            .map(|db_file| to_local_file(&self.conn.db, db_file))
+            .map(|db_file| LocalSpaceFile {
+                id: db_file.id,
+                path: db_file.path,
+                name: db_file.name,
+                content: String::new(),
+                folder_path: db_file.folder_path,
+                depth: db_file.depth,
+                extension: db_file.extension,
+                size: db_file.size,
+                created_time: db_file.created_time,
+                modified_time: db_file.modified_time,
+            })
             .collect()
     }
 
