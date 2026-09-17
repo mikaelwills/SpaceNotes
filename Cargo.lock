@@ -2276,6 +2276,7 @@ dependencies = [
  "serde_yaml",
  "sha2",
  "spacetimedb-sdk",
+ "tempfile",
  "tokio",
  "tower",
  "tower-http",

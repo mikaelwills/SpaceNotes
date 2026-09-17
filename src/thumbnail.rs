@@ -17,6 +17,13 @@ const THUMBNAIL_JPEG_QUALITY: u8 = 80;
 const VIDEO_SEEK_TIMESTAMP: &str = "00:00:01";
 const VIDEO_SCALE_FILTER: &str =
     "scale=w='min(256,iw)':h='min(256,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2";
+/// Cap on how much of a video file ffmpeg gets to look at for a thumbnail.
+/// A non-faststart .mov (typical iPhone camera output) puts its moov atom at
+/// the end, so `-ss` before `-i` degrades into a linear scan of the whole
+/// file to find it — on a multi-GB video that pins the disk for minutes. This
+/// bound turns that into "usually works, cheaply" or "skipped", never "reads
+/// the whole file".
+const VIDEO_THUMBNAIL_HEAD_BYTES: u64 = 32 * 1024 * 1024;
 
 #[derive(Debug)]
 pub enum ThumbnailError {
@@ -156,7 +163,31 @@ fn run_ffmpeg(source: &Path, dest: &Path, seek: Option<&str>) -> Result<bool, Th
 }
 
 pub fn generate_video_thumbnail(source: &Path, dest: &Path) -> Result<(), ThumbnailError> {
-    extract_frame(source, dest, Some(VIDEO_SEEK_TIMESTAMP))
+    let head = head_copy(source, VIDEO_THUMBNAIL_HEAD_BYTES)?;
+    extract_frame(head.path(), dest, Some(VIDEO_SEEK_TIMESTAMP))
+}
+
+/// Copies at most `limit` bytes of `source` into a temp file and returns it.
+/// Bounds how much of a large file any single-shot tool (ffmpeg) can be asked
+/// to read for a cheap operation like a thumbnail.
+fn head_copy(source: &Path, limit: u64) -> Result<tempfile::NamedTempFile, ThumbnailError> {
+    use std::io::{Read, Write};
+
+    let mut input = std::fs::File::open(source)?;
+    let mut temp = tempfile::NamedTempFile::new()?;
+    let mut remaining = limit;
+    let mut buf = [0u8; 64 * 1024];
+    while remaining > 0 {
+        let to_read = buf.len().min(remaining as usize);
+        let read = input.read(&mut buf[..to_read])?;
+        if read == 0 {
+            break;
+        }
+        temp.write_all(&buf[..read])?;
+        remaining -= read as u64;
+    }
+    temp.flush()?;
+    Ok(temp)
 }
 
 fn extract_frame(source: &Path, dest: &Path, seek: Option<&str>) -> Result<(), ThumbnailError> {
@@ -228,6 +259,16 @@ fn process_job(vault_path: &Path, client: &SpacetimeClient, job: &ThumbnailJob) 
         tracing::warn!("Refusing thumbnail for unsafe id {:?} ({})", job.id, job.path);
         return;
     };
+
+    // The DB's has_thumbnail flag doesn't survive a redeploy (fresh
+    // database), but the .thumbnails directory is on the bind-mounted vault
+    // and does. Trust an existing file instead of re-running ffmpeg on
+    // every file in the vault after every redeploy.
+    if dest.is_file() {
+        client.set_thumbnail_available(&job.id);
+        return;
+    }
+
     if let Some(parent) = dest.parent() {
         if let Err(e) = std::fs::create_dir_all(parent) {
             tracing::warn!("Could not create .thumbnails directory: {}", e);
