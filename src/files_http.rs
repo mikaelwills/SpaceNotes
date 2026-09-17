@@ -483,7 +483,6 @@ async fn append_chunk(part: &Path, body: Body, remaining: u64) -> Result<u64> {
         written += chunk.len() as u64;
     }
 
-    handle.sync_all().await?;
     Ok(written)
 }
 
@@ -497,6 +496,8 @@ async fn finish_upload(vault_root: &Path, session: &uploads::UploadSession) -> R
     }
 
     let part = uploads::part_path(vault_root, &session.id);
+    let handle = tokio::fs::OpenOptions::new().write(true).open(&part).await?;
+    handle.sync_all().await?;
     tokio::fs::rename(&part, &target).await?;
     let _ = tokio::fs::remove_file(uploads::meta_path(vault_root, &session.id)).await;
     Ok(())
