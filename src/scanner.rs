@@ -84,14 +84,6 @@ pub fn decode_binary_content(content: &str) -> Result<Vec<u8>> {
         .map_err(|e| anyhow::anyhow!("Content is not valid base64: {e}"))
 }
 
-pub fn find_binary_under(dir: &Path) -> Option<std::path::PathBuf> {
-    WalkDir::new(dir)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .map(|e| e.into_path())
-        .find(|p| p.is_file() && is_binary(p))
-}
-
 pub fn read_file_at(vault_path: &Path, abs_path: &Path) -> Result<Option<SpaceFile>> {
     // Validation
     if !abs_path.exists() || !abs_path.is_file() {
@@ -142,16 +134,32 @@ pub fn read_file_at(vault_path: &Path, abs_path: &Path) -> Result<Option<SpaceFi
     Ok(Some(SpaceFile::new(String::new(), rel_path, content, size, created, modified)))
 }
 
-pub fn scan_files(vault_path: &Path) -> Result<Vec<SpaceFile>> {
-    let mut files = Vec::new();
+pub struct ScanOutcome<T> {
+    pub found: Vec<T>,
+    pub errors: usize,
+}
 
+fn vault_walker(vault_path: &Path) -> impl Iterator<Item = walkdir::Result<walkdir::DirEntry>> {
     // Optimization: filter_entry prevents descending into hidden directories
-    let walker = WalkDir::new(vault_path).into_iter().filter_entry(|e| {
+    WalkDir::new(vault_path).into_iter().filter_entry(|e| {
         let name = e.file_name().to_string_lossy();
         (!name.starts_with('.') || is_allowed_hidden_entry(&name)) && name != "@eaDir"
-    });
+    })
+}
 
-    for entry in walker.filter_map(|e| e.ok()) {
+pub fn scan_vault_files(vault_path: &Path) -> ScanOutcome<SpaceFile> {
+    let mut files = Vec::new();
+    let mut errors = 0;
+
+    for entry in vault_walker(vault_path) {
+        let entry = match entry {
+            Ok(e) => e,
+            Err(e) => {
+                errors += 1;
+                tracing::warn!("Vault scan could not read an entry: {}", e);
+                continue;
+            }
+        };
         let path = entry.path();
 
         if !path.is_file() || !is_ingestible(path) {
@@ -168,19 +176,22 @@ pub fn scan_files(vault_path: &Path) -> Result<Vec<SpaceFile>> {
         });
     }
 
-    Ok(files)
+    ScanOutcome { found: files, errors }
 }
 
-pub fn scan_folders(vault_path: &Path) -> Result<Vec<Folder>> {
+pub fn scan_vault_folders(vault_path: &Path) -> Result<ScanOutcome<Folder>> {
     let mut folders = Vec::new();
+    let mut errors = 0;
 
-    // Optimization: filter_entry prevents descending into hidden directories
-    let walker = WalkDir::new(vault_path).into_iter().filter_entry(|e| {
-        let name = e.file_name().to_string_lossy();
-        (!name.starts_with('.') || is_allowed_hidden_entry(&name)) && name != "@eaDir"
-    });
-
-    for entry in walker.filter_map(|e| e.ok()) {
+    for entry in vault_walker(vault_path) {
+        let entry = match entry {
+            Ok(e) => e,
+            Err(e) => {
+                errors += 1;
+                tracing::warn!("Vault folder scan could not read an entry: {}", e);
+                continue;
+            }
+        };
         let path = entry.path();
 
         // Must be a directory, and must not be the root itself
@@ -194,7 +205,7 @@ pub fn scan_folders(vault_path: &Path) -> Result<Vec<Folder>> {
         folders.push(Folder::new(rel_path));
     }
 
-    Ok(folders)
+    Ok(ScanOutcome { found: folders, errors })
 }
 
 #[cfg(test)]
@@ -221,7 +232,7 @@ mod tests {
         std::fs::write(vault.join("a.md"), "body of a\n").unwrap();
         std::fs::write(vault.join("b.md"), "body of b\n").unwrap();
 
-        let mut files = scan_files(&vault).unwrap();
+        let mut files = scan_vault_files(&vault).found;
         files.sort_by(|a, b| a.path.cmp(&b.path));
 
         assert_eq!(files.len(), 2);
@@ -233,16 +244,27 @@ mod tests {
     }
 
     #[test]
-    fn find_binary_under_detects_a_nested_gpg_and_ignores_text_only_trees() {
-        let vault = temp_vault("findbinary");
-        std::fs::create_dir_all(vault.join("with/site.com")).unwrap();
-        std::fs::create_dir_all(vault.join("without/notes")).unwrap();
-        std::fs::write(vault.join("with/site.com/user.gpg"), [0x85u8, 0x02]).unwrap();
-        std::fs::write(vault.join("without/notes/a.md"), "body\n").unwrap();
+    fn an_unreadable_subtree_is_reported_rather_than_silently_shortening_the_scan() {
+        let vault = temp_vault("unreadable-subtree");
+        std::fs::create_dir_all(vault.join("open")).unwrap();
+        std::fs::create_dir_all(vault.join("closed")).unwrap();
+        std::fs::write(vault.join("open/a.md"), "body\n").unwrap();
+        std::fs::write(vault.join("closed/b.md"), "body\n").unwrap();
 
-        let found = find_binary_under(&vault.join("with")).unwrap();
-        assert!(found.ends_with("user.gpg"));
-        assert!(find_binary_under(&vault.join("without")).is_none());
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(vault.join("closed"), std::fs::Permissions::from_mode(0o000))
+            .unwrap();
+
+        let scan = scan_vault_files(&vault);
+
+        std::fs::set_permissions(vault.join("closed"), std::fs::Permissions::from_mode(0o755))
+            .unwrap();
+
+        assert_eq!(scan.found.len(), 1, "only the readable subtree yields a file");
+        assert!(
+            scan.errors > 0,
+            "an unreadable subtree must be counted, not dropped — a short list is otherwise indistinguishable from an empty vault"
+        );
 
         let _ = std::fs::remove_dir_all(&vault);
     }
@@ -262,7 +284,7 @@ mod tests {
         std::fs::write(vault.join(".git/leak.md"), "must not ingest\n").unwrap();
         std::fs::write(vault.join("regular.md"), "note\n").unwrap();
 
-        let files = scan_files(&vault).unwrap();
+        let files = scan_vault_files(&vault).found;
         let paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
 
         assert!(paths.iter().any(|p| p.ends_with("user.gpg")));
@@ -288,7 +310,7 @@ mod tests {
         std::fs::write(vault.join("site.com/user.gpg"), ciphertext).unwrap();
         std::fs::write(vault.join(".gpg-id"), "ABC123!\nDEF456!\n").unwrap();
 
-        let mut files = scan_files(&vault).unwrap();
+        let mut files = scan_vault_files(&vault).found;
         files.sort_by(|a, b| a.path.cmp(&b.path));
 
         assert_eq!(files.len(), 2, "expected .gpg-id and the .gpg entry");
@@ -319,7 +341,7 @@ mod tests {
         let content = "---\nspacetime_id: 11111111-1111-1111-1111-111111111111\n---\nbody\n";
         std::fs::write(vault.join("a.md"), content).unwrap();
 
-        let files = scan_files(&vault).unwrap();
+        let files = scan_vault_files(&vault).found;
 
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].content, content);
@@ -335,7 +357,7 @@ mod tests {
         std::fs::write(vault.join("data.json"), "{}\n").unwrap();
         std::fs::write(vault.join("ignored.exe"), "binary").unwrap();
 
-        let mut files = scan_files(&vault).unwrap();
+        let mut files = scan_vault_files(&vault).found;
         files.sort_by(|a, b| a.path.cmp(&b.path));
 
         assert_eq!(files.len(), 2);

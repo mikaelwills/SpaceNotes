@@ -132,7 +132,8 @@ async fn main() -> Result<()> {
 
     // Reconcile folders (two-way sync)
     tracing::info!("Reconciling folders...");
-    let local_folders = scanner::scan_folders(&absolute_vault_path)?;
+    let folder_scan = scanner::scan_vault_folders(&absolute_vault_path)?;
+    let local_folders = folder_scan.found;
     let server_folders = client.get_all_folders();
 
     // Create folders that exist on server but not locally
@@ -159,6 +160,14 @@ async fn main() -> Result<()> {
     }
 
     // Upload folders that exist locally but not on server
+    if folder_scan.errors > 0 {
+        tracing::warn!(
+            "Folder scan could not read {} entr{}; syncing the {} folder(s) that were readable",
+            folder_scan.errors,
+            if folder_scan.errors == 1 { "y" } else { "ies" },
+            local_folders.len()
+        );
+    }
     client.sync_folders(&local_folders);
 
     run_journal_maintenance(&opened_journal, &absolute_vault_path, &data_dir);
@@ -201,34 +210,13 @@ async fn main() -> Result<()> {
     let tracker_clone = tracker.clone();
     let journal_clone = opened_journal.journal.clone();
     client.on_file_deleted(move |old_file| {
-        thumbnail::remove_thumbnail_file(&vault_clone, &old_file.id);
-        let path = match writer::resolve_vault_path(&vault_clone, &old_file.path) {
-            Ok(p) => p,
-            Err(e) => {
-                tracing::error!("Refusing server delete of {}: {}", old_file.path, e);
-                return;
-            }
-        };
-        if path.exists() {
-            // The tombstone below must still be written when this refuses, or the
-            // row stays live while the server row is gone and every reconcile
-            // re-uploads the file.
-            if is_protected_store_dotfile(&old_file.path) {
-                tracing::warn!(
-                    "Refusing to delete {} from disk: the store's recipient list is vault truth and a swapped one redirects every encryption",
-                    old_file.path
-                );
-            } else if let Err(e) = std::fs::remove_file(&path) {
-                tracing::error!("Failed to delete {}: {}", old_file.path, e);
-                return;
-            } else {
-                tracker_clone.remove(&old_file.id);
-                tracing::info!("Deleted local file: {}", old_file.path);
-            }
-        }
-        if let Err(e) = journal_clone.tombstone(&old_file.id, journal::now_ms()) {
-            tracing::error!("Journal tombstone failed for {}: {}", old_file.path, e);
-        }
+        remove_server_file_from_disk(
+            &vault_clone,
+            &tracker_clone,
+            &journal_clone,
+            &old_file.id,
+            &old_file.path,
+        );
     });
 
     // Register callback for folder inserts from server
@@ -268,28 +256,7 @@ async fn main() -> Result<()> {
     // Register callback for folder deletions from server
     let vault_clone = absolute_vault_path.clone();
     client.on_folder_deleted(move |old_folder| {
-        let path = match writer::resolve_vault_path(&vault_clone, &old_folder.path) {
-            Ok(p) => p,
-            Err(e) => {
-                tracing::error!("Refusing server folder delete of {}: {}", old_folder.path, e);
-                return;
-            }
-        };
-        if path.exists() && path.is_dir() {
-            if let Some(found) = scanner::find_binary_under(&path) {
-                tracing::warn!(
-                    "Refusing to delete folder {} from disk: it contains binary file {} whose bytes are not stored in the database",
-                    old_folder.path,
-                    found.display()
-                );
-                return;
-            }
-            if let Err(e) = std::fs::remove_dir_all(&path) {
-                tracing::error!("Failed to delete folder {}: {}", old_folder.path, e);
-            } else {
-                tracing::info!("Deleted local folder: {}", old_folder.path);
-            }
-        }
+        remove_server_folder_from_disk(&vault_clone, &old_folder.path);
     });
 
     // Register callback for folder updates from server (renames/moves)
@@ -460,23 +427,96 @@ fn move_corrupt_journal_aside(db_path: &Path) {
     }
 }
 
-fn apply_server_rename(vault_path: &Path, old_rel: &str, new_rel: &str) -> bool {
+fn remove_server_file_from_disk(
+    vault_path: &Path,
+    tracker: &tracker::ContentTracker,
+    journal: &journal::Journal,
+    file_id: &str,
+    file_rel: &str,
+) {
+    thumbnail::remove_thumbnail_file(vault_path, file_id);
+    let path = match writer::resolve_vault_path(vault_path, file_rel) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!("Refusing server delete of {}: {}", file_rel, e);
+            return;
+        }
+    };
+    if path.exists() {
+        // The tombstone below must still be written when this refuses, or the
+        // row stays live while the server row is gone and every reconcile
+        // re-uploads the file.
+        if is_protected_store_dotfile(file_rel) {
+            tracing::warn!(
+                "Refusing to delete {} from disk: the store's recipient list is vault truth and a swapped one redirects every encryption",
+                file_rel
+            );
+        } else if let Err(e) = std::fs::remove_file(&path) {
+            tracing::error!("Failed to delete {}: {}", file_rel, e);
+        } else {
+            tracker.remove(file_id);
+            tracing::info!("Deleted local file: {}", file_rel);
+        }
+    }
+    if let Err(e) = journal.tombstone(file_id, journal::now_ms()) {
+        tracing::error!("Journal tombstone failed for {}: {}", file_rel, e);
+    }
+}
+
+fn remove_server_folder_from_disk(vault_path: &Path, folder_rel: &str) {
+    let path = match writer::resolve_vault_path(vault_path, folder_rel) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!("Refusing server folder delete of {}: {}", folder_rel, e);
+            return;
+        }
+    };
+    if !path.exists() || !path.is_dir() {
+        return;
+    }
+    if let Err(e) = std::fs::remove_dir_all(&path) {
+        tracing::error!("Failed to delete folder {}: {}", folder_rel, e);
+    } else {
+        tracing::info!("Deleted local folder: {}", folder_rel);
+    }
+}
+
+#[derive(Debug)]
+enum RenameOutcome {
+    Refused,
+    NothingToMove,
+    MovedOnDisk,
+    UnlinkOldAfterWrite(PathBuf),
+}
+
+#[cfg(test)]
+impl RenameOutcome {
+    fn was_refused(&self) -> bool {
+        matches!(self, RenameOutcome::Refused)
+    }
+
+    fn moved_on_disk(&self) -> bool {
+        matches!(self, RenameOutcome::MovedOnDisk)
+    }
+}
+
+fn apply_server_rename(vault_path: &Path, old_rel: &str, new_rel: &str) -> RenameOutcome {
     let old_path = match writer::resolve_vault_path(vault_path, old_rel) {
         Ok(p) => p,
         Err(e) => {
             tracing::error!("Refusing server rename from {}: {}", old_rel, e);
-            return false;
+            return RenameOutcome::Refused;
         }
     };
     let new_path = match writer::resolve_vault_path(vault_path, new_rel) {
         Ok(p) => p,
         Err(e) => {
             tracing::error!("Refusing server rename to {}: {}", new_rel, e);
-            return false;
+            return RenameOutcome::Refused;
         }
     };
     if !old_path.exists() {
-        return true;
+        return RenameOutcome::NothingToMove;
     }
     if is_protected_store_dotfile(old_rel) || is_protected_store_dotfile(new_rel) {
         tracing::warn!(
@@ -484,7 +524,7 @@ fn apply_server_rename(vault_path: &Path, old_rel: &str, new_rel: &str) -> bool 
             old_rel,
             new_rel
         );
-        return false;
+        return RenameOutcome::Refused;
     }
     if scanner::is_binary(&old_path) != scanner::is_binary(&new_path) {
         tracing::warn!(
@@ -492,16 +532,52 @@ fn apply_server_rename(vault_path: &Path, old_rel: &str, new_rel: &str) -> bool 
             old_rel,
             new_rel
         );
-        return false;
+        return RenameOutcome::Refused;
+    }
+    if is_credential(&old_path, old_rel) || is_credential(&new_path, new_rel) {
+        return match apply_credential_rename(old_rel, new_rel, &old_path, &new_path) {
+            true => RenameOutcome::MovedOnDisk,
+            false => RenameOutcome::Refused,
+        };
     }
     if scanner::is_binary(&old_path) {
-        return apply_credential_rename(old_rel, new_rel, &old_path, &new_path);
+        return match apply_binary_move(old_rel, new_rel, &old_path, &new_path) {
+            true => RenameOutcome::MovedOnDisk,
+            false => RenameOutcome::Refused,
+        };
     }
-    if let Err(e) = std::fs::remove_file(&old_path) {
-        tracing::error!("Failed to delete old file {}: {}", old_rel, e);
-    } else {
-        tracing::info!("Deleted old file during rename: {}", old_rel);
+    RenameOutcome::UnlinkOldAfterWrite(old_path)
+}
+
+fn is_credential(path: &Path, rel: &str) -> bool {
+    if scanner::is_credential_store_path(rel) {
+        return true;
     }
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("gpg"))
+}
+
+fn apply_binary_move(old_rel: &str, new_rel: &str, old_path: &Path, new_path: &Path) -> bool {
+    if new_path.exists() {
+        tracing::warn!(
+            "Refusing server rename {} -> {}: the destination is occupied and its bytes would be destroyed",
+            old_rel,
+            new_rel
+        );
+        return false;
+    }
+    if let Some(parent) = new_path.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            tracing::error!("Failed to create {} for rename of {}: {}", parent.display(), old_rel, e);
+            return false;
+        }
+    }
+    if let Err(e) = std::fs::rename(old_path, new_path) {
+        tracing::error!("Failed to move {} -> {}: {}", old_rel, new_rel, e);
+        return false;
+    }
+    tracing::info!("Moved binary {} -> {}", old_rel, new_rel);
     true
 }
 
@@ -582,21 +658,47 @@ fn apply_server_update(
         return;
     }
 
-    if path_changed && !apply_server_rename(vault, old_path, &new_file.path) {
-        return;
-    }
-
-    if path_changed && scanner::is_credential_store_path(&new_file.path) {
-        if let Err(e) = journal.rekey(&new_file.id, &new_file.path, journal::now_ms() as i64) {
-            tracing::error!("Journal rekey failed for {}: {}", new_file.path, e);
+    let mut unlink_after_write = None;
+    if path_changed {
+        match apply_server_rename(vault, old_path, &new_file.path) {
+            RenameOutcome::Refused => return,
+            RenameOutcome::NothingToMove => {}
+            RenameOutcome::MovedOnDisk => {
+                if let Err(e) = journal.rekey(&new_file.id, &new_file.path, journal::now_ms() as i64)
+                {
+                    tracing::error!("Journal rekey failed for {}: {}", new_file.path, e);
+                }
+            }
+            RenameOutcome::UnlinkOldAfterWrite(old) => unlink_after_write = Some(old),
         }
     }
 
-    if download_server_file(journal, vault, new_file, "Downloaded update")
-        == Some(writer::WriteOutcome::Written)
-    {
-        tracker.update(&new_file.id, &signal);
+    let outcome = download_server_file(journal, vault, new_file, "Downloaded update");
+    if outcome != Some(writer::WriteOutcome::Written) {
+        if unlink_after_write.is_some() {
+            tracing::warn!(
+                "Kept {} on disk: the rename to {} could not be written, so the old path stays the one the journal points at",
+                old_path,
+                new_file.path
+            );
+        }
+        return;
     }
+
+    if let Some(old) = unlink_after_write {
+        if let Err(e) = std::fs::remove_file(&old) {
+            tracing::error!(
+                "Wrote {} but could not remove {}: {}. The bytes now exist at both paths.",
+                new_file.path,
+                old_path,
+                e
+            );
+        } else {
+            tracing::info!("Deleted old file during rename: {}", old_path);
+        }
+    }
+
+    tracker.update(&new_file.id, &signal);
 }
 
 fn download_server_file(
@@ -697,7 +799,7 @@ mod tests {
         let ciphertext: &[u8] = &[0x85, 0x02, 0x0c, 0x03, 0xff, 0x00, 0xde, 0xad];
         std::fs::write(vault.join("secret.gpg"), ciphertext).unwrap();
 
-        assert!(!apply_server_rename(&vault, "secret.gpg", "moved/secret.gpg"));
+        assert!(apply_server_rename(&vault, "secret.gpg", "moved/secret.gpg").was_refused());
 
         assert_eq!(
             std::fs::read(vault.join("secret.gpg")).unwrap(),
@@ -720,7 +822,10 @@ mod tests {
 
         let applied = apply_server_rename(&vault, "a.gpg", "b.gpg");
 
-        assert!(!applied, "the caller must be told the rename was refused");
+        assert!(
+            applied.was_refused(),
+            "the caller must be told the rename was refused"
+        );
         assert_eq!(std::fs::read(vault.join("b.gpg")).unwrap(), victim);
         assert_eq!(std::fs::read(vault.join("a.gpg")).unwrap(), moving);
 
@@ -735,25 +840,61 @@ mod tests {
         std::fs::write(vault.join("secret.gpg"), ciphertext).unwrap();
         std::fs::write(vault.join("note.md"), "body\n").unwrap();
 
-        assert!(!apply_server_rename(&vault, "secret.gpg", "secret.md"));
+        assert!(apply_server_rename(&vault, "secret.gpg", "secret.md").was_refused());
         assert_eq!(std::fs::read(vault.join("secret.gpg")).unwrap(), ciphertext);
         assert!(!vault.join("secret.md").exists());
 
-        assert!(!apply_server_rename(&vault, "note.md", "note.gpg"));
+        assert!(apply_server_rename(&vault, "note.md", "note.gpg").was_refused());
         assert_eq!(std::fs::read_to_string(vault.join("note.md")).unwrap(), "body\n");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn server_rename_of_text_row_deletes_the_old_path() {
+    fn server_rename_of_text_row_defers_the_unlink_until_the_new_path_is_written() {
         let dir = temp_dir("text-rename");
         let vault = vault_in(&dir);
         std::fs::write(vault.join("a.md"), "body\n").unwrap();
 
-        apply_server_rename(&vault, "a.md", "moved.md");
+        let outcome = apply_server_rename(&vault, "a.md", "moved.md");
 
-        assert!(!vault.join("a.md").exists());
+        assert!(
+            matches!(outcome, RenameOutcome::UnlinkOldAfterWrite(_)),
+            "a text row's bytes come from the database, so the old path is the only copy until the write lands"
+        );
+        assert!(vault.join("a.md").exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_text_rename_that_writes_successfully_removes_the_old_path() {
+        let dir = temp_dir("text-rename-complete");
+        let vault = vault_in(&dir);
+        std::fs::write(vault.join("a.md"), "body\n").unwrap();
+
+        let journal = journal::Journal::open(&dir.join("journal.db")).unwrap();
+        let record =
+            journal::record_from_disk(&vault, &vault.join("a.md"), ID_A.to_string()).unwrap();
+        journal.observe(&record, "create").unwrap();
+
+        let tracker = tracker::ContentTracker::new();
+        let row = space_file::SpaceFile::new(
+            ID_A.to_string(),
+            "moved.md".to_string(),
+            "body\n".to_string(),
+            5,
+            1_600_000_000_000,
+            1_600_000_000_000,
+        );
+
+        apply_server_update(&vault, &tracker, &journal, "a.md", &row);
+
+        assert_eq!(std::fs::read_to_string(vault.join("moved.md")).unwrap(), "body\n");
+        assert!(
+            !vault.join("a.md").exists(),
+            "once the new path holds the bytes the old one goes"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -891,7 +1032,8 @@ mod tests {
             &vault,
             ".password-store/a.com/old.gpg",
             ".password-store/a.com/new.gpg"
-        ));
+        )
+        .moved_on_disk());
 
         assert!(!vault.join(".password-store/a.com/old.gpg").exists());
         assert_eq!(
@@ -910,11 +1052,12 @@ mod tests {
         let ciphertext = crate::writer::tests::valid_ciphertext();
         put_credential(&vault, ".password-store/a.com/u.gpg", &ciphertext);
 
-        assert!(!apply_server_rename(
+        assert!(apply_server_rename(
             &vault,
             ".password-store/a.com/u.gpg",
             ".password-store/b.com/u.gpg"
-        ));
+        )
+        .was_refused());
 
         assert_eq!(
             std::fs::read(vault.join(".password-store/a.com/u.gpg")).unwrap(),
@@ -935,11 +1078,12 @@ mod tests {
         put_credential(&vault, ".password-store/a.com/from.gpg", &moving);
         put_credential(&vault, ".password-store/a.com/onto.gpg", victim);
 
-        assert!(!apply_server_rename(
+        assert!(apply_server_rename(
             &vault,
             ".password-store/a.com/from.gpg",
             ".password-store/a.com/onto.gpg"
-        ));
+        )
+        .was_refused());
 
         assert_eq!(
             std::fs::read(vault.join(".password-store/a.com/from.gpg")).unwrap(),
@@ -963,11 +1107,7 @@ mod tests {
         let ciphertext = crate::writer::tests::valid_ciphertext();
         put_credential(&vault, "site.com/u.gpg", &ciphertext);
 
-        assert!(!apply_server_rename(
-            &vault,
-            "site.com/u.gpg",
-            "site.com/v.gpg"
-        ));
+        assert!(apply_server_rename(&vault, "site.com/u.gpg", "site.com/v.gpg").was_refused());
 
         assert_eq!(
             std::fs::read(vault.join("site.com/u.gpg")).unwrap(),
@@ -1080,7 +1220,7 @@ mod tests {
             std::fs::write(&abs, "C582F8C66A659D51!\n").unwrap();
 
             assert!(
-                !apply_server_rename(&vault, &rel, ".password-store/moved.txt"),
+                apply_server_rename(&vault, &rel, ".password-store/moved.txt").was_refused(),
                 "{name} must not be renameable from the server"
             );
             assert!(abs.exists(), "{name} is still on disk");
@@ -1100,7 +1240,8 @@ mod tests {
         std::fs::write(vault.join("elsewhere/.gpg-id"), "whatever\n").unwrap();
 
         assert!(
-            apply_server_rename(&vault, "elsewhere/.gpg-id", "elsewhere/renamed.txt"),
+            !apply_server_rename(&vault, "elsewhere/.gpg-id", "elsewhere/renamed.txt")
+                .was_refused(),
             "the guard is scoped to the store, not to the filename"
         );
         assert!(!is_protected_store_dotfile("elsewhere/.gpg-id"));
@@ -1139,6 +1280,215 @@ mod tests {
             std::fs::read(vault.join(".password-store/a.com/u.gpg")).unwrap(),
             crate::writer::tests::valid_ciphertext(),
             "the retry writes, because the tracker never swallowed the refusal"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_media_rename_outside_the_store_moves_the_bytes_to_the_new_path() {
+        let dir = temp_dir("media-rename");
+        let vault = vault_in(&dir);
+        let pixels: &[u8] = &[0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10];
+        std::fs::create_dir_all(vault.join("Photos")).unwrap();
+        std::fs::write(vault.join("Photos/holiday.jpg"), pixels).unwrap();
+
+        assert!(
+            apply_server_rename(&vault, "Photos/holiday.jpg", "Photos/beach.jpg").moved_on_disk(),
+            "a media rename outside the credential store must be applied, not refused"
+        );
+
+        assert!(!vault.join("Photos/holiday.jpg").exists());
+        assert_eq!(
+            std::fs::read(vault.join("Photos/beach.jpg")).unwrap(),
+            pixels,
+            "the bytes move with the name"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_media_move_between_directories_carries_the_bytes_and_rekeys_the_journal() {
+        let dir = temp_dir("media-move");
+        let vault = vault_in(&dir);
+        let pixels: &[u8] = &[0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a];
+        std::fs::create_dir_all(vault.join("Inbox")).unwrap();
+        std::fs::write(vault.join("Inbox/shot.png"), pixels).unwrap();
+
+        let journal = journal::Journal::open(&dir.join("journal.db")).unwrap();
+        let record =
+            journal::record_from_disk(&vault, &vault.join("Inbox/shot.png"), ID_A.to_string())
+                .unwrap();
+        journal.observe(&record, "create").unwrap();
+
+        let tracker = tracker::ContentTracker::new();
+        let row = space_file::SpaceFile::new(
+            ID_A.to_string(),
+            "Archive/shot.png".to_string(),
+            String::new(),
+            pixels.len() as u64,
+            1_600_000_000_000,
+            1_600_000_000_000,
+        );
+
+        apply_server_update(&vault, &tracker, &journal, "Inbox/shot.png", &row);
+
+        assert_eq!(
+            std::fs::read(vault.join("Archive/shot.png")).unwrap(),
+            pixels,
+            "the bytes follow the server row to the new path"
+        );
+        assert!(!vault.join("Inbox/shot.png").exists());
+        assert!(
+            journal.by_path("Inbox/shot.png").unwrap().is_none(),
+            "the journal must not keep the stale path"
+        );
+        assert_eq!(
+            journal.by_path("Archive/shot.png").unwrap().unwrap().uuid,
+            ID_A,
+            "the journal row is re-keyed to the new path under the same uuid"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_text_rename_whose_write_fails_keeps_the_old_file_on_disk() {
+        let dir = temp_dir("rename-write-fails");
+        let vault = vault_in(&dir);
+        std::fs::write(vault.join("a.md"), "body\n").unwrap();
+
+        let journal = journal::Journal::open(&dir.join("journal.db")).unwrap();
+        let record =
+            journal::record_from_disk(&vault, &vault.join("a.md"), ID_A.to_string()).unwrap();
+        journal.observe(&record, "create").unwrap();
+
+        std::fs::write(vault.join("blocked"), "occupied\n").unwrap();
+
+        let tracker = tracker::ContentTracker::new();
+        let row = space_file::SpaceFile::new(
+            ID_A.to_string(),
+            "blocked/moved.md".to_string(),
+            "body\n".to_string(),
+            5,
+            1_600_000_000_000,
+            1_600_000_000_000,
+        );
+
+        apply_server_update(&vault, &tracker, &journal, "a.md", &row);
+
+        assert!(
+            vault.join("a.md").exists(),
+            "the old path must survive a failed write of the new path"
+        );
+        assert_eq!(std::fs::read_to_string(vault.join("a.md")).unwrap(), "body\n");
+        assert_eq!(
+            journal.by_path("a.md").unwrap().unwrap().uuid,
+            ID_A,
+            "the journal row still points at the surviving file"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_folder_holding_a_media_file_is_removed_whole_on_a_server_delete() {
+        let dir = temp_dir("folder-delete-media");
+        let vault = vault_in(&dir);
+        std::fs::create_dir_all(vault.join("Trip/sub")).unwrap();
+        std::fs::write(vault.join("Trip/photo.jpg"), [0xffu8, 0xd8]).unwrap();
+        std::fs::write(vault.join("Trip/sub/note.md"), "body\n").unwrap();
+
+        remove_server_folder_from_disk(&vault, "Trip");
+
+        assert!(
+            !vault.join("Trip").exists(),
+            "delete means delete: no shell left for sync_folders to resurrect"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_file_that_cannot_be_unlinked_is_still_tombstoned() {
+        let dir = temp_dir("delete-unlink-fails");
+        let vault = vault_in(&dir);
+        std::fs::create_dir_all(vault.join("locked")).unwrap();
+        std::fs::write(vault.join("locked/a.md"), "body\n").unwrap();
+
+        let journal = journal::Journal::open(&dir.join("journal.db")).unwrap();
+        let record =
+            journal::record_from_disk(&vault, &vault.join("locked/a.md"), ID_A.to_string())
+                .unwrap();
+        journal.observe(&record, "create").unwrap();
+
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(vault.join("locked"), std::fs::Permissions::from_mode(0o555))
+            .unwrap();
+
+        let tracker = tracker::ContentTracker::new();
+        let row = space_file::SpaceFile::new(
+            ID_A.to_string(),
+            "locked/a.md".to_string(),
+            "body\n".to_string(),
+            5,
+            1_600_000_000_000,
+            1_600_000_000_000,
+        );
+
+        remove_server_file_from_disk(&vault, &tracker, &journal, &row.id, &row.path);
+
+        std::fs::set_permissions(vault.join("locked"), std::fs::Permissions::from_mode(0o755))
+            .unwrap();
+
+        assert!(
+            journal.by_path("locked/a.md").unwrap().is_none(),
+            "a failed unlink must still tombstone, or every reconcile re-uploads the file"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_vanished_old_path_does_not_rekey_the_journal_until_the_new_path_is_written() {
+        let dir = temp_dir("vanished-old-path-rekey");
+        let vault = vault_in(&dir);
+        std::fs::create_dir_all(vault.join("Old")).unwrap();
+        std::fs::write(vault.join("Old/a.md"), "body\n").unwrap();
+
+        let journal = journal::Journal::open(&dir.join("journal.db")).unwrap();
+        let record =
+            journal::record_from_disk(&vault, &vault.join("Old/a.md"), ID_A.to_string()).unwrap();
+        journal.observe(&record, "create").unwrap();
+
+        std::fs::remove_file(vault.join("Old/a.md")).unwrap();
+        std::fs::write(vault.join("New"), "occupied\n").unwrap();
+
+        let tracker = tracker::ContentTracker::new();
+        let row = space_file::SpaceFile::new(
+            ID_A.to_string(),
+            "New/a.md".to_string(),
+            "body\n".to_string(),
+            5,
+            1_600_000_000_000,
+            1_600_000_000_000,
+        );
+
+        apply_server_update(&vault, &tracker, &journal, "Old/a.md", &row);
+
+        assert!(
+            !vault.join("New/a.md").exists(),
+            "the write of the new path must have failed for this test to mean anything"
+        );
+        assert!(
+            journal.by_path("New/a.md").unwrap().is_none(),
+            "the journal must not be re-keyed to a path that holds no bytes"
+        );
+        assert_eq!(
+            journal.by_path("Old/a.md").unwrap().unwrap().uuid,
+            ID_A,
+            "the row stays where it was so the next reconcile can act on a consistent state"
         );
 
         let _ = std::fs::remove_dir_all(&dir);

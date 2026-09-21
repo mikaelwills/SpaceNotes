@@ -7,7 +7,6 @@ use crate::client::SpacetimeClient;
 use crate::isolation::run_isolated;
 use crate::journal::{self, FileRecord, Journal};
 use crate::space_file::SpaceFile;
-use crate::scanner::scan_files;
 use crate::thumbnail::ThumbnailQueue;
 use crate::tracker::ContentTracker;
 use crate::writer::{write_file_to_disk, WriteOutcome};
@@ -60,12 +59,20 @@ fn parent_of(path: &str) -> &str {
     path.rsplit_once('/').map(|(parent, _)| parent).unwrap_or("")
 }
 
+fn scan_is_unsafe_to_orphan_from(records_len: usize, live_len: usize, scan_errors: usize) -> bool {
+    if scan_errors > 0 {
+        return true;
+    }
+    records_len == 0 && live_len > 0
+}
+
 pub fn resolve_offline_identities(
     journal: &Journal,
     vault_path: &Path,
     records: &mut [FileRecord],
     server_ids_by_path: &HashMap<String, String>,
     now: i64,
+    scan_errors: usize,
 ) -> Result<LadderOutcome> {
     let live_started = std::time::Instant::now();
     let live = journal.live_files()?;
@@ -75,6 +82,16 @@ pub fn resolve_offline_identities(
         live_started.elapsed().as_secs_f64(),
         resident_memory_mb()
     );
+    let orphans_are_trustworthy =
+        !scan_is_unsafe_to_orphan_from(records.len(), live.len(), scan_errors);
+    if !orphans_are_trustworthy {
+        tracing::error!(
+            "Refusing to propagate offline deletes: the scan produced {} records against {} live journal rows with {} unreadable entries. The rows stay live and are re-examined next pass.",
+            records.len(),
+            live.len(),
+            scan_errors
+        );
+    }
     let disk_paths: HashSet<String> = records.iter().map(|r| r.path.clone()).collect();
     let live_by_path: HashMap<String, FileRecord> = live
         .iter()
@@ -152,6 +169,13 @@ pub fn resolve_offline_identities(
             None => Uuid::new_v4().to_string(),
         };
         journal.observe(record, "create")?;
+    }
+
+    if !orphans_are_trustworthy {
+        return Ok(LadderOutcome {
+            relinked,
+            orphans: Vec::new(),
+        });
     }
 
     Ok(LadderOutcome {
@@ -544,11 +568,13 @@ pub fn reconcile_on_startup(
 ) -> Result<()> {
     let started = std::time::Instant::now();
     let server_files = client.get_all_files_metadata();
-    let local_files = scan_files(vault_path)?;
+    let scan = crate::scanner::scan_vault_files(vault_path);
+    let local_files = scan.found;
     tracing::info!(
-        "Reconcile scan: {} local files read from disk in {:.1}s, RSS {:.0}MB",
+        "Reconcile scan: {} local files read from disk in {:.1}s ({} unreadable entries), RSS {:.0}MB",
         local_files.len(),
         started.elapsed().as_secs_f64(),
+        scan.errors,
         resident_memory_mb()
     );
 
@@ -565,7 +591,14 @@ pub fn reconcile_on_startup(
     let identities_started = std::time::Instant::now();
     let mut records = disk_records(vault_path, &local_files);
     let outcome = journal.with_transaction(|| {
-        resolve_offline_identities(journal, vault_path, &mut records, &server_ids_by_path, now)
+        resolve_offline_identities(
+            journal,
+            vault_path,
+            &mut records,
+            &server_ids_by_path,
+            now,
+            scan.errors,
+        )
     })?;
     tracing::info!(
         "Reconcile identities resolved in {:.1}s, RSS {:.0}MB",
@@ -725,7 +758,7 @@ mod tests {
 
         let mut records = vec![record_for(&vault, "a.md")];
         let outcome =
-            resolve_offline_identities(&journal, &vault, &mut records, &no_server(), now_ms())
+            resolve_offline_identities(&journal, &vault, &mut records, &no_server(), now_ms(), 0)
                 .unwrap();
 
         assert!(outcome.relinked.is_empty());
@@ -742,7 +775,7 @@ mod tests {
 
         let mut records = vec![record_for(&vault, "moved.md")];
         let outcome =
-            resolve_offline_identities(&journal, &vault, &mut records, &no_server(), now_ms())
+            resolve_offline_identities(&journal, &vault, &mut records, &no_server(), now_ms(), 0)
                 .unwrap();
 
         assert!(outcome.relinked.contains(ID_A));
@@ -764,7 +797,7 @@ mod tests {
 
         let mut records = vec![record_for(&vault, "moved.md")];
         let outcome =
-            resolve_offline_identities(&journal, &vault, &mut records, &no_server(), now_ms())
+            resolve_offline_identities(&journal, &vault, &mut records, &no_server(), now_ms(), 0)
                 .unwrap();
 
         assert!(outcome.relinked.contains(ID_A));
@@ -789,7 +822,7 @@ mod tests {
 
         let mut records = vec![record];
         let outcome =
-            resolve_offline_identities(&journal, &vault, &mut records, &no_server(), now_ms())
+            resolve_offline_identities(&journal, &vault, &mut records, &no_server(), now_ms(), 0)
                 .unwrap();
 
         assert!(outcome.relinked.contains(ID_A));
@@ -816,7 +849,7 @@ mod tests {
 
         let mut records = vec![fabricated_record("", "z/dup.md", "deadbeef", 42, 99)];
         let outcome =
-            resolve_offline_identities(&journal, &vault, &mut records, &no_server(), now_ms())
+            resolve_offline_identities(&journal, &vault, &mut records, &no_server(), now_ms(), 0)
                 .unwrap();
 
         assert!(outcome.relinked.is_empty());
@@ -855,7 +888,7 @@ mod tests {
 
         let mut records = vec![record];
         let outcome =
-            resolve_offline_identities(&journal, &vault, &mut records, &no_server(), now_ms())
+            resolve_offline_identities(&journal, &vault, &mut records, &no_server(), now_ms(), 0)
                 .unwrap();
 
         assert!(outcome.relinked.contains(ID_A));
@@ -879,7 +912,7 @@ mod tests {
             [("new.md".to_string(), ID_C.to_string())].into();
         let mut records = vec![record_for(&vault, "new.md")];
         let outcome =
-            resolve_offline_identities(&journal, &vault, &mut records, &server, now_ms())
+            resolve_offline_identities(&journal, &vault, &mut records, &server, now_ms(), 0)
                 .unwrap();
 
         assert!(outcome.relinked.is_empty());
@@ -898,7 +931,7 @@ mod tests {
         let journal = Journal::open(&dir.join("journal.db")).unwrap();
 
         let mut records = vec![record_for(&vault, "new.md")];
-        resolve_offline_identities(&journal, &vault, &mut records, &no_server(), now_ms())
+        resolve_offline_identities(&journal, &vault, &mut records, &no_server(), now_ms(), 0)
             .unwrap();
 
         assert!(!records[0].uuid.is_empty());
@@ -925,13 +958,45 @@ mod tests {
 
         let mut records = vec![record_for(&vault, "a.md")];
         let outcome =
-            resolve_offline_identities(&journal, &vault, &mut records, &no_server(), now_ms())
+            resolve_offline_identities(&journal, &vault, &mut records, &no_server(), now_ms(), 0)
                 .unwrap();
 
         assert!(outcome.relinked.is_empty());
         assert_eq!(outcome.orphans.len(), 1);
         assert_eq!(outcome.orphans[0].uuid, ID_B);
         assert!(journal.by_path("b.md").unwrap().is_some());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_empty_scan_with_live_rows_propagates_nothing() {
+        let dir = temp_dir("empty-scan-floor");
+        let vault = dir.join("vault");
+        std::fs::create_dir_all(&vault).unwrap();
+        write_file(&vault, "a.md");
+        write_file(&vault, "b.md");
+        write_file(&vault, "c.md");
+        let journal = Journal::open(&dir.join("journal.db")).unwrap();
+        observe_file(&journal, &vault, "a.md", ID_A);
+        observe_file(&journal, &vault, "b.md", ID_B);
+        observe_file(&journal, &vault, "c.md", ID_C);
+
+        let empty_vault = dir.join("gone");
+        std::fs::create_dir_all(&empty_vault).unwrap();
+
+        let mut records: Vec<FileRecord> = Vec::new();
+        let outcome =
+            resolve_offline_identities(&journal, &empty_vault, &mut records, &no_server(), now_ms(), 0)
+                .unwrap();
+
+        assert!(
+            outcome.orphans.is_empty(),
+            "a zero-record scan must not send every live row to the delete path"
+        );
+        assert!(journal.by_path("a.md").unwrap().is_some());
+        assert!(journal.by_path("b.md").unwrap().is_some());
+        assert!(journal.by_path("c.md").unwrap().is_some());
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -944,7 +1009,7 @@ mod tests {
 
         let mut records = vec![record_for(&vault, "moved.md")];
         let outcome =
-            resolve_offline_identities(&journal, &vault, &mut records, &no_server(), now_ms())
+            resolve_offline_identities(&journal, &vault, &mut records, &no_server(), now_ms(), 0)
                 .unwrap();
 
         assert!(outcome.relinked.contains(ID_A));
