@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::sync::Arc;
 
 mod bindings;
@@ -19,8 +19,11 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|_| "http://127.0.0.1:3000".to_string());
     let spacetime_db = std::env::var("SPACETIME_DB")
         .unwrap_or_else(|_| "spacenotes".to_string());
-    let files_host = std::env::var("SPACENOTES_FILES_HOST")
-        .unwrap_or_else(|_| "http://127.0.0.1:5051".to_string());
+    let files_host = std::env::var("SPACENOTES_FILES_HOST").context(
+        "SPACENOTES_FILES_HOST is not set. upload_file/download_file hand this URL to an \
+         external caller, so there is no safe default - set it to the address the vault's \
+         file server is reachable on (e.g. http://100.84.184.121:5051).",
+    )?;
 
     tracing::info!("Connecting to SpacetimeDB at {}/{}", spacetime_host, spacetime_db);
     tracing::info!("Files server reachable at {}", files_host);
