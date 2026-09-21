@@ -210,26 +210,21 @@ async fn main() -> Result<()> {
             }
         };
         if path.exists() {
-            if scanner::is_binary(&path) {
-                tracing::warn!(
-                    "Refusing to delete binary file {} from disk: its bytes are not stored in the database and exist nowhere else",
-                    old_file.path
-                );
-                return;
-            }
+            // The tombstone below must still be written when this refuses, or the
+            // row stays live while the server row is gone and every reconcile
+            // re-uploads the file.
             if is_protected_store_dotfile(&old_file.path) {
                 tracing::warn!(
                     "Refusing to delete {} from disk: the store's recipient list is vault truth and a swapped one redirects every encryption",
                     old_file.path
                 );
-                return;
-            }
-            if let Err(e) = std::fs::remove_file(&path) {
+            } else if let Err(e) = std::fs::remove_file(&path) {
                 tracing::error!("Failed to delete {}: {}", old_file.path, e);
                 return;
+            } else {
+                tracker_clone.remove(&old_file.id);
+                tracing::info!("Deleted local file: {}", old_file.path);
             }
-            tracker_clone.remove(&old_file.id);
-            tracing::info!("Deleted local file: {}", old_file.path);
         }
         if let Err(e) = journal_clone.tombstone(&old_file.id, journal::now_ms()) {
             tracing::error!("Journal tombstone failed for {}: {}", old_file.path, e);
