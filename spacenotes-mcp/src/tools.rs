@@ -407,6 +407,21 @@ pub fn get_tools() -> Vec<Tool> {
             }),
         },
         Tool {
+            name: "vault_index".to_string(),
+            description: "Every folder path in the vault, and optionally every file under a chosen subset of them. Built for classifying which paths a prompt is about: score the folder list first, then pass the folders that matched back as 'under' to get their files. Credentials are never included.".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "under": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Folder paths whose files to include (e.g. ['Pets', 'Gym']). Omit or leave empty to get folders only."
+                    }
+                },
+                "required": []
+            }),
+        },
+        Tool {
             name: "get_file".to_string(),
             description: "Get a note's full content by ID or path. Line numbers are for locating text only; pass raw:true to get the exact bytes when building an old_string for edit_note.".to_string(),
             input_schema: json!({
@@ -824,6 +839,25 @@ pub async fn execute_tool(
                 "content": [{
                     "type": "text",
                     "text": serde_json::to_string_pretty(&files).unwrap_or_else(|_| "[]".to_string())
+                }]
+            }))
+        }
+        "vault_index" => {
+            let under: Vec<String> = params
+                .arguments
+                .get("under")
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+                .unwrap_or_default();
+
+            let (folders, files) = client.vault_index(&under).map_err(|e| e.to_string())?;
+
+            Ok(json!({
+                "content": [{
+                    "type": "text",
+                    "text": serde_json::to_string(&json!({
+                        "folders": folders,
+                        "files": files,
+                    })).unwrap_or_else(|_| "{}".to_string())
                 }]
             }))
         }

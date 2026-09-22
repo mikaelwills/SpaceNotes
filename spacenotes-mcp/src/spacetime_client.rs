@@ -51,6 +51,13 @@ fn flatten_outcome(
     }
 }
 
+const CREDENTIAL_STORE_ROOT: &str = ".password-store";
+
+fn is_credential_path(path: &str) -> bool {
+    path == CREDENTIAL_STORE_ROOT
+        || path.starts_with(&format!("{}/", CREDENTIAL_STORE_ROOT))
+}
+
 const READINESS_TIMEOUT: Duration = Duration::from_secs(30);
 const REDUCER_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -267,6 +274,53 @@ impl SpacetimeClient {
         tracing::info!("Found {} entries in folder {}", entries.len(), parent);
 
         Ok(entries)
+    }
+
+    /// Every folder path in the vault, and optionally the files beneath a
+    /// chosen subset of them.
+    ///
+    /// Shaped for a two-pass classifier: the folder list alone is small enough
+    /// to score in one go, and only the folders that survive that pass need
+    /// their files listed. Returning the whole tree instead costs ~19x more per
+    /// classification for the same answer.
+    ///
+    /// Credentials are never included. They are secrets, and a classifier is a
+    /// third party.
+    pub fn vault_index(&self, under: &[String]) -> Result<(Vec<String>, Vec<String>)> {
+        let mut folders: Vec<String> = self
+            .conn
+            .db()
+            .folder()
+            .iter()
+            .map(|f| f.path.clone())
+            .filter(|p| !is_credential_path(p))
+            .collect();
+        folders.sort();
+        folders.dedup();
+
+        if under.is_empty() {
+            return Ok((folders, Vec::new()));
+        }
+
+        let prefixes: Vec<String> = under
+            .iter()
+            .map(|p| format!("{}/", p.trim_end_matches('/')))
+            .collect();
+
+        let mut files: Vec<String> = self
+            .conn
+            .db()
+            .space_file()
+            .iter()
+            .map(|f| f.path.clone())
+            .filter(|p| {
+                !is_credential_path(p) && prefixes.iter().any(|prefix| p.starts_with(prefix))
+            })
+            .collect();
+        files.sort();
+        files.dedup();
+
+        Ok((folders, files))
     }
 
     pub fn get_file_by_id(&self, id: &str) -> Result<Option<FullSpaceFile>> {
@@ -888,4 +942,26 @@ fn merge_ranges(ranges: &[(usize, usize)]) -> Vec<(usize, usize)> {
         }
     }
     merged
+}
+
+#[cfg(test)]
+mod vault_index_tests {
+    use super::is_credential_path;
+
+    #[test]
+    fn credentials_are_excluded_from_the_index() {
+        assert!(is_credential_path(".password-store"));
+        assert!(is_credential_path(".password-store/opencode.ai"));
+        assert!(is_credential_path(
+            ".password-store/opencode.ai/mikael@deadeye.photo.gpg"
+        ));
+    }
+
+    #[test]
+    fn a_lookalike_path_is_not_treated_as_the_credential_store() {
+        assert!(!is_credential_path(".password-store-old"));
+        assert!(!is_credential_path("Notes/.password-store"));
+        assert!(!is_credential_path("Pets/Training"));
+        assert!(!is_credential_path(""));
+    }
 }

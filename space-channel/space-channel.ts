@@ -560,13 +560,70 @@ function emitMessage(message: Message, image?: MessageImage) {
     content += `\n\n(a2a message from agent '${meta.user}' — to answer THEM use send_to_agent('${meta.user}'); the reply tool goes to your own human's chat, not to them)`;
   }
 
-  log(`emitMessage sending mcp notification message_id=${message.id} content_len=${content.length}`);
-  mcp.notification({
-    method: "notifications/claude/channel",
-    params: { content, meta },
-  })
-    .then(() => log(`mcp notification sent ok message_id=${message.id}`))
-    .catch((e) => log(`channel notification failed: ${e}`));
+  // App messages arrive as an MCP notification, not a user prompt, so the
+  // UserPromptSubmit hook never sees them. Classifying here is what gives the
+  // app the same vault pre-resolution the terminal gets.
+  const send = (body: string) => {
+    log(`emitMessage sending mcp notification message_id=${message.id} content_len=${body.length}`);
+    mcp.notification({
+      method: "notifications/claude/channel",
+      params: { content: body, meta },
+    })
+      .then(() => log(`mcp notification sent ok message_id=${message.id}`))
+      .catch((e) => log(`channel notification failed: ${e}`));
+  };
+
+  // Agent-to-agent traffic is not a vault lookup, and it already carries its own
+  // appended instruction block.
+  if (message.source.startsWith("agent:")) {
+    send(content);
+    return;
+  }
+
+  classifyVaultPaths(message.text)
+    .then((paths) => send(paths.length > 0
+      ? `Relevant vault files: ${paths.join(", ")}\n\n${content}`
+      : content))
+    .catch((e) => {
+      log(`vault classify failed, sending unclassified: ${e}`);
+      send(content);
+    });
+}
+
+const CLASSIFIER = join(homedir(), ".dotfiles/scripts/jev-classifier/classify_prompt.py");
+const CLASSIFY_TIMEOUT_MS = 5000;
+
+/// Vault paths the prompt is about, or none.
+///
+/// Never throws and never blocks the message: a classifier that is slow, broken
+/// or switched off must cost the user nothing, so every failure path returns an
+/// empty list and the message goes out unclassified.
+async function classifyVaultPaths(text: string): Promise<string[]> {
+  if (!text || !text.trim()) return [];
+
+  const cfg = Array.from(conn?.db.channel_config.iter() ?? [])[0] as
+    { vaultClassifierEnabled?: boolean } | undefined;
+  if (!cfg?.vaultClassifierEnabled) return [];
+
+  try {
+    const proc = Bun.spawn(["python3", CLASSIFIER], {
+      stdin: new TextEncoder().encode(text),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const timer = setTimeout(() => proc.kill(), CLASSIFY_TIMEOUT_MS);
+    const out = await new Response(proc.stdout).text();
+    clearTimeout(timer);
+    if ((await proc.exited) !== 0) {
+      log(`classifier exited non-zero: ${(await new Response(proc.stderr).text()).slice(0, 300)}`);
+      return [];
+    }
+    const parsed = JSON.parse(out);
+    return Array.isArray(parsed.paths) ? parsed.paths : [];
+  } catch (e) {
+    log(`classifier error: ${e}`);
+    return [];
+  }
 }
 
 function checkIdleWrapUp() {

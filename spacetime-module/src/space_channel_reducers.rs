@@ -589,10 +589,34 @@ pub fn set_a2a_enabled(ctx: &ReducerContext, enabled: bool) {
                 a2a_cooldown_secs: 0,
                 a2a_hourly_limit: 0,
                 a2a_max_hops: 4,
+                vault_classifier_enabled: false,
             });
         }
     }
     log::info!("a2a_enabled set to {}", enabled);
+}
+
+#[spacetimedb::reducer]
+pub fn set_vault_classifier_enabled(ctx: &ReducerContext, enabled: bool) {
+    match ctx.db.channel_config().id().find(0) {
+        Some(cfg) => {
+            ctx.db.channel_config().id().update(ChannelConfig {
+                vault_classifier_enabled: enabled,
+                ..cfg
+            });
+        }
+        None => {
+            ctx.db.channel_config().insert(ChannelConfig {
+                id: 0,
+                a2a_enabled: true,
+                a2a_cooldown_secs: 0,
+                a2a_hourly_limit: 0,
+                a2a_max_hops: 4,
+                vault_classifier_enabled: enabled,
+            });
+        }
+    }
+    log::info!("vault_classifier_enabled set to {}", enabled);
 }
 
 #[spacetimedb::reducer]
@@ -613,6 +637,7 @@ pub fn set_a2a_limits(ctx: &ReducerContext, cooldown_secs: u32, hourly_limit: u3
                 a2a_cooldown_secs: cooldown_secs,
                 a2a_hourly_limit: hourly_limit,
                 a2a_max_hops: max_hops,
+                vault_classifier_enabled: false,
             });
         }
     }
