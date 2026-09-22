@@ -62,6 +62,7 @@ export const ChannelConfig = __t.object("ChannelConfig", {
   a2ACooldownSecs: __t.u32(),
   a2AHourlyLimit: __t.u32(),
   a2AMaxHops: __t.u32(),
+  vaultClassifierEnabled: __t.bool(),
 });
 export type ChannelConfig = __Infer<typeof ChannelConfig>;
 
@@ -72,6 +73,12 @@ export const ConnectedUser = __t.object("ConnectedUser", {
   name: __t.string(),
 });
 export type ConnectedUser = __Infer<typeof ConnectedUser>;
+
+export const FileContent = __t.object("FileContent", {
+  fileId: __t.string(),
+  content: __t.string(),
+});
+export type FileContent = __Infer<typeof FileContent>;
 
 export const Folder = __t.object("Folder", {
   path: __t.string(),
@@ -125,7 +132,6 @@ export const SpaceFile = __t.object("SpaceFile", {
   id: __t.string(),
   path: __t.string(),
   name: __t.string(),
-  content: __t.string(),
   folderPath: __t.string(),
   depth: __t.u32(),
   extension: __t.string(),
@@ -133,6 +139,7 @@ export const SpaceFile = __t.object("SpaceFile", {
   createdTime: __t.u64(),
   modifiedTime: __t.u64(),
   dbUpdatedAt: __t.timestamp(),
+  hasThumbnail: __t.bool(),
 });
 export type SpaceFile = __Infer<typeof SpaceFile>;
 
@@ -141,6 +148,12 @@ export const SweepSchedule = __t.object("SweepSchedule", {
   scheduledAt: __t.scheduleAt(),
 });
 export type SweepSchedule = __Infer<typeof SweepSchedule>;
+
+export const TodoSweepSchedule = __t.object("TodoSweepSchedule", {
+  scheduledId: __t.u64(),
+  scheduledAt: __t.scheduleAt(),
+});
+export type TodoSweepSchedule = __Infer<typeof TodoSweepSchedule>;
 
 export const ToolEvent = __t.object("ToolEvent", {
   id: __t.string(),

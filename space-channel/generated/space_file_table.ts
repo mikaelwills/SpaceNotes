@@ -14,7 +14,6 @@ export default __t.row({
   id: __t.string().primaryKey(),
   path: __t.string(),
   name: __t.string(),
-  content: __t.string(),
   folderPath: __t.string().name("folder_path"),
   depth: __t.u32(),
   extension: __t.string(),
@@ -22,4 +21,5 @@ export default __t.row({
   createdTime: __t.u64().name("created_time"),
   modifiedTime: __t.u64().name("modified_time"),
   dbUpdatedAt: __t.timestamp().name("db_updated_at"),
+  hasThumbnail: __t.bool().name("has_thumbnail"),
 });
