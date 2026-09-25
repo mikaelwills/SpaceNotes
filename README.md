@@ -4,20 +4,18 @@
 
 <h1 align="center">SpaceNotes</h1>
 
-**Yet another AI agent management and note-taking system... 🙄**
+**Yet another note-taking system... 🙄**
 
-But — notes synced across all your devices in real time. No cost. No Obsidian. No cloud. No storage limits. And you can talk to your Claude Code agents while you're at the gym.
+But — notes, files and passwords synced across all your devices in real time. No cost. No Obsidian. No cloud. No storage limits.
 
-Your notes live as plain markdown on your own filesystem — portable, no lock-in, no subscription, nothing to migrate off if you ever want to walk away. The AI side is opinionated and tied to Claude Code: SpaceChannel is built around Claude Code's MCP and hook system specifically. The Claude Code agent container logs in with your existing Claude Code subscription (Pro / Max) — no separate API key, no per-token billing.
+Your vault is plain files on your own filesystem — markdown notes, media, PDFs, a `pass`-compatible password store — portable, no lock-in, no subscription, nothing to migrate off if you ever want to walk away. A built-in MCP server lets AI assistants like Claude Code and Cursor read and write it.
 
 Contributions welcome.
 
 ![Desktop Notes View](assets/screenshots/desktop-notes.png)
-![Desktop AI Chat](assets/screenshots/desktop-chat.png)
 
 <p align="center">
   <img src="assets/screenshots/mobile-notes.png" width="45%" alt="Mobile Notes View" />
-  <img src="assets/screenshots/mobile-chat.png" width="45%" alt="Mobile AI Chat" />
 </p>
 
 ## How it compares
@@ -27,8 +25,8 @@ Contributions welcome.
 | **Self-hosted** | Yes | No | No | Yes | No |
 | **Real-time sync** | Yes | Yes | Yes | Yes | Yes |
 | **Mobile + Web** | Yes | Mobile only | Yes | Yes | Web only |
-| **AI integration** | MCP + Agent bridge | None | Built-in | None | MCP |
-| **Plain markdown** | Yes | Yes | No | Partial | Yes |
+| **AI integration** | MCP | None | Built-in | None | MCP |
+| **Plain files** | Yes | Yes | No | Partial | Yes |
 | **Data ownership** | Full | Partial | None | Full | Partial |
 | **Cost** | Free | $8/mo | Free/$10/mo | Free/$5/mo | Paid |
 
@@ -39,147 +37,76 @@ Contributions welcome.
 
 **Current limitations:**
 - No hosted option - you must run your own server
-- No E2E encryption - security comes from self-hosting on a private network
+- No E2E encryption for notes - security comes from self-hosting on a private network (passwords are GPG-encrypted at rest)
 - No multi-user collaboration yet
-- AI integration is Claude-Code-only - SpaceChannel and the agent are built specifically around Claude Code's MCP + hook system; other agents aren't supported
 - Early-stage software - expect rough edges
-
-## Roadmap
-
-Move off Claude-Code-only by adding [Pi.dev](https://pi.dev) as a supported agent runtime, so the AI side stops being single-vendor.
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  Your Server (Docker)                                           │
-│                                                                 │
-│  ┌──────────────┐   ┌─────────────┐   ┌──────────────────────┐  │
-│  │ SpacetimeDB  │◄──┤ Sync Daemon │   │ Note-Assistant       │  │
-│  │ notes +      │   │ (fs ↔ db)   │   │ (Claude Code         │  │
-│  │ SpaceChannel │   └─────────────┘   │  in Docker)          │  │
-│  │ tables       │                     │  space-channel       │  │
-│  └──────┬───────┘                     │  MCP → STDB          │  │
-│         │                             └──────────┬───────────┘  │
-│  ┌──────┴───────┐                                │              │
-│  │  MCP Server  │                                │ subscribes   │
-│  │  (note CRUD) │                                ▼              │
-│  └──────────────┘                          (same STDB)          │
-│  ┌──────────────┐                                               │
-│  │  Web Client  │                                               │
-│  │  (nginx)     │                                               │
-│  └──────────────┘                                               │
-└─────────────────────────────────────────────────────────────────┘
-        ▲                                    ▲
-        │ :5050 (STDB — notes + SpaceChannel)│
-        │ :5051 (web UI)                     │
-        │ :5052 (MCP)                        │
-        ▼                                    ▼
-┌──────────────────┐              ┌──────────────────────────┐
-│  Flutter Client  │              │  Claude Code (local)     │
-│  iOS/Android/    │              │  space-channel binary    │
-│  macOS/Web       │              │  MCP per agent,          │
-│                  │              │  subscribes to STDB      │
-└──────────────────┘              └──────────────────────────┘
-```
+One Docker container on your server runs everything:
 
-Everything — notes, agents, status, tool events, permission requests, replies — flows through SpacetimeDB. There is no separate message broker. Each Claude Code agent runs an MCP server (`space-channel`) that subscribes to STDB and writes status / replies as table rows. The Flutter app subscribes to the same tables and renders them in real time.
+- **SpacetimeDB** holds the notes: file metadata and markdown content.
+- **The sync daemon** keeps the vault folder and SpacetimeDB in step in both directions, and serves every file byte over HTTP.
+- **The MCP server** gives AI assistants read/write access to the vault.
+- **nginx** serves the web client and proxies `/files`, `/thumbnails` and `/uploads` to the daemon.
+
+The **Flutter client** (iOS, Android, macOS, Windows, Linux, web) subscribes to SpacetimeDB for notes and talks to the daemon over HTTP for file bytes.
+
+The vault on disk is the ground truth. The database can be wiped and rebuilt from it; a note's identity (its UUID) is kept in the daemon's own journal, so vault files stay byte-for-byte what you wrote, with nothing injected into them.
 
 ## Components
 
-- **SpacetimeDB** - Real-time database. Holds both notes and SpaceChannel state (agents, status, tool events, replies, permission requests). Clients connect once and receive instant updates.
-- **Filesystem Sync Daemon** - Watches your notes folder and syncs bidirectionally with SpacetimeDB.
-- **MCP Server** - Lets AI assistants (Claude Code, Cursor, etc.) read/write your notes.
-- **`space-channel` binary** - The Claude Code side of SpaceChannel. One compiled binary with three subcommands: MCP server (subscribes to STDB, exposes `reply`/`edit_message` tools to Claude), `launch` (orchestrates a Claude Code agent — generates hook config, finds a free hook port, exec's claude), and `hook-post` (the hook bridge — claude's hooks pipe their JSON into this, it forwards to STDB as `agent_activity` updates).
-- **Note-Assistant** - A headless Claude Code instance running in Docker on your server. Always available from the Flutter app for note-related tasks. Subscribes to STDB just like any other Claude Code agent.
-- **[Flutter Client](https://github.com/mikaelwills/spacenotes-client)** - Native apps for iOS, Android, macOS, Windows, Linux, and web. Subscribes to the same STDB tables for both notes and live agent activity.
+- **SpacetimeDB** - Real-time database holding the notes. Clients connect once and receive instant updates.
+- **Filesystem sync daemon** - Watches the vault and syncs bidirectionally with SpacetimeDB. Also the file server: ranged downloads, resumable uploads, and video/image thumbnails (ffmpeg).
+- **MCP server** - Lets Claude Code, Cursor and other assistants search, read, write and organise the vault, and hand large files in and out.
+- **[Flutter client](https://github.com/mikaelwills/spacenotes-client)** - Native apps for iOS, Android, macOS, Windows, Linux, and web.
 
 ## Standard Ports
 
-- **5050** - SpacetimeDB (WebSocket/HTTP) - Flutter clients and `space-channel` MCP servers both connect here. Carries notes, agents, status, tool events, and chat messages.
-- **5051** - Web Client (HTTP) - Flutter web app served via nginx
-- **5052** - MCP Server (HTTP) - AI assistant integration endpoint for note CRUD
+- **5050** - SpacetimeDB (WebSocket/HTTP). The Flutter client connects here.
+- **5051** - HTTP: the web client, plus `/files/` (downloads, whole-file uploads), `/uploads` (resumable uploads) and `/thumbnails/`.
+- **5052** - MCP server (HTTP), `/mcp`.
 
 All ports are configurable via `docker-compose.yml`.
 
+## Files, downloads and uploads
+
+The vault isn't only markdown. Images (jpg, png, gif, webp, heic), audio (mp3, wav, m4a, aac, flac, ogg), video (mp4, mov, m4v, webm), PDFs and `.gpg` files are all first-class; anything else is ignored.
+
+- **Large files never go through the database.** Binaries under 20KB are stored inline; anything bigger is a few hundred bytes of metadata in SpacetimeDB, with the bytes on disk and served over HTTP. An 80MB video doesn't touch the commitlog.
+- **Downloads are on demand and resumable.** Opening a file downloads it to the device and caches it; an interrupted download resumes from where it stopped via HTTP `Range`. A download that slows to a crawl reconnects itself, and reopening a file cancels any stale transfer before resuming. Downloads are verified by size and SHA-256 before they count as complete.
+- **Offloading.** Downloaded files can be offloaded from the device (Settings → downloaded files) and fetched again when needed.
+- **Uploads are resumable.** Files over 8MB go up in 4MB chunks over a tus-style protocol (`POST`/`HEAD`/`PATCH /uploads`). An upload survives the app being backgrounded or killed and continues on next launch from the server's offset.
+- **No silent overwrites.** Uploading onto an existing name is refused (HTTP 409) by the server, not the client, so it holds even before the app has synced.
+- **Thumbnails** are generated server-side for images and video.
+- **Multiple files at once.** Multi-select in the file grid to move or delete several files together.
+
+The web client is notes-only: downloading and uploading binary files needs a native app.
+
+## Password manager
+
+SpaceNotes can hold a [`pass`](https://www.passwordstore.org/)-compatible password store: GPG-encrypted `.gpg` files under `.password-store/` in the vault, synced like any other file.
+
+- Import your GPG private key on each device (Settings → password manager) to reveal passwords. The key stays on that device; the server only ever sees ciphertext.
+- Browse and search credentials from the key icon in the nav, view/copy fields, and create new entries with a built-in password generator.
+- The whole feature can be switched off per device (Settings → preferences), which removes it from the nav, the desktop sidebar and settings.
+
 ## Flutter Client Features
 
-**Notes:**
-- Real-time sync across all devices via SpacetimeDB
-- Fuzzy search, folder organization, markdown editing
-- Inline AI chat within any note
-- Offline editing with automatic conflict resolution
-
-**Agent Dashboard:**
-- Live agent cards for all connected Claude Code agents
-- Thinking/idle/tool-use status indicators in real-time
-- Send messages to any agent and receive replies
-- Tool event streaming — see what each agent is doing as it happens
-- Message history replay on reconnect
+**Notes and files:**
+- Real-time sync across all devices via SpacetimeDB, with an offline cache
+- Recents page: **Recently Viewed** (what this device opened, tracked locally) and **Recently Updated** (what changed in the vault)
+- Fuzzy search, folders, favourite folders, masonry grid of file cards
+- Markdown editing; generative-UI "dashboard" notes (KPIs, charts, editable fields)
+- Viewers for images and video; PDFs and other files download to the device
+- Audio player with a native parametric EQ, scrolling waveform scrubber, background/lock-screen playback and a persistent mini player
 
 **Mobile (iOS/Android):**
-- Recent notes, pull-up chat within notes
-- Agent dashboard and per-agent chat
+- Recents, folders and passwords one tap apart in the nav bar
 
 **Desktop (macOS/Windows/Linux/Web):**
-- Split-pane view: notes list + editor + AI chat
-- Full markdown editor
-- Drag and drop file organization
-
-## SpaceChannel
-
-SpaceChannel is the real-time bridge between Claude Code agents and the Flutter app. There is no separate broker — everything flows through SpacetimeDB tables (`agent`, `agent_activity`, `tool_event`, `permission_request`, `message`). Each Claude Code agent runs a `space-channel` MCP that subscribes to the relevant tables and writes its own activity in. The Flutter app subscribes to the same tables.
-
-**What it enables:**
-- See all active Claude Code agents in the Flutter app with live status (thinking, idle, tool use)
-- Send messages to any agent from your phone and receive replies
-- View tool events as they happen (file edits, bash commands, etc.)
-- Agent message history — clients reconnect and STDB hydrates the full backlog automatically
-- Webhook-style ingestion — anything that can call an STDB reducer can push messages into an agent
-
-**Agent types:**
-- **Local agents** — Claude Code on your machine, started via the `space-channel launch` subcommand
-- **Note-Assistant** — A headless Claude Code container on the server, always available for note tasks
-- **Reducer-driven agents** — Auto-registered the first time a row appears in `agent` for that name
-
-## Claude Code Integration
-
-SpaceNotes integrates with Claude Code at two levels: MCP for note access, and SpaceChannel for real-time agent communication.
-
-### 1. MCP — Note Access
-
-Add the SpaceNotes MCP server so Claude Code can read and write your notes (see [MCP Integration](#mcp-integration-claude-code) below).
-
-### 2. SpaceChannel — Agent Bridge
-
-`space-channel` is a single compiled binary you install on each machine that runs Claude Code. It exposes three subcommands: `space-channel` (no args, runs as the MCP server inside an agent), `space-channel launch` (orchestrates Claude Code with hooks + MCP wired in), `space-channel hook-post` (the hook forwarder).
-
-**Install the binary:**
-
-```bash
-# One-liner — pulls the right architecture and drops it on $PATH
-curl -fsSL https://your-server/space-channel/install.sh | sh
-```
-
-(Substitute your own host. The reference setup serves the binary from the same Docker host that runs SpacetimeDB.)
-
-**Launch an agent:**
-
-```bash
-# Usage: space-channel launch <agent-name> <project-name> <skill>
-space-channel launch myproject myproject my-workflow-skill
-```
-
-Create shell aliases for your projects:
-```bash
-alias myproject='space-channel launch myproject myproject my-skill'
-```
-
-**What Claude Code gets:**
-- `reply` tool — write a row into the `message` table; the Flutter app sees it instantly
-- `edit_message` tool — update a previous reply by id
-- Automatic status streaming via hooks (thinking indicators, tool events) — written into `agent_activity` and `tool_event`
-- Agent registration on launch — a row appears in `agent`, the Flutter app picks it up
+- Finder-style layout: sidebar and tabbed notes with back navigation
+- Drag and drop file organisation, keyboard navigation (Shift+Tab cycles screens)
 
 ## Quick Start
 
@@ -188,12 +115,15 @@ alias myproject='space-channel launch myproject myproject my-skill'
    curl -O https://raw.githubusercontent.com/mikaelwills/SpaceNotes/master/docker-compose.yml
    ```
 
-2. **Edit it** - set your notes folder path:
+2. **Edit it** - set your notes folder and the address clients reach the server on:
    ```yaml
    volumes:
      - /path/to/your/notes:/vault
+   environment:
+     - DATA_DIR=/data
+     - SPACENOTES_FILES_HOST=http://<your-server-ip>:5051
    ```
-   Replace `/path/to/your/notes` with the absolute path to your markdown folder (e.g., `/home/user/notes` or `/volume1/notes`).
+   `SPACENOTES_FILES_HOST` is required: the MCP server hands URLs on this host to AI assistants for file transfers, so it must be the address your other machines use (e.g. the server's Tailscale IP). The MCP server won't start without it.
 
 3. **Start:**
    ```bash
@@ -208,27 +138,27 @@ alias myproject='space-channel launch myproject myproject my-skill'
    You should see "Watcher started on /vault" when ready.
 
 5. **Access SpaceNotes:**
-   - **Web Client**: `http://<your-server-ip>:5051` (notes + AI chat with the Claude Code agent)
-   - **Mobile App**: Point it at `http://<your-server-ip>:5050` in settings (this is the SpacetimeDB endpoint — it carries notes, agents, and SpaceChannel)
-   - **MCP Server**: `http://<your-server-ip>:5052/mcp` (for Claude Code, Cursor, etc.)
+   - **Web client**: `http://<your-server-ip>:5051`
+   - **Mobile/desktop app**: enter `<your-server-ip>` in Settings → server
+   - **MCP server**: `http://<your-server-ip>:5052/mcp`
 
 ## Updating
-
-To update to the latest version:
 
 ```bash
 docker-compose pull && docker-compose up -d
 ```
 
-Your notes are safe - they live on your filesystem, not in the database.
+Your notes are safe - they live on your filesystem, not in the database. Keep the named volumes: `spacetime-config` holds the database owner identity (lose it and the module can't be republished), and `spacenotes-daemon-data` holds the note identity journal.
 
 ## MCP Integration (Claude Code)
 
-SpaceNotes includes an MCP server that lets AI assistants read and write your notes.
-
 ### Configure Claude Code
 
-Add to your `~/.claude.json`:
+```bash
+claude mcp add spacenotes-mcp --type http --url "http://<your-server-ip>:5052/mcp" --scope user
+```
+
+Or add to `~/.claude.json`:
 
 ```json
 {
@@ -241,34 +171,39 @@ Add to your `~/.claude.json`:
 }
 ```
 
-Or use the CLI:
-```bash
-claude mcp add spacenotes-mcp --type http --url "http://<your-server-ip>:5052/mcp" --scope user
-```
-
 ### Available MCP Tools
 
-- `search_notes` - Search notes by title, path, or content
-- `get_note` - Get full content of a note by ID or path
-- `create_note` - Create a new note with content
-- `edit_note` - Find and replace text in a note
-- `regex_replace` - Replace text using regex patterns
-- `append_to_note` / `prepend_to_note` - Add content to a note
-- `delete_note` / `delete_notes` - Delete one or multiple notes by ID
-- `move_note` - Move/rename a note
-- `move_notes_to_folder` - Bulk move multiple notes
-- `list_notes_in_folder` - List all notes in a folder
-- `create_folder` / `delete_folder` / `move_folder` - Folder operations
+**Find and read:**
+- `search_files` - search by title, path or content
+- `search_files_content` - search and return excerpts around matches
+- `get_file` / `get_files` - full content of one or several files, by id or path (optionally one heading or a line range)
+- `list_folder` - immediate subfolders and files of a folder
+- `vault_index` - every folder path, plus files under chosen folders
+- `get_backlinks` / `get_outbound_links` - link graph for a note
+
+**Write:**
+- `create_file` - create a note
+- `edit_file` - find-and-replace, one or many edits in one commit
+- `regex_replace`, `replace_across_files` - pattern replace in one note or across many
+- `append_to_file` / `prepend_to_file`
+
+**Organise:**
+- `move_file`, `move_files_to_folder`
+- `delete_file`, `delete_files`
+- `create_folder`, `move_folder`, `delete_folder`, `empty_folder`
+
+**Binary files:**
+- `upload_file` / `download_file` - return a plain HTTP URL; the assistant moves the bytes itself (`curl -T` / `curl -o`), so large files never pass through a tool call
 
 ## Configuration
 
 Environment variables (set in `docker-compose.yml`):
 
-- `VAULT_PATH` - Path to notes folder inside container (default: `/vault`)
+- `SPACENOTES_FILES_HOST` - **required**. Externally reachable base URL of port 5051, used in `upload_file`/`download_file` URLs
+- `DATA_DIR` - daemon state (note identity journal); point at the `/data` volume
+- `VAULT_PATH` - path to the vault inside the container (default: `/vault`)
 - `SPACETIME_HOST` - SpacetimeDB URL, internal (default: `http://127.0.0.1:3000`)
-- `SPACETIME_DB` - Database name (default: `spacenotes`)
-
-The Claude Code agent container authenticates with your Claude Code subscription (`claude login` once on first run); there's no API-key env var. The chat UI in the Flutter client talks to it via SpaceChannel — no separate chat backend.
+- `SPACETIME_DB` - database name (default: `spacenotes`)
 
 ## License
 
