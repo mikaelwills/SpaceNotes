@@ -59,6 +59,7 @@ const RECONNECT_MAX_MS = 60_000;
 const pendingPermissions = new Map<string, (behavior: string) => void>();
 const pendingQuestions = new Map<string, (response: string | null) => void>();
 const QUESTION_TIMEOUT_MS = 10 * 60 * 1000;
+const PERMISSION_TIMEOUT_MS = 9.5 * 60 * 1000;
 const pendingImages = new Map<string, MessageImage>();
 const pendingMessages = new Map<string, Message>();
 const openToolCalls = new Map<string, { tool: string; startedAt: number }>();
@@ -778,6 +779,50 @@ async function handleAskUserQuestion(
   };
 }
 
+async function handlePermissionRequest(
+  body: Record<string, any>,
+): Promise<Record<string, unknown>> {
+  log(`handlePermissionRequest entered tool=${body.tool_name} conn=${conn ? "yes" : "no"} lastInputSource=${lastInputSource}`);
+  if (!conn || lastInputSource !== "flutter") return {};
+
+  const id = body.tool_use_id || `permission-${Date.now()}-${randomUUID().slice(0, 8)}`;
+  const input = JSON.stringify(body.tool_input ?? {});
+
+  try {
+    await conn.reducers.requestPermission({
+      id,
+      agentId: AGENT_ID,
+      tool: body.tool_name || "unknown",
+      input,
+    });
+    log(`requestPermission inserted id=${id} agent=${AGENT_ID}`);
+  } catch (e) {
+    log(`requestPermission failed: ${e}`);
+    return {};
+  }
+
+  const behavior = await new Promise<string | null>((resolve) => {
+    const timer = setTimeout(() => {
+      pendingPermissions.delete(id);
+      log(`Permission ${id} timed out after ${PERMISSION_TIMEOUT_MS}ms`);
+      resolve(null);
+    }, PERMISSION_TIMEOUT_MS);
+    pendingPermissions.set(id, (status) => {
+      clearTimeout(timer);
+      resolve(status === "approved" ? "allow" : "deny");
+    });
+  });
+
+  if (behavior === null) return {};
+
+  return {
+    hookSpecificOutput: {
+      hookEventName: "PermissionRequest",
+      decision: behavior,
+    },
+  };
+}
+
 function startHookServer() {
   const server = Bun.serve({
     port: args.hookPort || 0,
@@ -802,6 +847,11 @@ function startHookServer() {
       // The answer is returned to the hook process, which injects it via stdout.
       if (hookEvent === "PreToolUse" && body.tool_name === "AskUserQuestion") {
         const out = await handleAskUserQuestion(body.tool_input);
+        return Response.json(out);
+      }
+
+      if (hookEvent === "PermissionRequest") {
+        const out = await handlePermissionRequest(body);
         return Response.json(out);
       }
 
@@ -981,8 +1031,9 @@ async function runHookPost() {
   const isAskUserQuestion =
     parsed?.hook_event_name === "PreToolUse" &&
     parsed?.tool_name === "AskUserQuestion";
+  const isPermissionRequest = parsed?.hook_event_name === "PermissionRequest";
 
-  if (isAskUserQuestion) {
+  if (isAskUserQuestion || isPermissionRequest) {
     try {
       const res = await fetch(url, {
         method: "POST",
@@ -1043,6 +1094,7 @@ async function runLaunch(rawArgs: string[]) {
   const hooksObj = {
     SessionStart: hookEntry,
     PreToolUse: hookEntry,
+    PermissionRequest: hookEntry,
     PostToolUse: hookEntry,
     PostToolUseFailure: hookEntry,
     UserPromptSubmit: hookEntry,
