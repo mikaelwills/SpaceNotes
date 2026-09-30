@@ -100,6 +100,7 @@ const mcp = new Server(
       "Reply using the reply tool. Use edit_message to update a previous reply by id.",
       "Use send_to_agent to message another agent's channel directly; it arrives in their session like a user message, attributed to you.",
       "To point the user at a vault file, link it in your reply as markdown: [name](spacenotes://file/<id>) using the file id any spacenotes-mcp read returns; for a folder use [name](spacenotes://folder/<url-encoded path>). Tapping the link opens it in the app.",
+      "Put each vault link alone on its own line, with no caption or other text sharing that line, so the app renders it as a card with a thumbnail; a link inside a sentence renders as plain text.",
     ].join(" "),
   }
 );
