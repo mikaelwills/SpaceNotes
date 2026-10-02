@@ -129,7 +129,7 @@ async function drainDeliveries($: any) {
 
 async function reportTurnEnd($: any, reason: string, answer: string) {
   if (reason === 'aborted') {
-    await tryBridge($, 'push_message', { role: 'assistant', text: '⏹ stopped', source: 'notice' })
+    await tryBridge($, 'push_message', { role: 'assistant', text: 'Stopped', source: 'notice' })
   } else if (reason === 'answer' && answer) {
     await tryBridge($, 'push_message', { role: 'assistant', text: answer, source: 'mcp' })
   } else if (reason === 'error' || reason === 'refusal') {
