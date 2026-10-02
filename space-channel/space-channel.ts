@@ -605,6 +605,11 @@ function scheduleReconnect() {
 }
 
 function handleIncomingMessage(row: Message) {
+  if (row.role === "user" && row.source === "control") {
+    log(`control received id=${row.id} text=${row.text}`);
+    enqueueInbound({ id: row.id, text: row.text, source: row.source, sender: "flutter" });
+    return;
+  }
   const fromAgent = row.source.startsWith("agent:");
   if (row.role !== "user" || (row.source !== "flutter" && !fromAgent)) {
     log(`inbound skipped id=${row.id} (role/source filter)`);

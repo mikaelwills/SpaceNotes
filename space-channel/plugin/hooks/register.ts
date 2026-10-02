@@ -30,6 +30,9 @@ let lastPromptAt = Date.now()
 let userEngaged = false
 let wrapUpFired = false
 let lastPromptFromPhone = false
+let currentTurnId: string | undefined
+let draining = false
+const deliveries: Inbound[] = []
 
 function internalToolName(tool: string): string | undefined {
   const m = /^mcp__.+__([a-z_]+)$/.exec(tool)
@@ -81,7 +84,49 @@ async function deliver($: any, m: Inbound) {
     await $.prompt.submit({ text })
     return
   }
+  if (!m.imagePath && (await runSlashCommand($, text))) return
   await $.prompt.submit({ text, asUser: true })
+}
+
+async function runSlashCommand($: any, text: string): Promise<boolean> {
+  const match = /^\/([\w:.-]+)(?:\s+([\s\S]*))?$/.exec(text)
+  if (!match) return false
+  while (turnRunning) await $.clock.sleep(500)
+  let result: any
+  try {
+    result = await $.command.run({ command: match[1], args: match[2] ?? '' })
+  } catch (err) {
+    $.ui.log(`/${match[1]} not run as a command: ${err instanceof Error ? err.message : String(err)}`, { to: 'debug' })
+    return false
+  }
+  const output = typeof result?.text === 'string' ? result.text.trim() : ''
+  if (output) await tryBridge($, 'push_message', { role: 'assistant', text: output, source: 'notice' })
+  return true
+}
+
+async function drainDeliveries($: any) {
+  if (draining) return
+  draining = true
+  try {
+    while (deliveries.length > 0) {
+      const m = deliveries.shift()!
+      await deliver($, m)
+    }
+  } finally {
+    draining = false
+  }
+}
+
+async function stopTurn($: any) {
+  if (!turnRunning || !currentTurnId) {
+    $.ui.log('stop requested from SpaceNotes with no turn running', { to: 'debug' })
+    return
+  }
+  try {
+    await $.turn.abort({ turnId: currentTurnId })
+  } catch (err) {
+    $.ui.log(`stop failed: ${err instanceof Error ? err.message : String(err)}`, { to: 'debug' })
+  }
 }
 
 async function inboundLoop($: any) {
@@ -93,7 +138,12 @@ async function inboundLoop($: any) {
     }
     const m: Inbound | undefined = res.message
     if (!m) continue
-    await deliver($, m)
+    if (m.source === 'control') {
+      if (m.text === 'stop') await stopTurn($)
+      continue
+    }
+    deliveries.push(m)
+    void drainDeliveries($)
   }
 }
 
@@ -170,6 +220,7 @@ export const register: Register = on => {
 
   on('turn.start', async ($, e, next) => {
     turnRunning = true
+    currentTurnId = e.turnId
     void tryBridge($, 'push_status', { state: 'thinking' })
     return next(e)
   })
@@ -177,8 +228,11 @@ export const register: Register = on => {
   on('turn.complete', async ($, e, next) => {
     if (e.agentId) return next(e)
     turnRunning = false
+    currentTurnId = undefined
     const answer = e.answer.trim()
-    if (e.reason === 'answer' && answer) {
+    if (e.reason === 'aborted') {
+      await tryBridge($, 'push_message', { role: 'assistant', text: '⏹ stopped', source: 'notice' })
+    } else if (e.reason === 'answer' && answer) {
       await tryBridge($, 'push_message', { role: 'assistant', text: answer, source: 'mcp' })
     } else if (e.reason === 'error' || e.reason === 'refusal') {
       await tryBridge($, 'push_message', {
