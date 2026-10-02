@@ -10,12 +10,12 @@ use crate::sanitize::sanitize_path;
 
 const TEXT_EXTENSIONS: [&str; 6] = ["md", "yaml", "yml", "json", "toml", "txt"];
 
-const BINARY_EXTENSIONS: [&str; 18] = [
+const BINARY_EXTENSIONS: [&str; 19] = [
     "gpg",
     "mp3", "wav", "m4a", "aac", "flac", "ogg",
     "jpg", "jpeg", "png", "gif", "webp", "heic",
     "mp4", "mov", "m4v", "webm",
-    "pdf",
+    "pdf", "csv",
 ];
 
 /// Above this, a binary file's bytes are never read into `content` — the row
@@ -439,7 +439,7 @@ mod tests {
 
     #[test]
     fn newly_allowlisted_extensions_are_ingestible() {
-        for ext in ["mp3", "jpg", "png", "mp4", "webm", "pdf"] {
+        for ext in ["mp3", "jpg", "png", "mp4", "webm", "pdf", "csv"] {
             let vault = temp_vault(&format!("allowlist-{ext}"));
             let path = vault.join(format!("file.{ext}"));
             std::fs::write(&path, [0x00, 0x01]).unwrap();
