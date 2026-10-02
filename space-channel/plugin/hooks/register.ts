@@ -22,7 +22,7 @@ const INTERNAL_TOOLS = new Set([
   'poll_question',
 ])
 
-type Inbound = { id: string; text: string; source: string; sender: string; imagePath?: string }
+type Inbound = { id: string; text: string; source: string; sender: string; imagePaths?: string[] }
 
 let server = ''
 let turnRunning = false
@@ -77,14 +77,18 @@ async function deliver($: any, m: Inbound) {
   touchActivity(true)
   const fromAgent = m.source.startsWith('agent:')
   let text = m.text.trim()
-  if (!text && m.imagePath) text = '(image)'
-  if (m.imagePath) text += `\n\n(image attached at ${m.imagePath} — read it with the Read tool)`
+  const images = m.imagePaths ?? []
+  if (!text && images.length > 0) text = images.length === 1 ? '(image)' : '(images)'
+  if (images.length === 1) text += `\n\n(image attached at ${images[0]} — read it with the Read tool)`
+  if (images.length > 1) {
+    text += `\n\n(${images.length} images attached — read each with the Read tool:\n${images.map(p => `- ${p}`).join('\n')})`
+  }
   if (fromAgent) {
     text += `\n\n(a2a message from agent '${m.sender}' — to answer THEM use send_to_agent('${m.sender}'); plain text goes to your own human's chat, not to them)`
     await $.prompt.submit({ text })
     return
   }
-  if (!m.imagePath && (await runSlashCommand($, text))) return
+  if (images.length === 0 && (await runSlashCommand($, text))) return
   await $.prompt.submit({ text, asUser: true })
 }
 

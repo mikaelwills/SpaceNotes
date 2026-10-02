@@ -42,11 +42,16 @@ const HOST_ALIASES: Record<string, string> = {
 const HOST = HOST_ALIASES[RAW_HOST] ?? RAW_HOST;
 const CLIENT_ID = randomUUID();
 const AGENT_ID = `${args.agent}@${HOST}`;
+const FILES_URL = process.env.SPACE_CHANNEL_FILES_URL || filesUrlFor(args.stdbUri);
 const HEARTBEAT_MS = 120_000;
 const LOG_FILE = `/tmp/space-channel-${args.agent}.log`;
 const INBOX_DIR = join(homedir(), ".claude", "channels", "space-channel", "inbox");
 const INBOX_TTL_MS = 48 * 60 * 60 * 1000;
 const IMAGE_PAIR_WAIT_MS = 500;
+const VAULT_FILE_LINK = /spacenotes:\/\/file\/([0-9a-fA-F-]{36})\)/g;
+const VAULT_RESOLVE_TIMEOUT_MS = 10_000;
+const INBOX_IMAGE_EXTENSIONS = new Set(["jpg", "jpeg", "png", "gif", "webp"]);
+const INBOX_SWEEP_MS = 60 * 60 * 1000;
 const NEXT_MESSAGE_MAX_WAIT_MS = 25_000;
 
 let conn: DbConnection | null = null;
@@ -97,7 +102,7 @@ type InboundMessage = {
   text: string;
   source: string;
   sender: string;
-  imagePath?: string;
+  imagePaths?: string[];
 };
 const inboundQueue: InboundMessage[] = [];
 let inboundWaiter: ((m: InboundMessage | null) => void) | null = null;
@@ -471,7 +476,14 @@ function enqueueInbound(message: InboundMessage) {
 await mcp.connect(new StdioServerTransport());
 
 sweepInbox();
+setInterval(sweepInbox, INBOX_SWEEP_MS);
 connectToStdb();
+
+function filesUrlFor(stdbUri: string): string {
+  const url = new URL(stdbUri.replace(/^ws/, "http"));
+  url.port = "5051";
+  return url.origin;
+}
 
 function parseArgs() {
   const stdbUri = getArg("--stdb-uri") || process.env.SPACE_CHANNEL_STDB_URI || "ws://127.0.0.1:5050";
@@ -669,14 +681,74 @@ function deliverInbound(message: Message, image?: MessageImage) {
       mkdirSync(INBOX_DIR, { recursive: true });
       const filePath = join(INBOX_DIR, `${message.id}.png`);
       writeFileSync(filePath, Buffer.from(image.bytes));
-      inbound.imagePath = filePath;
+      inbound.imagePaths = [filePath];
     } catch (e) {
       log(`inbox write failed for ${message.id}: ${e}`);
     }
   }
 
-  log(`inbound queued id=${message.id} sender=${sender} text_len=${message.text.length} image=${inbound.imagePath ? "yes" : "no"}`);
-  enqueueInbound(inbound);
+  deliveryChain = deliveryChain
+    .then(() => attachVaultImages(inbound))
+    .catch((e) => log(`vault image fetch failed for ${message.id}: ${e}`))
+    .then(() => {
+      log(`inbound queued id=${message.id} sender=${sender} text_len=${message.text.length} images=${inbound.imagePaths?.length ?? 0}`);
+      enqueueInbound(inbound);
+    });
+}
+
+let deliveryChain: Promise<void> = Promise.resolve();
+
+async function attachVaultImages(inbound: InboundMessage) {
+  if (inbound.source !== "flutter") return;
+  const ids = [...inbound.text.matchAll(VAULT_FILE_LINK)].map((m) => m[1]!);
+  if (ids.length === 0) return;
+  const db = conn;
+  if (!db) return;
+  mkdirSync(INBOX_DIR, { recursive: true });
+  const paths: string[] = [];
+  for (const [n, id] of ids.entries()) {
+    const remote = await resolveFilePath(db, id);
+    if (!remote) {
+      log(`vault link ${id} did not resolve to a file`);
+      continue;
+    }
+    const ext = remote.split(".").pop()?.toLowerCase() ?? "";
+    if (!INBOX_IMAGE_EXTENSIONS.has(ext)) continue;
+    const url = `${FILES_URL}/files/${remote.split("/").map(encodeURIComponent).join("/")}`;
+    const res = await fetch(url);
+    if (!res.ok) {
+      log(`vault image download ${res.status} for ${remote}`);
+      continue;
+    }
+    const local = join(INBOX_DIR, `${inbound.id}-${n + 1}.${ext}`);
+    writeFileSync(local, Buffer.from(await res.arrayBuffer()));
+    paths.push(local);
+  }
+  if (paths.length > 0) inbound.imagePaths = [...(inbound.imagePaths ?? []), ...paths];
+}
+
+function resolveFilePath(db: DbConnection, id: string): Promise<string | null> {
+  const known = db.db.space_file.id.find(id);
+  if (known) return Promise.resolve(known.path);
+  return new Promise((resolve) => {
+    let settled = false;
+    const handle = db
+      .subscriptionBuilder()
+      .onApplied(() => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(db.db.space_file.id.find(id)?.path ?? null);
+        handle.unsubscribe();
+      })
+      .subscribe([`SELECT * FROM space_file WHERE id = '${id}'`]);
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      resolve(null);
+      handle.unsubscribe();
+    }, VAULT_RESOLVE_TIMEOUT_MS);
+  });
 }
 
 function sweepInbox() {
