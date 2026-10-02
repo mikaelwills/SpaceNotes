@@ -35,6 +35,9 @@ let currentTurnId: string | undefined
 let autoWrapTokens = AUTOWRAP_DEFAULT_TOKENS
 let autoWrap: 'armed' | 'queued' | 'running' | 'compacting' | 'failed' = 'armed'
 let draining = false
+let toolsRunning = 0
+let herdrPane: string | undefined
+let herdrBin: string | undefined
 const deliveries: Inbound[] = []
 
 function internalToolName(tool: string): string | undefined {
@@ -152,6 +155,22 @@ async function stopTurn($: any) {
   }
 }
 
+async function backgroundTool($: any) {
+  if (toolsRunning === 0) {
+    $.ui.log('background requested from SpaceNotes with no tool running', { to: 'debug' })
+    return
+  }
+  if (!herdrPane || !herdrBin) {
+    await tryBridge($, 'push_message', { role: 'assistant', text: '⚠️ background needs the session to run in a herdr pane', source: 'error' })
+    return
+  }
+  try {
+    await $.process.run({ argv: [herdrBin, 'pane', 'send-keys', herdrPane, 'ctrl+b'] })
+  } catch (err) {
+    $.ui.log(`background failed: ${err instanceof Error ? err.message : String(err)}`, { to: 'debug' })
+  }
+}
+
 async function inboundLoop($: any) {
   while (true) {
     const res = await tryBridge($, 'next_message', { timeoutMs: POLL_TIMEOUT_MS })
@@ -163,6 +182,7 @@ async function inboundLoop($: any) {
     if (!m) continue
     if (m.source === 'control') {
       if (m.text === 'stop') await stopTurn($)
+      if (m.text === 'background') await backgroundTool($)
       continue
     }
     deliveries.push(m)
@@ -250,6 +270,9 @@ export const register: Register = on => {
     server = connected.server
     const configured = Number(await $.env.get('SPACE_CHANNEL_AUTOWRAP_TOKENS'))
     if (Number.isFinite(configured) && configured > 0) autoWrapTokens = configured
+    herdrPane = (await $.env.get('HERDR_PANE_ID')) || undefined
+    const home = await $.env.get('HOME')
+    if (home) herdrBin = `${home}/.local/bin/herdr`
     void inboundLoop($)
     $.clock.every(IDLE_CHECK_MS, () => checkIdleWrapUp($))
     return started
@@ -301,9 +324,13 @@ export const register: Register = on => {
     }
     void tryBridge($, 'push_tool_event', { tool: e.tool, detail: JSON.stringify({ tool: e.tool, input }) })
     void tryBridge($, 'push_status', { state: 'tool_use' })
-    const ran = await next(e)
-    void tryBridge($, 'push_status', { state: 'thinking' })
-    return ran
+    toolsRunning++
+    try {
+      return await next(e)
+    } finally {
+      toolsRunning--
+      void tryBridge($, 'push_status', { state: 'thinking' })
+    }
   })
 
   on('tool.check', async ($, e, next) => {
