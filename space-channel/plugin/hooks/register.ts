@@ -124,9 +124,25 @@ async function drainDeliveries($: any) {
   }
 }
 
+async function reportTurnEnd($: any, reason: string, answer: string) {
+  if (reason === 'aborted') {
+    await tryBridge($, 'push_message', { role: 'assistant', text: '⏹ stopped', source: 'notice' })
+  } else if (reason === 'answer' && answer) {
+    await tryBridge($, 'push_message', { role: 'assistant', text: answer, source: 'mcp' })
+  } else if (reason === 'error' || reason === 'refusal') {
+    await tryBridge($, 'push_message', {
+      role: 'assistant',
+      text: `⚠️ ${answer || `turn ended: ${reason}`}`,
+      source: 'error',
+    })
+  }
+  await tryBridge($, 'push_status', { state: 'idle' })
+}
+
 async function stopTurn($: any) {
   if (!turnRunning || !currentTurnId) {
     $.ui.log('stop requested from SpaceNotes with no turn running', { to: 'debug' })
+    await tryBridge($, 'push_status', { state: 'idle' })
     return
   }
   try {
@@ -262,18 +278,8 @@ export const register: Register = on => {
     turnRunning = false
     currentTurnId = undefined
     const answer = e.answer.trim()
-    if (e.reason === 'aborted') {
-      await tryBridge($, 'push_message', { role: 'assistant', text: '⏹ stopped', source: 'notice' })
-    } else if (e.reason === 'answer' && answer) {
-      await tryBridge($, 'push_message', { role: 'assistant', text: answer, source: 'mcp' })
-    } else if (e.reason === 'error' || e.reason === 'refusal') {
-      await tryBridge($, 'push_message', {
-        role: 'assistant',
-        text: `⚠️ ${answer || `turn ended: ${e.reason}`}`,
-        source: 'error',
-      })
-    }
-    await tryBridge($, 'push_status', { state: 'idle' })
+    const reason = e.reason
+    $.clock.after(0, () => reportTurnEnd($, reason, answer))
     if (autoWrap === 'running') {
       autoWrap = 'compacting'
       $.clock.after(0, () => compactAfterWrap($))
