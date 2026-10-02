@@ -40,7 +40,7 @@ for rel in $(cd "${STAGE}/plugin" && find . -type f | sed 's|^\./||'); do
   mv -f "${PLUGIN_DIR}/${rel}.tmp" "${PLUGIN_DIR}/${rel}"
 done
 
-rm -f "${ROOT}/space-channel"
+ln -sfn "${BIN_DIR}/space-channel" "${ROOT}/space-channel"
 mkdir -p "${HOME}/.local/bin"
 ln -sf "${BIN_DIR}/space-channel" "${HOME}/.local/bin/space-channel"
 
