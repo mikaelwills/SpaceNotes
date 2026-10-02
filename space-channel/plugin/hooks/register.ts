@@ -4,6 +4,7 @@ const BRIDGE = 'space-channel'
 const POLL_TIMEOUT_MS = 20_000
 const IDLE_WRAPUP_MS = 30 * 60_000
 const IDLE_CHECK_MS = 60_000
+const AUTOWRAP_DEFAULT_TOKENS = 300_000
 const PERMISSION_TIMEOUT_MS = 9.5 * 60_000
 const QUESTION_TIMEOUT_MS = 10 * 60_000
 const WRAPUP_TEXT =
@@ -31,6 +32,8 @@ let userEngaged = false
 let wrapUpFired = false
 let lastPromptFromPhone = false
 let currentTurnId: string | undefined
+let autoWrapTokens = AUTOWRAP_DEFAULT_TOKENS
+let autoWrap: 'armed' | 'queued' | 'running' | 'compacting' | 'failed' = 'armed'
 let draining = false
 const deliveries: Inbound[] = []
 
@@ -151,6 +154,28 @@ async function inboundLoop($: any) {
   }
 }
 
+function checkAutoWrap($: any, tokens: number) {
+  if (autoWrap === 'compacting' && tokens < autoWrapTokens) autoWrap = 'armed'
+  if (autoWrap !== 'armed' || tokens < autoWrapTokens) return
+  autoWrap = 'queued'
+  const k = Math.round(autoWrapTokens / 1000)
+  $.ui.log(`context passed ${k}k, running the wrap-up then /compact`, { to: 'debug' })
+  void tryBridge($, 'push_message', { role: 'assistant', text: `🧹 context passed ${k}k: wrapping up, then /compact`, source: 'notice' })
+  void $.prompt.submit({ text: `Context passed ${k}k tokens. ${WRAPUP_TEXT}. /compact runs automatically when you finish.` })
+}
+
+async function compactAfterWrap($: any) {
+  try {
+    await $.command.run({ command: 'compact', args: '' })
+    await tryBridge($, 'push_message', { role: 'assistant', text: '🧹 compacted', source: 'notice' })
+  } catch (err) {
+    autoWrap = 'failed'
+    const reason = err instanceof Error ? err.message : String(err)
+    $.ui.log(`auto /compact failed: ${reason}`)
+    await tryBridge($, 'push_message', { role: 'assistant', text: `⚠️ auto /compact failed: ${reason}`, source: 'error' })
+  }
+}
+
 function checkIdleWrapUp($: any) {
   if (!userEngaged || wrapUpFired || turnRunning) return
   if (Date.now() - lastPromptAt < IDLE_WRAPUP_MS) return
@@ -207,6 +232,8 @@ export const register: Register = on => {
       return started
     }
     server = connected.server
+    const configured = Number(await $.env.get('SPACE_CHANNEL_AUTOWRAP_TOKENS'))
+    if (Number.isFinite(configured) && configured > 0) autoWrapTokens = configured
     void inboundLoop($)
     $.clock.every(IDLE_CHECK_MS, () => checkIdleWrapUp($))
     return started
@@ -225,6 +252,7 @@ export const register: Register = on => {
   on('turn.start', async ($, e, next) => {
     turnRunning = true
     currentTurnId = e.turnId
+    if (autoWrap === 'queued') autoWrap = 'running'
     void tryBridge($, 'push_status', { state: 'thinking' })
     return next(e)
   })
@@ -246,6 +274,10 @@ export const register: Register = on => {
       })
     }
     await tryBridge($, 'push_status', { state: 'idle' })
+    if (autoWrap === 'running') {
+      autoWrap = 'compacting'
+      $.clock.after(0, () => compactAfterWrap($))
+    }
     return next(e)
   })
 
@@ -294,6 +326,7 @@ export const register: Register = on => {
     const window = e.context?.window
     if (e.changed.includes('context') && typeof tokens === 'number' && typeof window === 'number' && window > 0) {
       void tryBridge($, 'push_context_usage', { used: Math.round(tokens), window: Math.round(window) })
+      checkAutoWrap($, tokens)
     }
     return next(e)
   })
