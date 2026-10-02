@@ -26,4 +26,5 @@
     "noUnusedParameters": false,
     "noPropertyAccessFromIndexSignature": false
   }
+  ,"exclude": ["plugin", "node_modules"]
 }

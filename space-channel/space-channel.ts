@@ -11,22 +11,22 @@ import {
   mkdirSync,
   writeFileSync,
   readdirSync,
-  readFileSync,
-  existsSync,
   statSync,
   unlinkSync,
+  existsSync,
 } from "fs";
 import { hostname, homedir } from "os";
-import { join } from "path";
+import { join, dirname, basename } from "path";
 import { randomUUID } from "crypto";
 import { spawn, spawnSync } from "child_process";
-import { createServer } from "net";
 import { DbConnection } from "./generated";
 import type { Message, MessageImage, PermissionRequest, QuestionRequest } from "./generated/types";
 
+const BUILD_SHA = process.env.SPACE_CHANNEL_BUILD_SHA ?? "dev";
+
 const subcommand = process.argv[2];
-if (subcommand === "hook-post") {
-  await runHookPost();
+if (subcommand === "version") {
+  process.stdout.write(`${BUILD_SHA}\n`);
   process.exit(0);
 }
 if (subcommand === "launch") {
@@ -43,10 +43,11 @@ const HOST = HOST_ALIASES[RAW_HOST] ?? RAW_HOST;
 const CLIENT_ID = randomUUID();
 const AGENT_ID = `${args.agent}@${HOST}`;
 const HEARTBEAT_MS = 120_000;
-const TOOL_USE_STUCK_MS = 30_000;
 const LOG_FILE = `/tmp/space-channel-${args.agent}.log`;
 const INBOX_DIR = join(homedir(), ".claude", "channels", "space-channel", "inbox");
 const INBOX_TTL_MS = 48 * 60 * 60 * 1000;
+const IMAGE_PAIR_WAIT_MS = 500;
+const NEXT_MESSAGE_MAX_WAIT_MS = 25_000;
 
 let conn: DbConnection | null = null;
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
@@ -56,50 +57,67 @@ let hasEverConnected = false;
 let shuttingDown = false;
 const RECONNECT_BASE_MS = 1_000;
 const RECONNECT_MAX_MS = 60_000;
-const pendingPermissions = new Map<string, (behavior: string) => void>();
-const pendingQuestions = new Map<string, (response: string | null) => void>();
-const QUESTION_TIMEOUT_MS = 10 * 60 * 1000;
-const PERMISSION_TIMEOUT_MS = 9.5 * 60 * 1000;
-const pendingImages = new Map<string, MessageImage>();
-const pendingMessages = new Map<string, Message>();
-const openToolCalls = new Map<string, { tool: string; startedAt: number }>();
-let lastKnownState: string = "idle";
-let lastInputSource: "terminal" | "flutter" = "terminal";
-const pendingFlutterPrompts: string[] = [];
-const IDLE_WRAPUP_MS = 6 * 60 * 60 * 1000;
-const WRAPUP_REARM_MS = 6 * 60 * 60 * 1000;
-let lastActivityAt = Date.now();
-let wrapUpFired = false;
-let userHasEngaged = false;
 
-function markActivity(fromUser = false) {
-  if (fromUser) {
-    lastActivityAt = Date.now();
-    wrapUpFired = false;
-    userHasEngaged = true;
+type Outcomes<T> = { done: Map<string, T>; waiting: Map<string, (v: T | undefined) => void> };
+const permissionOutcomes: Outcomes<string> = { done: new Map(), waiting: new Map() };
+const questionOutcomes: Outcomes<string | null> = { done: new Map(), waiting: new Map() };
+
+function settleOutcome<T>(o: Outcomes<T>, id: string, value: T) {
+  const waiter = o.waiting.get(id);
+  if (waiter) {
+    o.waiting.delete(id);
+    waiter(value);
     return;
   }
-  if (wrapUpFired && Date.now() - lastActivityAt >= IDLE_WRAPUP_MS + WRAPUP_REARM_MS) {
-    lastActivityAt = Date.now();
-    wrapUpFired = false;
-  }
+  o.done.set(id, value);
 }
 
+function awaitOutcome<T>(o: Outcomes<T>, id: string, timeoutMs: number): Promise<T | undefined> {
+  if (o.done.has(id)) {
+    const value = o.done.get(id);
+    o.done.delete(id);
+    return Promise.resolve(value);
+  }
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      o.waiting.delete(id);
+      resolve(undefined);
+    }, timeoutMs);
+    o.waiting.set(id, (v) => {
+      clearTimeout(timer);
+      resolve(v);
+    });
+  });
+}
+const pendingImages = new Map<string, MessageImage>();
+const pendingMessages = new Map<string, Message>();
+
+type InboundMessage = {
+  id: string;
+  text: string;
+  source: string;
+  sender: string;
+  imagePath?: string;
+};
+const inboundQueue: InboundMessage[] = [];
+let inboundWaiter: ((m: InboundMessage | null) => void) | null = null;
+
+const A2A_DEFAULT_MAX_HOPS = 4;
+const A2A_HOP_DECAY_MS = 5 * 60_000;
+const a2aSendTimes: number[] = [];
+const a2aLastSendToTarget = new Map<string, number>();
+let incomingAgentHop: number | null = null;
+let incomingAgentHopAt = 0;
+
 const mcp = new Server(
-  { name: "space-channel", version: "0.2.0" },
+  { name: "space-channel", version: "0.3.0" },
   {
-    capabilities: {
-      experimental: { "claude/channel": {}, "claude/channel/permission": {} },
-      tools: {},
-    },
+    capabilities: { tools: {} },
     instructions: [
-      "The user reads the SpaceNotes app, not this terminal session.",
-      "Anything you want them to see MUST go through the reply tool — your transcript output never reaches the app.",
-      'Messages from the user arrive as <channel source="space-channel" ...>.',
-      "If the tag has a file_path attribute, Read that file — it is an image from the user.",
-      "Reply using the reply tool. Use edit_message to update a previous reply by id.",
+      "Your user talks to you from the SpaceNotes app as well as this terminal; everything you write reaches both, so answer in plain text — there is no reply tool.",
       "Use send_to_agent to message another agent's channel directly; it arrives in their session like a user message, attributed to you.",
-      "To point the user at a vault file, link it in your reply as markdown: [name](spacenotes://file/<id>) using the file id any spacenotes-mcp read returns; for a folder use [name](spacenotes://folder/<url-encoded path>). Tapping the link opens it in the app.",
+      "The other space-channel tools are internal plumbing for the session; never call them yourself.",
+      "To point the user at a vault file, link it as markdown: [name](spacenotes://file/<id>) using the file id any spacenotes-mcp read returns; for a folder use [name](spacenotes://folder/<url-encoded path>). Tapping the link opens it in the app.",
       "Put each vault link alone on its own line, with no caption or other text sharing that line, so the app renders it as a card with a thumbnail; a link inside a sentence renders as plain text.",
     ].join(" "),
   }
@@ -114,245 +132,355 @@ function describeZodError(error: z.ZodError): string {
     .join("; ");
 }
 
-const ReplyArgsSchema = z.object({ text: z.string().min(1) }).strict();
-const EditMessageArgsSchema = z
-  .object({ id: z.string().min(1), text: z.string().min(1) })
+const SendToAgentArgs = z.object({ agent: z.string().min(1), text: z.string().min(1) }).strict();
+const PushMessageArgs = z
+  .object({
+    role: z.enum(["user", "assistant"]),
+    text: z.string().min(1),
+    source: z.string().min(1).default("mod"),
+    id: z.string().min(1).optional(),
+  })
   .strict();
-const SendToAgentArgsSchema = z
-  .object({ agent: z.string().min(1), text: z.string().min(1) })
+const EditMessageArgs = z.object({ id: z.string().min(1), text: z.string().min(1) }).strict();
+const PushStatusArgs = z.object({ state: z.enum(["idle", "thinking", "tool_use"]) }).strict();
+const PushToolEventArgs = z.object({ tool: z.string().min(1), detail: z.string() }).strict();
+const PushContextUsageArgs = z
+  .object({ used: z.number().int().nonnegative(), window: z.number().int().positive() })
+  .strict();
+const NextMessageArgs = z
+  .object({ timeoutMs: z.number().int().min(0).max(NEXT_MESSAGE_MAX_WAIT_MS).default(20_000) })
+  .strict();
+const RequestPermissionArgs = z
+  .object({ id: z.string().min(1), tool: z.string().min(1), input: z.string() })
+  .strict();
+const PollArgs = z
+  .object({ id: z.string().min(1), timeoutMs: z.number().int().min(0).max(NEXT_MESSAGE_MAX_WAIT_MS).default(20_000) })
+  .strict();
+const RequestQuestionArgs = z
+  .object({
+    questions: z.array(
+      z.object({
+        question: z.string().min(1),
+        header: z.string().default(""),
+        options: z.array(z.string()).default([]),
+        multiSelect: z.boolean().default(false),
+      })
+    ),
+  })
   .strict();
 
-const A2A_DEFAULT_MAX_HOPS = 4;
-const A2A_HOP_DECAY_MS = 5 * 60_000;
-const a2aSendTimes: number[] = [];
-const a2aLastSendToTarget = new Map<string, number>();
-let incomingAgentHop: number | null = null;
-let incomingAgentHopAt = 0;
+function schemaOf(shape: Record<string, unknown>, required: string[]) {
+  return { type: "object" as const, properties: shape, required, additionalProperties: false };
+}
+
+const INTERNAL = "Internal to the session bridge. Never call this yourself.";
 
 mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
     {
-      name: "reply",
-      description:
-        "Send a message back to the user via SpaceNotes. Takes only `text`; the reply goes to the chat this agent belongs to.",
-      inputSchema: {
-        type: "object" as const,
-        properties: {
-          text: { type: "string", description: "The message to send" },
-        },
-        required: ["text"],
-        additionalProperties: false,
-      },
-    },
-    {
       name: "send_to_agent",
       description:
-        "Send a message to another agent's channel. It arrives in that agent's Claude session like a user message, attributed to this agent. `agent` takes a base name (e.g. 'workflow-agent') which resolves against the live agent registry, or a full id ('name@host') when the agent runs on several machines — an ambiguous name fails with the candidate ids, an unknown name fails with the registered list. The target must have a running session to receive it. Limits (per-target cooldown, hourly cap, reply-chain hop cap) come from live channel_config and may be off - when refused, summarise to the user via reply instead of retrying.",
-      inputSchema: {
-        type: "object" as const,
-        properties: {
-          agent: { type: "string", description: "Target agent base name (e.g. 'workflow-agent') or full id ('name@host') when it runs on several machines" },
+        "Send a message to another agent's channel. It arrives in that agent's Claude session like a user message, attributed to this agent. `agent` takes a base name (e.g. 'workflow-agent') which resolves against the live agent registry, or a full id ('name@host') when the agent runs on several machines — an ambiguous name fails with the candidate ids, an unknown name fails with the registered list. The target must have a running session to receive it. Limits (per-target cooldown, hourly cap, reply-chain hop cap) come from live channel_config and may be off - when refused, summarise the exchange to the user instead of retrying.",
+      inputSchema: schemaOf(
+        {
+          agent: { type: "string", description: "Target agent base name or full id ('name@host')" },
           text: { type: "string", description: "The message to send" },
         },
-        required: ["agent", "text"],
-        additionalProperties: false,
-      },
+        ["agent", "text"]
+      ),
+    },
+    {
+      name: "push_message",
+      description: INTERNAL,
+      inputSchema: schemaOf(
+        {
+          role: { type: "string", enum: ["user", "assistant"] },
+          text: { type: "string" },
+          source: { type: "string" },
+          id: { type: "string" },
+        },
+        ["role", "text"]
+      ),
     },
     {
       name: "edit_message",
-      description: "Edit a previously sent message by id",
-      inputSchema: {
-        type: "object" as const,
-        properties: {
-          id: { type: "string", description: "The message id to edit" },
-          text: { type: "string", description: "The new message text" },
+      description: INTERNAL,
+      inputSchema: schemaOf({ id: { type: "string" }, text: { type: "string" } }, ["id", "text"]),
+    },
+    {
+      name: "push_status",
+      description: INTERNAL,
+      inputSchema: schemaOf({ state: { type: "string", enum: ["idle", "thinking", "tool_use"] } }, ["state"]),
+    },
+    {
+      name: "push_tool_event",
+      description: INTERNAL,
+      inputSchema: schemaOf({ tool: { type: "string" }, detail: { type: "string" } }, ["tool", "detail"]),
+    },
+    {
+      name: "push_context_usage",
+      description: INTERNAL,
+      inputSchema: schemaOf({ used: { type: "integer" }, window: { type: "integer" } }, ["used", "window"]),
+    },
+    {
+      name: "next_message",
+      description: INTERNAL,
+      inputSchema: schemaOf({ timeoutMs: { type: "integer" } }, []),
+    },
+    {
+      name: "request_permission",
+      description: INTERNAL,
+      inputSchema: schemaOf({ id: { type: "string" }, tool: { type: "string" }, input: { type: "string" } }, ["id", "tool", "input"]),
+    },
+    {
+      name: "poll_permission",
+      description: INTERNAL,
+      inputSchema: schemaOf({ id: { type: "string" }, timeoutMs: { type: "integer" } }, ["id"]),
+    },
+    {
+      name: "request_question",
+      description: INTERNAL,
+      inputSchema: schemaOf(
+        {
+          questions: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                question: { type: "string" },
+                header: { type: "string" },
+                options: { type: "array", items: { type: "string" } },
+                multiSelect: { type: "boolean" },
+              },
+              required: ["question"],
+            },
+          },
         },
-        required: ["id", "text"],
-        additionalProperties: false,
-      },
+        ["questions"]
+      ),
+    },
+    {
+      name: "poll_question",
+      description: INTERNAL,
+      inputSchema: schemaOf({ id: { type: "string" }, timeoutMs: { type: "integer" } }, ["id"]),
     },
   ],
 }));
 
+function ok(value: unknown) {
+  return { content: [{ type: "text" as const, text: JSON.stringify(value) }] };
+}
+
+function fail(text: string) {
+  return { content: [{ type: "text" as const, text: `FAILED: ${text}` }], isError: true };
+}
+
+function parseOr<T>(schema: z.ZodType<T>, raw: unknown, tool: string): T | ReturnType<typeof fail> {
+  const parsed = schema.safeParse(raw);
+  if (parsed.success) return parsed.data;
+  return fail(`invalid arguments for ${tool} — ${describeZodError(parsed.error)}`);
+}
+
+function isFail(v: unknown): v is ReturnType<typeof fail> {
+  return typeof v === "object" && v !== null && "isError" in v;
+}
+
 mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
-  if (!conn) {
-    return { content: [{ type: "text" as const, text: "FAILED: not connected to SpacetimeDB" }], isError: true };
+  const name = req.params.name;
+  const raw = req.params.arguments;
+
+  if (name === "next_message") {
+    const a = parseOr(NextMessageArgs, raw, name);
+    if (isFail(a)) return a;
+    const message = await waitForInbound(a.timeoutMs);
+    return ok(message ? { message } : {});
   }
 
-  if (req.params.name === "reply") {
-    const parsed = ReplyArgsSchema.safeParse(req.params.arguments);
-    if (!parsed.success) {
-      return {
-        content: [{ type: "text" as const, text: `FAILED: invalid arguments for reply — ${describeZodError(parsed.error)}` }],
-        isError: true,
-      };
-    }
-    const { text } = parsed.data;
-    const id = `reply-${Date.now()}`;
-    try {
-      await conn.reducers.pushMessage({ id, agentId: AGENT_ID, role: "assistant", text, source: "mcp" });
-      markActivity();
-      lastKnownState = "idle";
-      await conn.reducers.pushStatus({ agentId: AGENT_ID, state: "idle" });
-      return { content: [{ type: "text" as const, text: `sent (id: ${id})` }] };
-    } catch (e) {
-      return { content: [{ type: "text" as const, text: `FAILED: ${e}` }], isError: true };
-    }
-  }
-
-  if (req.params.name === "send_to_agent") {
-    const parsed = SendToAgentArgsSchema.safeParse(req.params.arguments);
-    if (!parsed.success) {
-      return {
-        content: [{ type: "text" as const, text: `FAILED: invalid arguments for send_to_agent — ${describeZodError(parsed.error)}` }],
-        isError: true,
-      };
-    }
-    const { agent, text } = parsed.data;
-    const now = Date.now();
-
-    const cfg = Array.from(conn.db.channel_config.iter())[0] as { a2AEnabled: boolean; a2ACooldownSecs: number; a2AHourlyLimit: number; a2AMaxHops: number } | undefined;
-    if (cfg && !cfg.a2AEnabled) {
-      return {
-        content: [{ type: "text" as const, text: "REFUSED: agent-to-agent messaging is disabled by the kill switch - summarise to the user via reply instead" }],
-        isError: true,
-      };
-    }
-
-    const cooldownMs = (cfg?.a2ACooldownSecs ?? 0) * 1000;
-    const hourlyLimit = cfg?.a2AHourlyLimit ?? 0;
-    const maxHops = cfg?.a2AMaxHops ?? A2A_DEFAULT_MAX_HOPS;
-
-    const inheritedHop =
-      incomingAgentHop !== null && now - incomingAgentHopAt < A2A_HOP_DECAY_MS
-        ? incomingAgentHop
-        : null;
-    const chainHops = inheritedHop === null ? 0 : inheritedHop + 1;
-    if (maxHops > 0 && chainHops >= maxHops) {
-      return {
-        content: [{ type: "text" as const, text: `REFUSED: agent reply chain reached ${maxHops} hops - stop messaging agents and summarise the exchange to the user via reply instead` }],
-        isError: true,
-      };
-    }
-
-    while (a2aSendTimes.length > 0 && now - a2aSendTimes[0]! > 3_600_000) a2aSendTimes.shift();
-    if (hourlyLimit > 0 && a2aSendTimes.length >= hourlyLimit) {
-      return {
-        content: [{ type: "text" as const, text: `REFUSED: rate limited - ${hourlyLimit} agent messages per hour already sent; summarise to the user via reply instead` }],
-        isError: true,
-      };
-    }
-
-    const registry = Array.from(conn.db.agent.iter()) as Array<{ id: string; baseName: string }>;
-    let target = agent;
-    if (!registry.some((a) => a.id === agent)) {
-      const matches = registry.filter((a) => a.baseName === agent);
-      if (matches.length === 1) {
-        target = matches[0]!.id;
-      } else if (matches.length > 1) {
-        const list = matches.map((a) => a.id).join(", ");
-        return {
-          content: [{ type: "text" as const, text: `FAILED: '${agent}' runs on multiple hosts — specify one of: ${list}` }],
-          isError: true,
-        };
-      } else {
-        const known = registry.map((a) => a.id).join(", ") || "none registered";
-        return {
-          content: [{ type: "text" as const, text: `FAILED: unknown agent '${agent}'. Registered agents: ${known}` }],
-          isError: true,
-        };
-      }
-    }
-    const lastToTarget = a2aLastSendToTarget.get(target);
-    if (cooldownMs > 0 && lastToTarget !== undefined && now - lastToTarget < cooldownMs) {
-      const wait = Math.ceil((cooldownMs - (now - lastToTarget)) / 1000);
-      return {
-        content: [{ type: "text" as const, text: `REFUSED: rate limited - already messaged ${target} in the last ${cooldownMs / 1000}s, retry in ${wait}s or batch your points into one message` }],
-        isError: true,
-      };
-    }
-
-    const id = `a2a-${chainHops}-${now}`;
-    try {
-      await conn.reducers.pushMessage({ id, agentId: target, role: "user", text, source: `agent:${AGENT_ID}` });
-      a2aSendTimes.push(now);
-      a2aLastSendToTarget.set(target, now);
-      return { content: [{ type: "text" as const, text: `sent to ${target} (id: ${id}, chain hop ${chainHops})` }] };
-    } catch (e) {
-      return { content: [{ type: "text" as const, text: `FAILED: ${e}` }], isError: true };
-    }
-  }
-
-  if (req.params.name === "edit_message") {
-    const parsed = EditMessageArgsSchema.safeParse(req.params.arguments);
-    if (!parsed.success) {
-      return {
-        content: [{ type: "text" as const, text: `FAILED: invalid arguments for edit_message — ${describeZodError(parsed.error)}` }],
-        isError: true,
-      };
-    }
-    const { id, text } = parsed.data;
-    try {
-      await conn.reducers.editMessage({ id, text });
-      return { content: [{ type: "text" as const, text: "edited" }] };
-    } catch (e) {
-      return { content: [{ type: "text" as const, text: `FAILED: ${e}` }], isError: true };
-    }
-  }
-
-  throw new Error(`unknown tool: ${req.params.name}`);
-});
-
-const PermissionRequestSchema = z.object({
-  method: z.literal("notifications/claude/channel/permission_request"),
-  params: z.object({
-    request_id: z.string().optional(),
-    tool_name: z.string().optional(),
-    description: z.string().optional(),
-    input_preview: z.string().optional(),
-  }).optional(),
-});
-
-mcp.setNotificationHandler(PermissionRequestSchema, async (notification) => {
-  if (!conn) return;
-  const params = notification.params || {};
-  const requestId = params.request_id || randomUUID();
-  const input = JSON.stringify({
-    description: params.description,
-    input_preview: params.input_preview,
-  });
+  if (!conn) return fail("not connected to SpacetimeDB");
+  const db = conn;
 
   try {
-    await conn.reducers.requestPermission({
-      id: requestId,
-      agentId: AGENT_ID,
-      tool: params.tool_name || "unknown",
-      input,
-    });
+    switch (name) {
+      case "send_to_agent": {
+        const a = parseOr(SendToAgentArgs, raw, name);
+        if (isFail(a)) return a;
+        return await sendToAgent(db, a.agent, a.text);
+      }
+      case "push_message": {
+        const a = parseOr(PushMessageArgs, raw, name);
+        if (isFail(a)) return a;
+        const id = a.id ?? `${a.role === "assistant" ? "reply" : "prompt"}-${Date.now()}-${randomUUID().slice(0, 6)}`;
+        await db.reducers.pushMessage({ id, agentId: AGENT_ID, role: a.role, text: a.text, source: a.source });
+        return ok({ id });
+      }
+      case "edit_message": {
+        const a = parseOr(EditMessageArgs, raw, name);
+        if (isFail(a)) return a;
+        await db.reducers.editMessage({ id: a.id, text: a.text });
+        return ok({ id: a.id });
+      }
+      case "push_status": {
+        const a = parseOr(PushStatusArgs, raw, name);
+        if (isFail(a)) return a;
+        await db.reducers.pushStatus({ agentId: AGENT_ID, state: a.state });
+        return ok({ state: a.state });
+      }
+      case "push_tool_event": {
+        const a = parseOr(PushToolEventArgs, raw, name);
+        if (isFail(a)) return a;
+        const id = `tool-${Date.now()}-${randomUUID().slice(0, 8)}`;
+        await db.reducers.pushToolEvent({ id, agentId: AGENT_ID, tool: a.tool, detail: a.detail });
+        return ok({ id });
+      }
+      case "push_context_usage": {
+        const a = parseOr(PushContextUsageArgs, raw, name);
+        if (isFail(a)) return a;
+        await db.reducers.pushContextUsage({ agentId: AGENT_ID, used: BigInt(a.used), window: BigInt(a.window) });
+        return ok({});
+      }
+      case "request_permission": {
+        const a = parseOr(RequestPermissionArgs, raw, name);
+        if (isFail(a)) return a;
+        permissionOutcomes.done.delete(a.id);
+        await db.reducers.requestPermission({ id: a.id, agentId: AGENT_ID, tool: a.tool, input: a.input });
+        return ok({ id: a.id });
+      }
+      case "poll_permission": {
+        const a = parseOr(PollArgs, raw, name);
+        if (isFail(a)) return a;
+        const status = await awaitOutcome(permissionOutcomes, a.id, a.timeoutMs);
+        if (status === undefined) return ok({ status: "pending" });
+        return ok({ status: status === "approved" ? "allow" : "deny" });
+      }
+      case "request_question": {
+        const a = parseOr(RequestQuestionArgs, raw, name);
+        if (isFail(a)) return a;
+        const ids: string[] = [];
+        for (const q of a.questions) {
+          const id = `question-${Date.now()}-${randomUUID().slice(0, 8)}`;
+          questionOutcomes.done.delete(id);
+          await db.reducers.requestQuestion({
+            id,
+            agentId: AGENT_ID,
+            question: q.question,
+            header: q.header,
+            options: JSON.stringify(q.options),
+            multiSelect: q.multiSelect,
+          });
+          ids.push(id);
+        }
+        return ok({ ids });
+      }
+      case "poll_question": {
+        const a = parseOr(PollArgs, raw, name);
+        if (isFail(a)) return a;
+        const response = await awaitOutcome(questionOutcomes, a.id, a.timeoutMs);
+        if (response === undefined) return ok({ status: "pending" });
+        return ok({ status: "answered", response });
+      }
+      default:
+        return fail(`unknown tool: ${name}`);
+    }
   } catch (e) {
-    log(`requestPermission failed: ${e}`);
+    return fail(String(e));
   }
 });
+
+async function sendToAgent(db: DbConnection, agent: string, text: string) {
+  const now = Date.now();
+  const cfg = Array.from(db.db.channel_config.iter())[0] as
+    | { a2AEnabled: boolean; a2ACooldownSecs: number; a2AHourlyLimit: number; a2AMaxHops: number }
+    | undefined;
+  if (cfg && !cfg.a2AEnabled) {
+    return fail("REFUSED: agent-to-agent messaging is disabled by the kill switch - summarise to the user instead");
+  }
+
+  const cooldownMs = (cfg?.a2ACooldownSecs ?? 0) * 1000;
+  const hourlyLimit = cfg?.a2AHourlyLimit ?? 0;
+  const maxHops = cfg?.a2AMaxHops ?? A2A_DEFAULT_MAX_HOPS;
+
+  const inheritedHop =
+    incomingAgentHop !== null && now - incomingAgentHopAt < A2A_HOP_DECAY_MS ? incomingAgentHop : null;
+  const chainHops = inheritedHop === null ? 0 : inheritedHop + 1;
+  if (maxHops > 0 && chainHops >= maxHops) {
+    return fail(`REFUSED: agent reply chain reached ${maxHops} hops - stop messaging agents and summarise the exchange to the user instead`);
+  }
+
+  while (a2aSendTimes.length > 0 && now - a2aSendTimes[0]! > 3_600_000) a2aSendTimes.shift();
+  if (hourlyLimit > 0 && a2aSendTimes.length >= hourlyLimit) {
+    return fail(`REFUSED: rate limited - ${hourlyLimit} agent messages per hour already sent; summarise to the user instead`);
+  }
+
+  const registry = Array.from(db.db.agent.iter()) as Array<{ id: string; baseName: string }>;
+  let target = agent;
+  if (!registry.some((a) => a.id === agent)) {
+    const matches = registry.filter((a) => a.baseName === agent);
+    if (matches.length === 1) {
+      target = matches[0]!.id;
+    } else if (matches.length > 1) {
+      return fail(`'${agent}' runs on multiple hosts — specify one of: ${matches.map((a) => a.id).join(", ")}`);
+    } else {
+      const known = registry.map((a) => a.id).join(", ") || "none registered";
+      return fail(`unknown agent '${agent}'. Registered agents: ${known}`);
+    }
+  }
+  const lastToTarget = a2aLastSendToTarget.get(target);
+  if (cooldownMs > 0 && lastToTarget !== undefined && now - lastToTarget < cooldownMs) {
+    const wait = Math.ceil((cooldownMs - (now - lastToTarget)) / 1000);
+    return fail(`REFUSED: rate limited - already messaged ${target} in the last ${cooldownMs / 1000}s, retry in ${wait}s or batch your points into one message`);
+  }
+
+  const id = `a2a-${chainHops}-${now}`;
+  await db.reducers.pushMessage({ id, agentId: target, role: "user", text, source: `agent:${AGENT_ID}` });
+  a2aSendTimes.push(now);
+  a2aLastSendToTarget.set(target, now);
+  return { content: [{ type: "text" as const, text: `sent to ${target} (id: ${id}, chain hop ${chainHops})` }] };
+}
+
+function waitForInbound(timeoutMs: number): Promise<InboundMessage | null> {
+  const queued = inboundQueue.shift();
+  if (queued) return Promise.resolve(queued);
+  if (inboundWaiter) {
+    const previous = inboundWaiter;
+    inboundWaiter = null;
+    previous(null);
+  }
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      if (inboundWaiter === settle) inboundWaiter = null;
+      resolve(null);
+    }, timeoutMs);
+    const settle = (m: InboundMessage | null) => {
+      clearTimeout(timer);
+      resolve(m);
+    };
+    inboundWaiter = settle;
+  });
+}
+
+function enqueueInbound(message: InboundMessage) {
+  if (inboundWaiter) {
+    const waiter = inboundWaiter;
+    inboundWaiter = null;
+    waiter(message);
+    return;
+  }
+  inboundQueue.push(message);
+}
 
 await mcp.connect(new StdioServerTransport());
 
 sweepInbox();
 connectToStdb();
-startHookServer();
 
 function parseArgs() {
   const stdbUri = getArg("--stdb-uri") || process.env.SPACE_CHANNEL_STDB_URI || "ws://127.0.0.1:5050";
   const stdbDb = getArg("--stdb-db") || process.env.SPACE_CHANNEL_STDB_DB || "spacenotes";
-  // --session / SPACE_CHANNEL_SESSION are still accepted so a machine that hasn't pulled the
-  // renamed dotfiles keeps working instead of silently spawning a junk-named agent.
   const agent =
     getArg("--agent") ||
-    getArg("--session") ||
     process.env.SPACE_CHANNEL_AGENT ||
-    process.env.SPACE_CHANNEL_SESSION ||
     `agent-${Date.now()}`;
-  const hookPort = parseInt(getArg("--hook-port") ?? process.env.SPACE_CHANNEL_HOOK_PORT ?? "0", 10);
-  return { stdbUri, stdbDb, agent, hookPort };
+  return { stdbUri, stdbDb, agent };
 }
 
 function getArg(name: string): string | undefined {
@@ -415,20 +543,17 @@ function connectToStdb() {
       });
 
       conn.db.question_request.onUpdate((_ctx, _oldRow, newRow) => {
-        log(`question_request.onUpdate id=${newRow.id} status=${newRow.status}`);
         handleQuestionUpdate(newRow);
       });
 
       conn.db.question_request.onInsert((ctx, row) => {
-        const tag = (ctx as any).event?.tag;
-        log(`question_request.onInsert id=${row.id} status=${row.status} event_tag=${tag}`);
-        if (tag === "SubscribeApplied") return;
+        if ((ctx as any).event?.tag === "SubscribeApplied") return;
         handleQuestionUpdate(row);
       });
 
       conn.db.message.onInsert((ctx, row) => {
         const tag = (ctx as any).event?.tag;
-        log(`message.onInsert id=${row.id} agent_id=${row.agentId} role=${row.role} source=${row.source} event_tag=${tag}`);
+        log(`message.onInsert id=${row.id} role=${row.role} source=${row.source} event_tag=${tag}`);
         if (tag === "SubscribeApplied") return;
         handleIncomingMessage(row);
       });
@@ -449,8 +574,6 @@ function connectToStdb() {
         } catch (e) {
           log(`heartbeat failed: ${e}`);
         }
-        await sweepStaleToolCalls();
-        checkIdleWrapUp();
       }, HEARTBEAT_MS);
     })
     .onConnectError((_ctx, err) => {
@@ -482,10 +605,9 @@ function scheduleReconnect() {
 }
 
 function handleIncomingMessage(row: Message) {
-  log(`handleIncomingMessage entered id=${row.id} role=${row.role} source=${row.source}`);
   const fromAgent = row.source.startsWith("agent:");
   if (row.role !== "user" || (row.source !== "flutter" && !fromAgent)) {
-    log(`handleIncomingMessage skipping id=${row.id} (role/source filter)`);
+    log(`inbound skipped id=${row.id} (role/source filter)`);
     return;
   }
 
@@ -497,16 +619,10 @@ function handleIncomingMessage(row: Message) {
     incomingAgentHop = null;
   }
 
-  lastInputSource = "flutter";
-  if (row.text) {
-    pendingFlutterPrompts.push(row.text.trim());
-    if (pendingFlutterPrompts.length > 20) pendingFlutterPrompts.shift();
-  }
-
   const image = pendingImages.get(row.id);
   if (image) {
     pendingImages.delete(row.id);
-    emitMessage(row, image);
+    deliverInbound(row, image);
     return;
   }
 
@@ -515,15 +631,15 @@ function handleIncomingMessage(row: Message) {
     const buffered = pendingMessages.get(row.id);
     if (!buffered) return;
     pendingMessages.delete(row.id);
-    emitMessage(buffered);
-  }, 500);
+    deliverInbound(buffered);
+  }, IMAGE_PAIR_WAIT_MS);
 }
 
 function handleIncomingImage(row: MessageImage) {
   const message = pendingMessages.get(row.messageId);
   if (message) {
     pendingMessages.delete(row.messageId);
-    emitMessage(message, row);
+    deliverInbound(message, row);
     return;
   }
   pendingImages.set(row.messageId, row);
@@ -532,15 +648,15 @@ function handleIncomingImage(row: MessageImage) {
   }, 5000);
 }
 
-function emitMessage(message: Message, image?: MessageImage) {
-  markActivity(true);
-  const meta: Record<string, string> = {
-    chat_id: "flutter",
-    message_id: message.id,
-    user: message.source.startsWith("agent:")
-      ? message.source.slice("agent:".length)
-      : "flutter",
-    ts: new Date().toISOString(),
+function deliverInbound(message: Message, image?: MessageImage) {
+  const sender = message.source.startsWith("agent:")
+    ? message.source.slice("agent:".length)
+    : "flutter";
+  const inbound: InboundMessage = {
+    id: message.id,
+    text: message.text,
+    source: message.source,
+    sender,
   };
 
   if (image) {
@@ -548,67 +664,14 @@ function emitMessage(message: Message, image?: MessageImage) {
       mkdirSync(INBOX_DIR, { recursive: true });
       const filePath = join(INBOX_DIR, `${message.id}.png`);
       writeFileSync(filePath, Buffer.from(image.bytes));
-      meta.file_path = filePath;
+      inbound.imagePath = filePath;
     } catch (e) {
       log(`inbox write failed for ${message.id}: ${e}`);
     }
   }
 
-  let content = message.text.trim().length > 0
-    ? message.text
-    : image
-      ? "(image)"
-      : message.text;
-  if (message.source.startsWith("agent:")) {
-    content += `\n\n(a2a message from agent '${meta.user}' — to answer THEM use send_to_agent('${meta.user}'); the reply tool goes to your own human's chat, not to them)`;
-  }
-
-  log(`emitMessage sending mcp notification message_id=${message.id} content_len=${content.length}`);
-  mcp.notification({
-    method: "notifications/claude/channel",
-    params: { content, meta },
-  })
-    .then(() => log(`mcp notification sent ok message_id=${message.id}`))
-    .catch((e) => log(`channel notification failed: ${e}`));
-}
-
-function checkIdleWrapUp() {
-  if (!userHasEngaged) return;
-  if (wrapUpFired) return;
-  if (Date.now() - lastActivityAt < IDLE_WRAPUP_MS) return;
-  if (lastKnownState !== "idle" && lastKnownState !== "thinking") return;
-  wrapUpFired = true;
-  const content = `Auto wrap up. Follow this session's wrap-up procedure — if the workflow defines its own, use that; otherwise read the SpaceNotes vault note Workflows/workflow-agent/execution-flow.md (section "On Session End") via the spacenotes-mcp get_note tool`;
-  log(`Idle wrap-up firing after ${Math.round((Date.now() - lastActivityAt) / 60000)}min`);
-  mcp.notification({
-    method: "notifications/claude/channel",
-    params: { content, meta: { chat_id: "flutter", user: "system", ts: new Date().toISOString() } },
-  })
-    .then(() => log("Idle wrap-up notification sent ok"))
-    .catch((e) => log(`Idle wrap-up notification failed: ${e}`));
-}
-
-async function sweepStaleToolCalls() {
-  if (!conn) return;
-  if (openToolCalls.size === 0) return;
-  const cutoff = Date.now() - TOOL_USE_STUCK_MS;
-  let sweptAny = false;
-  for (const [id, entry] of openToolCalls) {
-    if (entry.startedAt < cutoff) {
-      log(`Stale PreToolUse swept: ${entry.tool} (age ${Date.now() - entry.startedAt}ms, id ${id})`);
-      openToolCalls.delete(id);
-      sweptAny = true;
-    }
-  }
-  if (sweptAny && openToolCalls.size === 0 && lastKnownState === "tool_use") {
-    try {
-      lastKnownState = "thinking";
-      await conn.reducers.pushStatus({ agentId: AGENT_ID, state: "thinking" });
-      log("Watchdog cleared stuck tool_use → thinking");
-    } catch (e) {
-      log(`Watchdog state reset failed: ${e}`);
-    }
-  }
+  log(`inbound queued id=${message.id} sender=${sender} text_len=${message.text.length} image=${inbound.imagePath ? "yes" : "no"}`);
+  enqueueInbound(inbound);
 }
 
 function sweepInbox() {
@@ -627,352 +690,12 @@ function sweepInbox() {
 
 function handlePermissionUpdate(row: PermissionRequest) {
   if (row.status === "pending") return;
-  const pending = pendingPermissions.get(row.id);
-  if (pending) {
-    pending(row.status);
-    pendingPermissions.delete(row.id);
-  }
-
-  mcp.notification({
-    method: "notifications/claude/channel/permission",
-    params: {
-      request_id: row.id,
-      behavior: row.status === "approved" ? "allow" : "deny",
-    },
-  }).catch((e) => log(`permission notification failed: ${e}`));
+  settleOutcome(permissionOutcomes, row.id, row.status);
 }
 
 function handleQuestionUpdate(row: QuestionRequest) {
-  log(`handleQuestionUpdate id=${row.id} status=${row.status} response=${row.response ?? "<null>"} pendingKeys=[${[...pendingQuestions.keys()].join(",")}]`);
-  if (row.status === "pending") {
-    log(`handleQuestionUpdate id=${row.id} ignored: still pending`);
-    return;
-  }
-  const pending = pendingQuestions.get(row.id);
-  if (!pending) {
-    log(`handleQuestionUpdate id=${row.id} no pending promise registered`);
-    return;
-  }
-  pendingQuestions.delete(row.id);
-  log(`handleQuestionUpdate id=${row.id} resolving with response`);
-  pending(row.response ?? null);
-}
-
-function readContextUsage(
-  transcriptPath: unknown,
-  model: unknown,
-): { used: number; window: number } | null {
-  if (typeof transcriptPath !== "string" || !transcriptPath) return null;
-  let modelId = "";
-  if (model && typeof model === "object" && "id" in (model as any)) {
-    modelId = String((model as any).id ?? "");
-  } else if (typeof model === "string") {
-    modelId = model;
-  }
-  const window = modelId.endsWith("[1m]") ? 1_000_000 : 200_000;
-  let raw: string;
-  try {
-    raw = readFileSync(transcriptPath, "utf8");
-  } catch (e) {
-    log(`readContextUsage: open failed (${transcriptPath}): ${e}`);
-    return null;
-  }
-  let used = 0;
-  for (const line of raw.split("\n")) {
-    if (!line) continue;
-    let parsed: any;
-    try {
-      parsed = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    const u = parsed?.message?.usage;
-    if (u) {
-      used =
-        (u.input_tokens ?? 0) +
-        (u.cache_read_input_tokens ?? 0) +
-        (u.cache_creation_input_tokens ?? 0);
-    }
-  }
-  if (used <= 0) return null;
-  return { used, window };
-}
-
-type AskQuestion = {
-  question?: string;
-  header?: string;
-  options?: Array<{ label?: string; description?: string }>;
-  multiSelect?: boolean;
-};
-
-// Surfaces each question as a question_request row, waits for the Flutter answer
-// (or QUESTION_TIMEOUT_MS), and returns the hook stdout payload that injects the
-// answers. On timeout/no-answer, returns {} so Claude Code falls back to its own
-// terminal prompt (no worse than today).
-async function handleAskUserQuestion(
-  toolInput: unknown,
-): Promise<Record<string, unknown>> {
-  const input = (toolInput ?? {}) as { questions?: AskQuestion[] };
-  const questions = Array.isArray(input.questions) ? input.questions : [];
-  log(`handleAskUserQuestion entered questions=${questions.length} conn=${conn ? "yes" : "no"} lastInputSource=${lastInputSource}`);
-  if (questions.length === 0 || !conn || lastInputSource !== "flutter") return {};
-
-  const answers: Record<string, string> = {};
-  let answeredAny = false;
-
-  for (const q of questions) {
-    const questionText = q.question ?? "";
-    if (!questionText) continue;
-    const labels = (q.options ?? [])
-      .map((o) => o.label)
-      .filter((l): l is string => typeof l === "string" && l.length > 0);
-
-    const id = `question-${Date.now()}-${randomUUID().slice(0, 8)}`;
-    try {
-      await conn.reducers.requestQuestion({
-        id,
-        agentId: AGENT_ID,
-        question: questionText,
-        header: q.header ?? "",
-        options: JSON.stringify(labels),
-        multiSelect: q.multiSelect === true,
-      });
-      log(`requestQuestion inserted id=${id} agent=${AGENT_ID}`);
-    } catch (e) {
-      log(`requestQuestion failed: ${e}`);
-      continue;
-    }
-
-    const response = await new Promise<string | null>((resolve) => {
-      const timer = setTimeout(() => {
-        pendingQuestions.delete(id);
-        log(`Question ${id} timed out after ${QUESTION_TIMEOUT_MS}ms`);
-        resolve(null);
-      }, QUESTION_TIMEOUT_MS);
-      pendingQuestions.set(id, (r) => {
-        clearTimeout(timer);
-        resolve(r);
-      });
-    });
-
-    if (response === null) continue;
-
-    // response is JSON: a string label, or an array of labels for multiSelect.
-    let selected: string;
-    try {
-      const parsed = JSON.parse(response);
-      selected = Array.isArray(parsed) ? parsed.join(", ") : String(parsed);
-    } catch {
-      selected = response;
-    }
-    answers[questionText] = selected;
-    answeredAny = true;
-  }
-
-  if (!answeredAny) return {};
-
-  return {
-    hookSpecificOutput: {
-      hookEventName: "PreToolUse",
-      permissionDecision: "allow",
-      updatedInput: { questions, answers },
-    },
-  };
-}
-
-async function handlePermissionRequest(
-  body: Record<string, any>,
-): Promise<Record<string, unknown>> {
-  log(`handlePermissionRequest entered tool=${body.tool_name} conn=${conn ? "yes" : "no"} lastInputSource=${lastInputSource}`);
-  if (!conn || lastInputSource !== "flutter") return {};
-
-  const id = body.tool_use_id || `permission-${Date.now()}-${randomUUID().slice(0, 8)}`;
-  const input = JSON.stringify(body.tool_input ?? {});
-
-  try {
-    await conn.reducers.requestPermission({
-      id,
-      agentId: AGENT_ID,
-      tool: body.tool_name || "unknown",
-      input,
-    });
-    log(`requestPermission inserted id=${id} agent=${AGENT_ID}`);
-  } catch (e) {
-    log(`requestPermission failed: ${e}`);
-    return {};
-  }
-
-  const behavior = await new Promise<string | null>((resolve) => {
-    const timer = setTimeout(() => {
-      pendingPermissions.delete(id);
-      log(`Permission ${id} timed out after ${PERMISSION_TIMEOUT_MS}ms`);
-      resolve(null);
-    }, PERMISSION_TIMEOUT_MS);
-    pendingPermissions.set(id, (status) => {
-      clearTimeout(timer);
-      resolve(status === "approved" ? "allow" : "deny");
-    });
-  });
-
-  if (behavior === null) return {};
-
-  return {
-    hookSpecificOutput: {
-      hookEventName: "PermissionRequest",
-      decision: behavior,
-    },
-  };
-}
-
-function startHookServer() {
-  const server = Bun.serve({
-    port: args.hookPort || 0,
-    hostname: "127.0.0.1",
-    async fetch(req) {
-      if (req.method !== "POST") {
-        return new Response("method not allowed", { status: 405 });
-      }
-
-      const body = (await req.json().catch(() => null)) as Record<string, any> | null;
-      if (!body) {
-        return new Response("invalid json", { status: 400 });
-      }
-      if (!conn) {
-        return new Response("not connected", { status: 503 });
-      }
-
-      const hookEvent: string = body.hook_event_name || body.hook_event || "unknown";
-      log(`Hook: ${hookEvent}`);
-
-      // AskUserQuestion: surface the question in Flutter and BLOCK until answered.
-      // The answer is returned to the hook process, which injects it via stdout.
-      if (hookEvent === "PreToolUse" && body.tool_name === "AskUserQuestion") {
-        const out = await handleAskUserQuestion(body.tool_input);
-        return Response.json(out);
-      }
-
-      if (hookEvent === "PermissionRequest") {
-        const out = await handlePermissionRequest(body);
-        return Response.json(out);
-      }
-
-      // Ack the hook client immediately, then do the reducer work in the
-      // background. The client (`runHookPost`) has a 1s POST timeout and retries
-      // on anything that isn't 200; if we awaited the STDB write before
-      // responding and it took >1s, the client would time out and re-POST an
-      // already-committed hook, producing duplicate rows (the 3x-in-chat bug).
-      // AskUserQuestion is the one event that must block (handled above).
-      void (async () => {
-       try {
-        if (hookEvent === "UserPromptSubmit") {
-          const prompt: string = (body.prompt || "").trim();
-          log(`UserPromptSubmit prompt=${JSON.stringify(prompt)} pending=${JSON.stringify(pendingFlutterPrompts)}`);
-          const echoIdx = prompt
-            ? pendingFlutterPrompts.findIndex((p) => p.length > 0 && prompt.includes(p))
-            : -1;
-          if (echoIdx !== -1) {
-            pendingFlutterPrompts.splice(echoIdx, 1);
-            log(`UserPromptSubmit matched forwarded flutter prompt, keeping lastInputSource=flutter`);
-          } else {
-            lastInputSource = "terminal";
-          }
-          lastKnownState = "thinking";
-          await conn.reducers.pushStatus({ agentId: AGENT_ID, state: "thinking" });
-        } else if (hookEvent === "Stop") {
-          const usage = readContextUsage(body.transcript_path, body.model);
-          if (usage) {
-            try {
-              await conn.reducers.pushContextUsage({
-                agentId: AGENT_ID,
-                used: BigInt(usage.used),
-                window: BigInt(usage.window),
-              });
-            } catch (e) {
-              log(`pushContextUsage failed: ${e}`);
-            }
-          }
-          openToolCalls.clear();
-          lastKnownState = "idle";
-          await conn.reducers.pushStatus({ agentId: AGENT_ID, state: "idle" });
-        } else if (hookEvent === "PreToolUse") {
-          const toolName: string = body.tool_name ?? "unknown";
-          const toolEventId = `tool-${Date.now()}-${randomUUID().slice(0, 8)}`;
-          const detail = JSON.stringify({
-            tool: toolName,
-            input: body.tool_input ?? {},
-          });
-          await conn.reducers.pushToolEvent({
-            id: toolEventId,
-            agentId: AGENT_ID,
-            tool: toolName,
-            detail,
-          });
-          const isOwnReplyTool =
-            toolName === "mcp__space-channel__reply" ||
-            toolName === "mcp__space-channel__edit_message";
-          if (!isOwnReplyTool) {
-            openToolCalls.set(toolEventId, { tool: toolName, startedAt: Date.now() });
-            lastKnownState = "tool_use";
-            await conn.reducers.pushStatus({ agentId: AGENT_ID, state: "tool_use" });
-          }
-        } else if (hookEvent === "PostToolUse" || hookEvent === "PostToolUseFailure") {
-          const toolName: string = body.tool_name ?? "";
-          const isOwnReplyTool =
-            toolName === "mcp__space-channel__reply" ||
-            toolName === "mcp__space-channel__edit_message";
-          if (!isOwnReplyTool) {
-            for (const [id, entry] of openToolCalls) {
-              if (entry.tool === toolName) {
-                openToolCalls.delete(id);
-                break;
-              }
-            }
-          }
-          const nextState = isOwnReplyTool ? "idle" : "thinking";
-          lastKnownState = nextState;
-          await conn.reducers.pushStatus({
-            agentId: AGENT_ID,
-            state: nextState,
-          });
-        } else if (hookEvent === "SessionEnd") {
-          await conn.reducers.endAgent({ agentId: AGENT_ID });
-        } else if (hookEvent === "Notification") {
-          const text: string = (body.message || "").trim();
-          if (text) {
-            await conn.reducers.pushMessage({
-              id: `notice-${Date.now()}`,
-              agentId: AGENT_ID,
-              role: "assistant",
-              text,
-              source: "notice",
-            });
-          }
-        } else if (hookEvent === "StopFailure") {
-          const detail: string =
-            (body.error_details ||
-              body.last_assistant_message ||
-              body.error ||
-              "turn failed").toString().trim();
-          await conn.reducers.pushMessage({
-            id: `error-${Date.now()}`,
-            agentId: AGENT_ID,
-            role: "assistant",
-            text: `⚠️ ${detail}`,
-            source: "error",
-          });
-          openToolCalls.clear();
-          lastKnownState = "idle";
-          await conn.reducers.pushStatus({ agentId: AGENT_ID, state: "idle" });
-        }
-       } catch (e) {
-        log(`Hook reducer failed (${hookEvent}): ${e}`);
-       }
-      })();
-
-      return new Response(null, { status: 200 });
-    },
-  });
-  log(`Hook HTTP server listening on http://127.0.0.1:${server.port}`);
+  if (row.status === "pending") return;
+  settleOutcome(questionOutcomes, row.id, row.response ?? null);
 }
 
 process.on("SIGTERM", () => { log("SIGTERM"); shutdown(); });
@@ -1002,68 +725,11 @@ function log(msg: string) {
   try { appendFileSync(LOG_FILE, line + "\n"); } catch {}
 }
 
-async function runHookPost() {
-  const argv = process.argv.slice(3);
-  let port: string | undefined;
-  for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === "--port" && i + 1 < argv.length) {
-      port = argv[i + 1];
-      break;
-    }
-  }
-  port ??= process.env.SPACE_CHANNEL_HOOK_PORT;
-  if (!port) return;
-
-  const chunks: Buffer[] = [];
-  for await (const chunk of process.stdin) {
-    chunks.push(chunk as Buffer);
-  }
-  const body = Buffer.concat(chunks);
-  const url = `http://127.0.0.1:${port}/hook`;
-
-  // AskUserQuestion blocks server-side until the Flutter user answers (or the
-  // 10-min question timeout). Wait for that response and forward its body to
-  // stdout so Claude Code injects the answer. Empty/error → print nothing, which
-  // lets Claude fall back to its own terminal prompt.
-  let parsed: any = null;
-  try {
-    parsed = JSON.parse(body.toString("utf8"));
-  } catch {}
-  const isAskUserQuestion =
-    parsed?.hook_event_name === "PreToolUse" &&
-    parsed?.tool_name === "AskUserQuestion";
-  const isPermissionRequest = parsed?.hook_event_name === "PermissionRequest";
-
-  if (isAskUserQuestion || isPermissionRequest) {
-    try {
-      const res = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body,
-        signal: AbortSignal.timeout(11 * 60 * 1000),
-      });
-      if (res.ok) {
-        const text = (await res.text()).trim();
-        if (text && text !== "{}") process.stdout.write(text);
-      }
-    } catch {}
-    return;
-  }
-
-  const deadline = Date.now() + 3000;
-  let attempt = 0;
-  while (Date.now() < deadline && attempt < 10) {
-    try {
-      const res = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body,
-        signal: AbortSignal.timeout(1000),
-      });
-      if (res.ok) return;
-    } catch {}
-    attempt++;
-  }
+function resolvePluginDir(selfPath: string): string {
+  const fromEnv = process.env.SPACE_CHANNEL_PLUGIN_DIR;
+  if (fromEnv) return fromEnv;
+  if (basename(dirname(selfPath)) === "bin") return dirname(dirname(selfPath));
+  return join(dirname(selfPath), "plugin");
 }
 
 async function runLaunch(rawArgs: string[]) {
@@ -1083,96 +749,35 @@ async function runLaunch(rawArgs: string[]) {
   const selfPath: string = process.execPath.endsWith("/bun")
     ? (process.argv[1] ?? process.execPath)
     : process.execPath;
-
-  const lockDir = ".claude/.spacechannel-agents";
-  mkdirSync(lockDir, { recursive: true });
-  const lockFile = join(lockDir, String(process.pid));
-  writeFileSync(lockFile, "");
-
-  const hookPort = await findFreePort();
-  const hookCmd = [selfPath, "hook-post", "--port", String(hookPort)];
-  const hookEntry = [{ hooks: [{ type: "command", command: hookCmd.join(" ") }] }];
-  const hooksObj = {
-    SessionStart: hookEntry,
-    PreToolUse: hookEntry,
-    PermissionRequest: hookEntry,
-    PostToolUse: hookEntry,
-    PostToolUseFailure: hookEntry,
-    UserPromptSubmit: hookEntry,
-    Stop: hookEntry,
-    StopFailure: hookEntry,
-    SessionEnd: hookEntry,
-    Notification: hookEntry,
-  };
-
-  const settingsFile = ".claude/settings.local.json";
-  mkdirSync(".claude", { recursive: true });
-  let settings: any = {};
-  if (existsSync(settingsFile)) {
-    try {
-      settings = JSON.parse(readFileSync(settingsFile, "utf8"));
-    } catch {
-      settings = {};
-    }
+  const pluginDir = resolvePluginDir(selfPath);
+  if (!existsSync(join(pluginDir, ".claude-plugin", "plugin.json"))) {
+    process.stderr.write(`space-channel plugin not found at ${pluginDir} (set SPACE_CHANNEL_PLUGIN_DIR)\n`);
+    process.exit(1);
   }
-  settings.hooks = hooksObj;
-  writeFileSync(settingsFile + ".tmp", JSON.stringify(settings, null, 2));
-  spawnSync("mv", [settingsFile + ".tmp", settingsFile], { stdio: "inherit" });
-
-  const cleanup = () => {
-    try { unlinkSync(lockFile); } catch {}
-    if (countActiveAgents(lockDir) === 0) {
-      if (existsSync(settingsFile)) {
-        try {
-          const s = JSON.parse(readFileSync(settingsFile, "utf8"));
-          delete s.hooks;
-          writeFileSync(settingsFile, JSON.stringify(s, null, 2));
-        } catch {}
-      }
-      spawnSync("claude", ["mcp", "remove", "space-channel", "--scope", "project"], {
-        stdio: "ignore",
-      });
-    }
-  };
-  process.on("exit", cleanup);
-  process.on("SIGTERM", () => { cleanup(); process.exit(143); });
-  process.on("SIGINT", () => { cleanup(); process.exit(130); });
-
-  spawnSync("claude", ["mcp", "remove", "space-channel", "--scope", "project"], {
-    stdio: "ignore",
-  });
 
   const stdbUri = process.env.SPACE_CHANNEL_STDB_URI || "ws://100.84.184.121:5050";
   const stdbDb = process.env.SPACE_CHANNEL_STDB_DB || "spacenotes";
-  const mcpAdd = spawnSync(
-    "claude",
-    [
-      "mcp", "add", "space-channel", "--scope", "project",
-      "-e", `SPACE_CHANNEL_AGENT=${agent}`,
-      "-e", `SPACE_CHANNEL_SESSION=${agent}`,
-      "-e", `SPACE_CHANNEL_PROJECT=${agent}`,
-      "-e", `SPACE_CHANNEL_STDB_URI=${stdbUri}`,
-      "-e", `SPACE_CHANNEL_STDB_DB=${stdbDb}`,
-      "-e", `SPACE_CHANNEL_HOOK_PORT=${hookPort}`,
-      "--", selfPath,
-    ],
-    { stdio: "ignore" }
-  );
-  if (mcpAdd.status !== 0) {
-    process.stderr.write("space-channel setup FAILED\n");
-    process.exit(1);
-  }
-  process.stderr.write(`space-channel ready (agent: ${agent}, hook: ${hookPort})\n`);
+
+  process.stderr.write(`space-channel ready (agent: ${agent}, plugin: ${pluginDir}, build: ${BUILD_SHA})\n`);
 
   const claude = spawn(
     "claude",
     [
-      "--dangerously-load-development-channels", "server:space-channel",
+      "--plugin-dir", pluginDir,
       "--dangerously-skip-permissions",
       `/${skill}`,
       ...rest,
     ],
-    { stdio: "inherit", env: { ...process.env, WORKFLOW_NAME: agent } }
+    {
+      stdio: "inherit",
+      env: {
+        ...process.env,
+        WORKFLOW_NAME: agent,
+        SPACE_CHANNEL_AGENT: agent,
+        SPACE_CHANNEL_STDB_URI: stdbUri,
+        SPACE_CHANNEL_STDB_DB: stdbDb,
+      },
+    }
   );
   const code: number = await new Promise((resolve) => {
     claude.on("exit", (c) => resolve(c ?? 0));
@@ -1180,46 +785,7 @@ async function runLaunch(rawArgs: string[]) {
   process.exit(code);
 }
 
-function countActiveAgents(lockDir: string): number {
-  let count = 0;
-  try {
-    const entries = readdirSync(lockDir);
-    for (const name of entries) {
-      const file = join(lockDir, name);
-      try {
-        const pid = parseInt(name, 10);
-        if (Number.isFinite(pid)) {
-          try {
-            process.kill(pid, 0);
-            count++;
-          } catch {
-            unlinkSync(file);
-          }
-        }
-      } catch {}
-    }
-  } catch {}
-  return count;
-}
-
 function commandExists(cmd: string): boolean {
   const r = spawnSync("command", ["-v", cmd], { stdio: "ignore", shell: true });
   return r.status === 0;
-}
-
-async function findFreePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const srv = createServer();
-    srv.unref();
-    srv.on("error", reject);
-    srv.listen(0, "127.0.0.1", () => {
-      const addr = srv.address();
-      if (addr && typeof addr === "object") {
-        const port = addr.port;
-        srv.close(() => resolve(port));
-      } else {
-        srv.close(() => reject(new Error("no address")));
-      }
-    });
-  });
 }
