@@ -2,8 +2,6 @@ import type { Register } from 'claude-code'
 
 const BRIDGE = 'space-channel'
 const POLL_TIMEOUT_MS = 20_000
-const IDLE_WRAPUP_MS = 30 * 60_000
-const IDLE_CHECK_MS = 60_000
 const AUTOWRAP_DEFAULT_TOKENS = 300_000
 const PERMISSION_TIMEOUT_MS = 9.5 * 60_000
 const QUESTION_TIMEOUT_MS = 10 * 60_000
@@ -27,9 +25,6 @@ type Inbound = { id: string; text: string; source: string; sender: string; image
 
 let server = ''
 let turnRunning = false
-let lastPromptAt = Date.now()
-let userEngaged = false
-let wrapUpFired = false
 let lastPromptFromPhone = false
 let currentTurnId: string | undefined
 let autoWrapTokens = AUTOWRAP_DEFAULT_TOKENS
@@ -73,9 +68,6 @@ async function tryBridge($: any, tool: string, args: Record<string, unknown>): P
 }
 
 function touchActivity(fromPhone: boolean) {
-  lastPromptAt = Date.now()
-  userEngaged = true
-  wrapUpFired = false
   lastPromptFromPhone = fromPhone
 }
 
@@ -212,14 +204,6 @@ async function compactAfterWrap($: any) {
   }
 }
 
-function checkIdleWrapUp($: any) {
-  if (!userEngaged || wrapUpFired || turnRunning) return
-  if (Date.now() - lastPromptAt < IDLE_WRAPUP_MS) return
-  wrapUpFired = true
-  $.ui.log('idle for 30 min, running the session wrap-up', { to: 'debug' })
-  void $.prompt.submit({ text: WRAPUP_TEXT })
-}
-
 async function relayQuestion($: any, questions: unknown): Promise<Record<string, string> | undefined> {
   if (!Array.isArray(questions) || questions.length === 0) return undefined
   const shaped = questions.map((q: any) => ({
@@ -274,7 +258,6 @@ export const register: Register = on => {
     const home = await $.env.get('HOME')
     if (home) herdrBin = `${home}/.local/bin/herdr`
     void inboundLoop($)
-    $.clock.every(IDLE_CHECK_MS, () => checkIdleWrapUp($))
     return started
   })
 
