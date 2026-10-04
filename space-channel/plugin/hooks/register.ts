@@ -2,11 +2,8 @@ import type { Register } from 'claude-code'
 
 const BRIDGE = 'space-channel'
 const POLL_TIMEOUT_MS = 20_000
-const AUTOWRAP_DEFAULT_TOKENS = 300_000
 const PERMISSION_TIMEOUT_MS = 9.5 * 60_000
 const QUESTION_TIMEOUT_MS = 10 * 60_000
-const WRAPUP_TEXT =
-  'Auto wrap up. Follow this session\'s wrap-up procedure — if the workflow defines its own, use that; otherwise read the SpaceNotes vault note Workflows/workflow-agent/execution-flow.md (section "On Session End") via the spacenotes-mcp get_file tool'
 
 const INTERNAL_TOOLS = new Set([
   'push_message',
@@ -27,8 +24,6 @@ let server = ''
 let turnRunning = false
 let lastPromptFromPhone = false
 let currentTurnId: string | undefined
-let autoWrapTokens = AUTOWRAP_DEFAULT_TOKENS
-let autoWrap: 'armed' | 'queued' | 'running' | 'compacting' | 'failed' = 'armed'
 let draining = false
 let toolsRunning = 0
 let herdrPane: string | undefined
@@ -182,28 +177,6 @@ async function inboundLoop($: any) {
   }
 }
 
-function checkAutoWrap($: any, tokens: number) {
-  if (autoWrap === 'compacting' && tokens < autoWrapTokens) autoWrap = 'armed'
-  if (autoWrap !== 'armed' || tokens < autoWrapTokens) return
-  autoWrap = 'queued'
-  const k = Math.round(autoWrapTokens / 1000)
-  $.ui.log(`context passed ${k}k, running the wrap-up then /compact`, { to: 'debug' })
-  void tryBridge($, 'push_message', { role: 'assistant', text: `🧹 context passed ${k}k: wrapping up, then /compact`, source: 'notice' })
-  void $.prompt.submit({ text: `Context passed ${k}k tokens. ${WRAPUP_TEXT}. /compact runs automatically when you finish.` })
-}
-
-async function compactAfterWrap($: any) {
-  try {
-    await $.command.run({ command: 'compact', args: '' })
-    await tryBridge($, 'push_message', { role: 'assistant', text: '🧹 compacted', source: 'notice' })
-  } catch (err) {
-    autoWrap = 'failed'
-    const reason = err instanceof Error ? err.message : String(err)
-    $.ui.log(`auto /compact failed: ${reason}`)
-    await tryBridge($, 'push_message', { role: 'assistant', text: `⚠️ auto /compact failed: ${reason}`, source: 'error' })
-  }
-}
-
 async function relayQuestion($: any, questions: unknown): Promise<Record<string, string> | undefined> {
   if (!Array.isArray(questions) || questions.length === 0) return undefined
   const shaped = questions.map((q: any) => ({
@@ -252,8 +225,6 @@ export const register: Register = on => {
       return started
     }
     server = connected.server
-    const configured = Number(await $.env.get('SPACE_CHANNEL_AUTOWRAP_TOKENS'))
-    if (Number.isFinite(configured) && configured > 0) autoWrapTokens = configured
     herdrPane = (await $.env.get('HERDR_PANE_ID')) || undefined
     const home = await $.env.get('HOME')
     if (home) herdrBin = `${home}/.local/bin/herdr`
@@ -274,7 +245,6 @@ export const register: Register = on => {
   on('turn.start', async ($, e, next) => {
     turnRunning = true
     currentTurnId = e.turnId
-    if (autoWrap === 'queued') autoWrap = 'running'
     void tryBridge($, 'push_status', { state: 'thinking' })
     return next(e)
   })
@@ -286,10 +256,6 @@ export const register: Register = on => {
     const answer = e.answer.trim()
     const reason = e.reason
     $.clock.after(0, () => reportTurnEnd($, reason, answer))
-    if (autoWrap === 'running') {
-      autoWrap = 'compacting'
-      $.clock.after(0, () => compactAfterWrap($))
-    }
     return next(e)
   })
 
@@ -342,7 +308,6 @@ export const register: Register = on => {
     const window = e.context?.window
     if (e.changed.includes('context') && typeof tokens === 'number' && typeof window === 'number' && window > 0) {
       void tryBridge($, 'push_context_usage', { used: Math.round(tokens), window: Math.round(window) })
-      checkAutoWrap($, tokens)
     }
     return next(e)
   })
