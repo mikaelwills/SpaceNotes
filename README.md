@@ -6,9 +6,9 @@
 
 **Yet another note-taking system... 🙄**
 
-But — notes, files and passwords synced across all your devices in real time. No cost. No Obsidian. No cloud. No storage limits.
+But notes, files and passwords synced across all your devices in real time. No cost. No Obsidian. No cloud. No storage limits.
 
-Your vault is plain files on your own filesystem — markdown notes, media, PDFs, a `pass`-compatible password store — portable, no lock-in, no subscription, nothing to migrate off if you ever want to walk away. A built-in MCP server lets AI assistants like Claude Code and Cursor read and write it.
+Your vault is plain files on your own filesystem: markdown notes, media, PDFs and a `pass`-compatible password store. Portable, no lock-in, no subscription, nothing to migrate off if you ever want to walk away. A built-in MCP server lets AI assistants like Claude Code and Cursor read and write it.
 
 Contributions welcome.
 
