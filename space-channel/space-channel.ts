@@ -355,7 +355,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
         if (isFail(a)) return a;
         const status = await awaitOutcome(permissionOutcomes, a.id, a.timeoutMs);
         if (status === undefined) return ok({ status: "pending" });
-        return ok({ status: status === "approved" ? "allow" : "deny" });
+        return ok({ status: status === "allow" || status === "approved" ? "allow" : "deny" });
       }
       case "request_question": {
         const a = parseOr(RequestQuestionArgs, raw, name);

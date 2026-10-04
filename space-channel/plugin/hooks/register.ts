@@ -203,7 +203,17 @@ async function relayQuestion($: any, questions: unknown): Promise<Record<string,
       : [],
     multiSelect: q?.multiSelect === true,
   }))
-  const requested = await tryBridge($, 'request_question', { questions: shaped })
+  let requested: any
+  try {
+    requested = await bridge($, 'request_question', { questions: shaped })
+  } catch (err) {
+    void tryBridge($, 'push_message', {
+      role: 'assistant',
+      text: `⚠️ request_question failed: ${err instanceof Error ? err.message : String(err)}`,
+      source: 'error',
+    })
+    return undefined
+  }
   const ids: string[] = requested?.ids ?? []
   if (ids.length !== shaped.length) return undefined
 
@@ -301,9 +311,15 @@ export const register: Register = on => {
       return { deny: `${internal} is internal to the space-channel bridge; the session calls it, not you.` }
     }
     const input = toolArguments(e as Record<string, unknown>)
-    if (e.tool === 'AskUserQuestion' && lastPromptFromPhone && server) {
-      const answers = await relayQuestion($, (input as any).questions)
-      if (answers) return next({ ...e, answers } as any)
+    if (e.tool === 'AskUserQuestion') {
+      const skip = !server ? 'bridge not connected' : !lastPromptFromPhone ? 'last prompt was not from the phone' : ''
+      const answers = skip ? undefined : await relayQuestion($, (input as any).questions)
+      if (answers) return { result: { questions: (input as any).questions, answers } } as any
+      void tryBridge($, 'push_message', {
+        role: 'assistant',
+        text: `⚠️ question not relayed to the app: ${skip || 'relay failed'}; it is waiting in the terminal`,
+        source: 'error',
+      })
     }
     void tryBridge($, 'push_tool_event', { tool: e.tool, detail: JSON.stringify({ tool: e.tool, input }) })
     void tryBridge($, 'push_status', { state: 'tool_use' })
@@ -318,6 +334,7 @@ export const register: Register = on => {
 
   on('tool.check', async ($, e, next) => {
     if (internalToolName(e.tool)) return { decision: 'allow', reason: 'space-channel bridge call' }
+    if (e.tool === 'AskUserQuestion' && lastPromptFromPhone) return { decision: 'allow', reason: 'asked through SpaceNotes' }
     const verdict = await next(e)
     if (verdict.decision !== 'ask' || !lastPromptFromPhone || !server || !e.tool_use_id) return verdict
     const id = e.tool_use_id
