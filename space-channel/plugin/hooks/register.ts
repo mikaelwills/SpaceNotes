@@ -26,6 +26,7 @@ let lastPromptFromPhone = false
 let currentTurnId: string | undefined
 let draining = false
 let toolsRunning = 0
+let heldProgress = ''
 let herdrPane: string | undefined
 let herdrBin: string | undefined
 const deliveries: Inbound[] = []
@@ -99,6 +100,21 @@ async function runSlashCommand($: any, text: string): Promise<boolean> {
   const output = typeof result?.text === 'string' ? result.text.trim() : ''
   if (output) await tryBridge($, 'push_message', { role: 'assistant', text: output, source: 'notice' })
   return true
+}
+
+function flushProgress($: any) {
+  const text = heldProgress
+  heldProgress = ''
+  if (!text) return
+  void tryBridge($, 'push_message', { role: 'assistant', text, source: 'progress' })
+}
+
+function responseText(content: any[]): string {
+  return content
+    .filter((b) => b?.type === 'text' && typeof b.text === 'string')
+    .map((b) => b.text.trim())
+    .filter(Boolean)
+    .join('\n\n')
 }
 
 async function drainDeliveries($: any) {
@@ -244,6 +260,7 @@ export const register: Register = on => {
 
   on('turn.start', async ($, e, next) => {
     turnRunning = true
+    heldProgress = ''
     currentTurnId = e.turnId
     void tryBridge($, 'push_status', { state: 'thinking' })
     return next(e)
@@ -252,6 +269,7 @@ export const register: Register = on => {
   on('turn.complete', async ($, e, next) => {
     if (e.agentId) return next(e)
     turnRunning = false
+    heldProgress = ''
     currentTurnId = undefined
     const answer = e.answer.trim()
     const reason = e.reason
@@ -259,9 +277,25 @@ export const register: Register = on => {
     return next(e)
   })
 
+  on('session.append', { door: 'response' }, async ($, e, next) => {
+    const stored = await next(e)
+    if (e.agentId || e.origin?.kind !== 'model' || e.message?.role !== 'assistant') return stored
+    const content = Array.isArray(e.message.content) ? e.message.content : []
+    const text = responseText(content)
+    if (!text) return stored
+    flushProgress($)
+    if (content.some((b: any) => b?.type === 'tool_use')) {
+      void tryBridge($, 'push_message', { role: 'assistant', text, source: 'progress' })
+    } else {
+      heldProgress = text
+    }
+    return stored
+  })
+
   on('tool.call', async ($, e, next) => {
     const fromModel = next.origin.plugin === 'engine'
     if (!fromModel) return next(e)
+    if (!e.agentId) flushProgress($)
     const internal = internalToolName(e.tool)
     if (internal) {
       return { deny: `${internal} is internal to the space-channel bridge; the session calls it, not you.` }
