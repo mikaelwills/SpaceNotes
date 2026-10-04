@@ -59,6 +59,7 @@ The vault on disk is the ground truth. The database can be wiped and rebuilt fro
 - **SpacetimeDB** - Real-time database holding the notes. Clients connect once and receive instant updates.
 - **Filesystem sync daemon** - Watches the vault and syncs bidirectionally with SpacetimeDB. Also the file server: ranged downloads, resumable uploads, and video/image thumbnails (ffmpeg).
 - **MCP server** - Lets Claude Code, Cursor and other assistants search, read, write and organise the vault, and hand large files in and out.
+- **SpaceChannel** - Links a running Claude Code session to the app's chat: a Claude Code plugin plus a small bridge binary. Messages, the agent's progress notes, tool calls, permission prompts and questions all flow through SpacetimeDB.
 - **[Flutter client](https://github.com/mikaelwills/spacenotes-client)** - Native apps for iOS, Android, macOS, Windows, Linux, and web.
 
 ## Standard Ports
@@ -100,6 +101,12 @@ SpaceNotes can hold a [`pass`](https://www.passwordstore.org/)-compatible passwo
 - Markdown editing; generative-UI "dashboard" notes (KPIs, charts, editable fields)
 - Viewers for images and video; PDFs and other files download to the device
 - Audio player with a native parametric EQ, scrolling waveform scrubber, background/lock-screen playback and a persistent mini player
+
+**Agent chat:**
+- Chat with a Claude Code session from the app; the agent's short progress notes appear between its tool calls as it works
+- Tool calls show in the chat, with Edit and Write rendered as a red/green diff
+- Approve or deny tool permissions and answer the agent's questions from the app
+- Stop a running turn, or background a long-running tool
 
 **Mobile (iOS/Android):**
 - Recents, folders and passwords one tap apart in the nav bar
