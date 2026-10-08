@@ -43,7 +43,10 @@ const HOST = HOST_ALIASES[RAW_HOST] ?? RAW_HOST;
 const CLIENT_ID = randomUUID();
 const AGENT_ID = `${args.agent}@${HOST}`;
 const FILES_URL = process.env.SPACE_CHANNEL_FILES_URL || filesUrlFor(args.stdbUri);
-const HEARTBEAT_MS = 120_000;
+const HEARTBEAT_MS = 30_000;
+const REDUCER_TIMEOUT_MS = 3_000;
+const WAKE_CHECK_MS = 5_000;
+const WAKE_GAP_MS = 15_000;
 const LOG_FILE = `/tmp/space-channel-${args.agent}.log`;
 const INBOX_DIR = join(homedir(), ".claude", "channels", "space-channel", "inbox");
 const INBOX_TTL_MS = 48 * 60 * 60 * 1000;
@@ -56,6 +59,10 @@ const NEXT_MESSAGE_MAX_WAIT_MS = 25_000;
 
 let conn: DbConnection | null = null;
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+let wakeTimer: ReturnType<typeof setInterval> | null = null;
+let lastWakeTick = Date.now();
+let connGeneration = 0;
+let heartbeatCount = 0;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let reconnectAttempt = 0;
 let hasEverConnected = false;
@@ -315,39 +322,39 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
         const a = parseOr(PushMessageArgs, raw, name);
         if (isFail(a)) return a;
         const id = a.id ?? `${a.role === "assistant" ? "reply" : "prompt"}-${Date.now()}-${randomUUID().slice(0, 6)}`;
-        await db.reducers.pushMessage({ id, agentId: AGENT_ID, role: a.role, text: a.text, source: a.source });
+        await reduce(db, "pushMessage", db.reducers.pushMessage({ id, agentId: AGENT_ID, role: a.role, text: a.text, source: a.source }));
         return ok({ id });
       }
       case "edit_message": {
         const a = parseOr(EditMessageArgs, raw, name);
         if (isFail(a)) return a;
-        await db.reducers.editMessage({ id: a.id, text: a.text });
+        await reduce(db, "editMessage", db.reducers.editMessage({ id: a.id, text: a.text }));
         return ok({ id: a.id });
       }
       case "push_status": {
         const a = parseOr(PushStatusArgs, raw, name);
         if (isFail(a)) return a;
-        await db.reducers.pushStatus({ agentId: AGENT_ID, state: a.state });
+        await reduce(db, "pushStatus", db.reducers.pushStatus({ agentId: AGENT_ID, state: a.state }));
         return ok({ state: a.state });
       }
       case "push_tool_event": {
         const a = parseOr(PushToolEventArgs, raw, name);
         if (isFail(a)) return a;
         const id = `tool-${Date.now()}-${randomUUID().slice(0, 8)}`;
-        await db.reducers.pushToolEvent({ id, agentId: AGENT_ID, tool: a.tool, detail: a.detail });
+        await reduce(db, "pushToolEvent", db.reducers.pushToolEvent({ id, agentId: AGENT_ID, tool: a.tool, detail: a.detail }));
         return ok({ id });
       }
       case "push_context_usage": {
         const a = parseOr(PushContextUsageArgs, raw, name);
         if (isFail(a)) return a;
-        await db.reducers.pushContextUsage({ agentId: AGENT_ID, used: BigInt(a.used), window: BigInt(a.window) });
+        await reduce(db, "pushContextUsage", db.reducers.pushContextUsage({ agentId: AGENT_ID, used: BigInt(a.used), window: BigInt(a.window) }));
         return ok({});
       }
       case "request_permission": {
         const a = parseOr(RequestPermissionArgs, raw, name);
         if (isFail(a)) return a;
         permissionOutcomes.done.delete(a.id);
-        await db.reducers.requestPermission({ id: a.id, agentId: AGENT_ID, tool: a.tool, input: a.input });
+        await reduce(db, "requestPermission", db.reducers.requestPermission({ id: a.id, agentId: AGENT_ID, tool: a.tool, input: a.input }));
         return ok({ id: a.id });
       }
       case "poll_permission": {
@@ -364,14 +371,18 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
         for (const q of a.questions) {
           const id = `question-${Date.now()}-${randomUUID().slice(0, 8)}`;
           questionOutcomes.done.delete(id);
-          await db.reducers.requestQuestion({
-            id,
-            agentId: AGENT_ID,
-            question: q.question,
-            header: q.header,
-            options: JSON.stringify(q.options),
-            multiSelect: q.multiSelect,
-          });
+          await reduce(
+            db,
+            "requestQuestion",
+            db.reducers.requestQuestion({
+              id,
+              agentId: AGENT_ID,
+              question: q.question,
+              header: q.header,
+              options: JSON.stringify(q.options),
+              multiSelect: q.multiSelect,
+            }),
+          );
           ids.push(id);
         }
         return ok({ ids });
@@ -436,7 +447,7 @@ async function sendToAgent(db: DbConnection, agent: string, text: string) {
   }
 
   const id = `a2a-${chainHops}-${now}`;
-  await db.reducers.pushMessage({ id, agentId: target, role: "user", text, source: `agent:${AGENT_ID}` });
+  await reduce(db, "pushMessage", db.reducers.pushMessage({ id, agentId: target, role: "user", text, source: `agent:${AGENT_ID}` }));
   a2aSendTimes.push(now);
   a2aLastSendToTarget.set(target, now);
   return { content: [{ type: "text" as const, text: `sent to ${target} (id: ${id}, chain hop ${chainHops})` }] };
@@ -503,33 +514,103 @@ function getArg(name: string): string | undefined {
   return undefined;
 }
 
+class StdbTimeout extends Error {}
+
+function withTimeout<T>(call: Promise<T>, what: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new StdbTimeout(`${what} timed out after ${REDUCER_TIMEOUT_MS}ms, reconnecting`)),
+      REDUCER_TIMEOUT_MS,
+    );
+    call.then(
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(timer);
+        reject(e);
+      },
+    );
+  });
+}
+
+function stopTimers() {
+  if (heartbeatTimer) clearInterval(heartbeatTimer);
+  heartbeatTimer = null;
+  if (wakeTimer) clearInterval(wakeTimer);
+  wakeTimer = null;
+}
+
+function dropConnection(dead: DbConnection, reason: string) {
+  if (conn !== dead) return;
+  log(`Dropping connection: ${reason}`);
+  conn = null;
+  stopTimers();
+  try {
+    dead.disconnect();
+  } catch {}
+  scheduleReconnect();
+}
+
+async function reduce<T>(db: DbConnection, what: string, call: Promise<T>): Promise<T> {
+  try {
+    return await withTimeout(call, what);
+  } catch (e) {
+    if (e instanceof StdbTimeout) dropConnection(db, String(e));
+    throw e;
+  }
+}
+
+async function probe(db: DbConnection) {
+  try {
+    await withTimeout(db.reducers.heartbeat({ agentId: AGENT_ID }), "heartbeat");
+    heartbeatCount++;
+    if (heartbeatCount === 1 || heartbeatCount % 60 === 0) {
+      log(`heartbeat ok (count=${heartbeatCount})`);
+    }
+  } catch (e) {
+    dropConnection(db, `heartbeat failed: ${e}`);
+  }
+}
+
 function connectToStdb() {
   if (shuttingDown) return;
   if (reconnectTimer) {
     clearTimeout(reconnectTimer);
     reconnectTimer = null;
   }
+  const generation = ++connGeneration;
 
   DbConnection.builder()
     .withUri(args.stdbUri)
     .withDatabaseName(args.stdbDb)
     .withCompression("none")
     .onConnect(async (connection, identity, _token) => {
+      if (generation !== connGeneration) {
+        try {
+          connection.disconnect();
+        } catch {}
+        return;
+      }
       conn = connection;
       hasEverConnected = true;
       reconnectAttempt = 0;
       log(`Connected to SpacetimeDB ${args.stdbUri}/${args.stdbDb} as ${identity.toHexString().slice(0, 12)}…`);
 
       try {
-        await conn.reducers.registerAgent({
-          id: AGENT_ID,
-          baseName: args.agent,
-          host: HOST,
-          clientId: CLIENT_ID,
-        });
+        await withTimeout(
+          connection.reducers.registerAgent({
+            id: AGENT_ID,
+            baseName: args.agent,
+            host: HOST,
+            clientId: CLIENT_ID,
+          }),
+          "registerAgent",
+        );
         log(`Registered agent ${AGENT_ID}`);
       } catch (e) {
-        log(`registerAgent failed: ${e}`);
+        dropConnection(connection, `registerAgent failed: ${e}`);
         return;
       }
 
@@ -575,30 +656,29 @@ function connectToStdb() {
         handleIncomingImage(row);
       });
 
-      let heartbeatCount = 0;
-      heartbeatTimer = setInterval(async () => {
-        try {
-          await conn?.reducers.heartbeat({ agentId: AGENT_ID });
-          heartbeatCount++;
-          if (heartbeatCount === 1 || heartbeatCount % 15 === 0) {
-            log(`heartbeat ok (count=${heartbeatCount})`);
-          }
-        } catch (e) {
-          log(`heartbeat failed: ${e}`);
+      stopTimers();
+      lastWakeTick = Date.now();
+      heartbeatTimer = setInterval(() => void probe(connection), HEARTBEAT_MS);
+      wakeTimer = setInterval(() => {
+        const now = Date.now();
+        const gap = now - lastWakeTick;
+        lastWakeTick = now;
+        if (gap > WAKE_GAP_MS) {
+          log(`Timer gap ${gap}ms, probing the connection after sleep`);
+          void probe(connection);
         }
-      }, HEARTBEAT_MS);
+      }, WAKE_CHECK_MS);
     })
     .onConnectError((_ctx, err) => {
+      if (generation !== connGeneration) return;
       log(`SpacetimeDB connect error: ${err.message}`);
       scheduleReconnect();
     })
     .onDisconnect((_ctx, err) => {
+      if (generation !== connGeneration) return;
       log(`SpacetimeDB disconnected: ${err?.message || "clean"}`);
       conn = null;
-      if (heartbeatTimer) {
-        clearInterval(heartbeatTimer);
-        heartbeatTimer = null;
-      }
+      stopTimers();
       scheduleReconnect();
     })
     .build();
@@ -782,11 +862,11 @@ process.on("uncaughtException", (err) => { log(`Uncaught: ${err.message}\n${err.
 async function shutdown(code = 0) {
   if (shuttingDown) return;
   shuttingDown = true;
-  if (heartbeatTimer) clearInterval(heartbeatTimer);
+  stopTimers();
   if (reconnectTimer) clearTimeout(reconnectTimer);
   if (conn) {
     try {
-      await conn.reducers.endAgent({ agentId: AGENT_ID });
+      await withTimeout(conn.reducers.endAgent({ agentId: AGENT_ID }), "endAgent");
       log(`Agent ended: ${AGENT_ID}`);
     } catch (e) {
       log(`endAgent on shutdown failed: ${e}`);

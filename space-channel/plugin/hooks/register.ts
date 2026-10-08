@@ -54,9 +54,29 @@ async function bridge($: any, tool: string, args: Record<string, unknown>): Prom
   }
 }
 
+const BRIDGE_TIMEOUT_MS = 3_000
+const LONG_POLLS = new Set(['next_message', 'poll_question', 'poll_permission'])
+
+function withTimeout<T>(call: Promise<T>, ms: number, what: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${what} timed out after ${ms}ms`)), ms)
+    call.then(
+      (v) => {
+        clearTimeout(timer)
+        resolve(v)
+      },
+      (e) => {
+        clearTimeout(timer)
+        reject(e)
+      },
+    )
+  })
+}
+
 async function tryBridge($: any, tool: string, args: Record<string, unknown>): Promise<any> {
   try {
-    return await bridge($, tool, args)
+    const call = bridge($, tool, args)
+    return await (LONG_POLLS.has(tool) ? call : withTimeout(call, BRIDGE_TIMEOUT_MS, tool))
   } catch (err) {
     $.ui.log(`${tool} failed: ${err instanceof Error ? err.message : String(err)}`, { to: 'debug' })
     return undefined
@@ -205,7 +225,7 @@ async function relayQuestion($: any, questions: unknown): Promise<Record<string,
   }))
   let requested: any
   try {
-    requested = await bridge($, 'request_question', { questions: shaped })
+    requested = await withTimeout(bridge($, 'request_question', { questions: shaped }), BRIDGE_TIMEOUT_MS, 'request_question')
   } catch (err) {
     void tryBridge($, 'push_message', {
       role: 'assistant',
