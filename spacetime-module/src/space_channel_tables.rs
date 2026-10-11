@@ -37,13 +37,6 @@ pub struct Message {
     pub created_at: Timestamp,
 }
 
-#[spacetimedb::table(accessor = message_image, public)]
-pub struct MessageImage {
-    #[primary_key]
-    pub message_id: String,
-    pub bytes: Vec<u8>,
-}
-
 #[spacetimedb::table(accessor = tool_event, public)]
 pub struct ToolEvent {
     #[primary_key]

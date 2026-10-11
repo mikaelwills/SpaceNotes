@@ -1,13 +1,12 @@
 use spacetimedb::{ReducerContext, Table};
 
 use crate::space_channel_tables::{
-    message, message_image, permission_request, question_request, agent, agent_activity, channel_config,
-    tool_event, Message, MessageImage, PermissionRequest, QuestionRequest, Agent,
+    message, permission_request, question_request, agent, agent_activity, channel_config,
+    tool_event, Message, PermissionRequest, QuestionRequest, Agent,
     AgentActivity, ToolEvent, SweepSchedule, ChannelConfig,
 };
 
 const MESSAGE_TTL_MICROS: i64 = 48 * 60 * 60 * 1_000_000;
-const IMAGE_MAX_BYTES: usize = 4 * 1024 * 1024;
 
 /// Heartbeats arrive every HEARTBEAT_MS but only persist this often. Every
 /// write is a permanent commitlog entry, and the log is never compacted.
@@ -231,51 +230,6 @@ pub fn push_message(
 }
 
 #[spacetimedb::reducer]
-pub fn push_image(
-    ctx: &ReducerContext,
-    id: String,
-    agent_id: String,
-    caption: String,
-    bytes: Vec<u8>,
-) -> Result<(), String> {
-    if bytes.len() > IMAGE_MAX_BYTES {
-        return Err(format!(
-            "image too large: {} bytes (max {})",
-            bytes.len(),
-            IMAGE_MAX_BYTES
-        ));
-    }
-
-    ensure_agent_exists(ctx, &agent_id);
-    let now = ctx.timestamp;
-
-    if ctx.db.message().id().find(&id).is_none() {
-        ctx.db.message().insert(Message {
-            id: id.clone(),
-            agent_id: agent_id.clone(),
-            role: "user".to_string(),
-            text: caption,
-            source: "flutter".to_string(),
-            created_at: now,
-        });
-
-        ctx.db.message_image().insert(MessageImage {
-            message_id: id,
-            bytes,
-        });
-    }
-
-    if let Some(existing) = ctx.db.agent().id().find(&agent_id) {
-        ctx.db.agent().id().update(Agent {
-            last_seen: now,
-            ..existing
-        });
-    }
-
-    Ok(())
-}
-
-#[spacetimedb::reducer]
 pub fn edit_message(ctx: &ReducerContext, id: String, text: String) {
     let Some(existing) = ctx.db.message().id().find(&id) else {
         log::warn!("edit_message: not found: {}", id);
@@ -388,7 +342,6 @@ pub fn sweep_old_messages(ctx: &ReducerContext, _schedule: SweepSchedule) {
 
     for id in &old_message_ids {
         ctx.db.message().id().delete(id);
-        ctx.db.message_image().message_id().delete(id);
     }
 
     let old_tool_event_ids: Vec<String> = ctx
@@ -462,7 +415,6 @@ pub fn delete_agent(ctx: &ReducerContext, agent_id: String) {
 
     for id in &message_ids {
         ctx.db.message().id().delete(id);
-        ctx.db.message_image().message_id().delete(id);
     }
 
     let tool_event_ids: Vec<String> = ctx
@@ -519,7 +471,6 @@ pub fn clear_all_agents(ctx: &ReducerContext) {
     let message_ids: Vec<String> = ctx.db.message().iter().map(|m| m.id.clone()).collect();
     for id in &message_ids {
         ctx.db.message().id().delete(id);
-        ctx.db.message_image().message_id().delete(id);
     }
 
     let tool_event_ids: Vec<String> = ctx.db.tool_event().iter().map(|t| t.id.clone()).collect();

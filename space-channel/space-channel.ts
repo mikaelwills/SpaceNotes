@@ -20,7 +20,7 @@ import { join, dirname, basename } from "path";
 import { randomUUID } from "crypto";
 import { spawn, spawnSync } from "child_process";
 import { DbConnection } from "./generated";
-import type { Message, MessageImage, PermissionRequest, QuestionRequest } from "./generated/types";
+import type { Message, PermissionRequest, QuestionRequest } from "./generated/types";
 
 const BUILD_SHA = process.env.SPACE_CHANNEL_BUILD_SHA ?? "dev";
 
@@ -50,7 +50,6 @@ const WAKE_GAP_MS = 15_000;
 const LOG_FILE = `/tmp/space-channel-${args.agent}.log`;
 const INBOX_DIR = join(homedir(), ".claude", "channels", "space-channel", "inbox");
 const INBOX_TTL_MS = 48 * 60 * 60 * 1000;
-const IMAGE_PAIR_WAIT_MS = 500;
 const VAULT_FILE_LINK = /spacenotes:\/\/file\/([0-9a-fA-F-]{36})\)/g;
 const VAULT_RESOLVE_TIMEOUT_MS = 10_000;
 const INBOX_IMAGE_EXTENSIONS = new Set(["jpg", "jpeg", "png", "gif", "webp"]);
@@ -101,8 +100,6 @@ function awaitOutcome<T>(o: Outcomes<T>, id: string, timeoutMs: number): Promise
     });
   });
 }
-const pendingImages = new Map<string, MessageImage>();
-const pendingMessages = new Map<string, Message>();
 
 type InboundMessage = {
   id: string;
@@ -623,7 +620,6 @@ function connectToStdb() {
           `SELECT * FROM permission_request WHERE agent_id = '${AGENT_ID}'`,
           `SELECT * FROM question_request WHERE agent_id = '${AGENT_ID}'`,
           `SELECT * FROM message WHERE agent_id = '${AGENT_ID}' AND role = 'user'`,
-          `SELECT message_image.* FROM message_image JOIN message ON message.id = message_image.message_id WHERE message.agent_id = '${AGENT_ID}' AND message.role = 'user'`,
         ]);
 
       conn.db.permission_request.onUpdate((_ctx, _oldRow, newRow) => {
@@ -649,11 +645,6 @@ function connectToStdb() {
         log(`message.onInsert id=${row.id} role=${row.role} source=${row.source} event_tag=${tag}`);
         if (tag === "SubscribeApplied") return;
         handleIncomingMessage(row);
-      });
-
-      conn.db.message_image.onInsert((ctx, row) => {
-        if ((ctx as any).event?.tag === "SubscribeApplied") return;
-        handleIncomingImage(row);
       });
 
       stopTimers();
@@ -716,36 +707,10 @@ function handleIncomingMessage(row: Message) {
     incomingAgentHop = null;
   }
 
-  const image = pendingImages.get(row.id);
-  if (image) {
-    pendingImages.delete(row.id);
-    deliverInbound(row, image);
-    return;
-  }
-
-  pendingMessages.set(row.id, row);
-  setTimeout(() => {
-    const buffered = pendingMessages.get(row.id);
-    if (!buffered) return;
-    pendingMessages.delete(row.id);
-    deliverInbound(buffered);
-  }, IMAGE_PAIR_WAIT_MS);
+  deliverInbound(row);
 }
 
-function handleIncomingImage(row: MessageImage) {
-  const message = pendingMessages.get(row.messageId);
-  if (message) {
-    pendingMessages.delete(row.messageId);
-    deliverInbound(message, row);
-    return;
-  }
-  pendingImages.set(row.messageId, row);
-  setTimeout(() => {
-    pendingImages.delete(row.messageId);
-  }, 5000);
-}
-
-function deliverInbound(message: Message, image?: MessageImage) {
+function deliverInbound(message: Message) {
   const sender = message.source.startsWith("agent:")
     ? message.source.slice("agent:".length)
     : "flutter";
@@ -755,17 +720,6 @@ function deliverInbound(message: Message, image?: MessageImage) {
     source: message.source,
     sender,
   };
-
-  if (image) {
-    try {
-      mkdirSync(INBOX_DIR, { recursive: true });
-      const filePath = join(INBOX_DIR, `${message.id}.png`);
-      writeFileSync(filePath, Buffer.from(image.bytes));
-      inbound.imagePaths = [filePath];
-    } catch (e) {
-      log(`inbox write failed for ${message.id}: ${e}`);
-    }
-  }
 
   deliveryChain = deliveryChain
     .then(() => attachVaultImages(inbound))
@@ -804,7 +758,7 @@ async function attachVaultImages(inbound: InboundMessage) {
     writeFileSync(local, Buffer.from(await res.arrayBuffer()));
     paths.push(local);
   }
-  if (paths.length > 0) inbound.imagePaths = [...(inbound.imagePaths ?? []), ...paths];
+  if (paths.length > 0) inbound.imagePaths = paths;
 }
 
 function resolveFilePath(db: DbConnection, id: string): Promise<string | null> {

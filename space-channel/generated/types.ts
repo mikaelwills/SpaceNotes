@@ -97,12 +97,6 @@ export const Message = __t.object("Message", {
 });
 export type Message = __Infer<typeof Message>;
 
-export const MessageImage = __t.object("MessageImage", {
-  messageId: __t.string(),
-  bytes: __t.byteArray(),
-});
-export type MessageImage = __Infer<typeof MessageImage>;
-
 export const PermissionRequest = __t.object("PermissionRequest", {
   id: __t.string(),
   agentId: __t.string(),

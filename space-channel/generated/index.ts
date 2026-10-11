@@ -56,7 +56,6 @@ import MoveFileReducer from "./move_file_reducer";
 import MoveFolderReducer from "./move_folder_reducer";
 import PrependToFileReducer from "./prepend_to_file_reducer";
 import PushContextUsageReducer from "./push_context_usage_reducer";
-import PushImageReducer from "./push_image_reducer";
 import PushMessageReducer from "./push_message_reducer";
 import PushStatusReducer from "./push_status_reducer";
 import PushToolEventReducer from "./push_tool_event_reducer";
@@ -91,7 +90,6 @@ import ConnectedUserRow from "./connected_user_table";
 import FileContentRow from "./file_content_table";
 import FolderRow from "./folder_table";
 import MessageRow from "./message_table";
-import MessageImageRow from "./message_image_table";
 import PermissionRequestRow from "./permission_request_table";
 import QuestionRequestRow from "./question_request_table";
 import SpaceFileRow from "./space_file_table";
@@ -208,17 +206,6 @@ const tablesSchema = __schema({
       { name: 'message_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, MessageRow),
-  messageImage: __table({
-    name: 'message_image',
-    indexes: [
-      { accessor: 'message_id', name: 'message_image_message_id_idx_btree', algorithm: 'btree', columns: [
-        'messageId',
-      ] },
-    ],
-    constraints: [
-      { name: 'message_image_message_id_key', constraint: 'unique', columns: ['messageId'] },
-    ],
-  }, MessageImageRow),
   permissionRequest: __table({
     name: 'permission_request',
     indexes: [
@@ -324,7 +311,6 @@ const reducersSchema = __reducers(
   __reducerSchema("move_folder", MoveFolderReducer),
   __reducerSchema("prepend_to_file", PrependToFileReducer),
   __reducerSchema("push_context_usage", PushContextUsageReducer),
-  __reducerSchema("push_image", PushImageReducer),
   __reducerSchema("push_message", PushMessageReducer),
   __reducerSchema("push_status", PushStatusReducer),
   __reducerSchema("push_tool_event", PushToolEventReducer),
@@ -366,8 +352,6 @@ type __SchemaWithTableAccessorAliases = Omit<typeof tablesSchema.schemaType, "ta
     readonly "connected_user": Omit<typeof tablesSchema.schemaType.tables["connectedUser"], "accessorName"> & { readonly accessorName: "connected_user" };
     /** @deprecated Use `fileContent` instead. This alias will be removed in the next major version. */
     readonly "file_content": Omit<typeof tablesSchema.schemaType.tables["fileContent"], "accessorName"> & { readonly accessorName: "file_content" };
-    /** @deprecated Use `messageImage` instead. This alias will be removed in the next major version. */
-    readonly "message_image": Omit<typeof tablesSchema.schemaType.tables["messageImage"], "accessorName"> & { readonly accessorName: "message_image" };
     /** @deprecated Use `permissionRequest` instead. This alias will be removed in the next major version. */
     readonly "permission_request": Omit<typeof tablesSchema.schemaType.tables["permissionRequest"], "accessorName"> & { readonly accessorName: "permission_request" };
     /** @deprecated Use `questionRequest` instead. This alias will be removed in the next major version. */
@@ -404,7 +388,6 @@ const tableAccessorAliases = {
   "channel_config": "channelConfig",
   "connected_user": "connectedUser",
   "file_content": "fileContent",
-  "message_image": "messageImage",
   "permission_request": "permissionRequest",
   "question_request": "questionRequest",
   "space_file": "spaceFile",
@@ -443,8 +426,6 @@ export type DbView = __DbViewBase & {
   readonly "connected_user": __DbViewBase["connectedUser"];
   /** @deprecated Use `fileContent` instead. This alias will be removed in the next major version. */
   readonly "file_content": __DbViewBase["fileContent"];
-  /** @deprecated Use `messageImage` instead. This alias will be removed in the next major version. */
-  readonly "message_image": __DbViewBase["messageImage"];
   /** @deprecated Use `permissionRequest` instead. This alias will be removed in the next major version. */
   readonly "permission_request": __DbViewBase["permissionRequest"];
   /** @deprecated Use `questionRequest` instead. This alias will be removed in the next major version. */
@@ -473,8 +454,6 @@ export type Tables = __TablesBase & {
   readonly "connected_user": __TablesBase["connectedUser"];
   /** @deprecated Use `fileContent` instead. This alias will be removed in the next major version. */
   readonly "file_content": __TablesBase["fileContent"];
-  /** @deprecated Use `messageImage` instead. This alias will be removed in the next major version. */
-  readonly "message_image": __TablesBase["messageImage"];
   /** @deprecated Use `permissionRequest` instead. This alias will be removed in the next major version. */
   readonly "permission_request": __TablesBase["permissionRequest"];
   /** @deprecated Use `questionRequest` instead. This alias will be removed in the next major version. */

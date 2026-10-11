@@ -31,6 +31,7 @@ pub mod delete_agent_reducer;
 pub mod delete_file_reducer;
 pub mod delete_folder_reducer;
 pub mod edit_message_reducer;
+pub mod empty_folder_reducer;
 pub mod end_agent_reducer;
 pub mod end_call_reducer;
 pub mod file_content_table;
@@ -40,8 +41,6 @@ pub mod folder_table;
 pub mod folder_type;
 pub mod get_recent_files_reducer;
 pub mod heartbeat_reducer;
-pub mod message_image_table;
-pub mod message_image_type;
 pub mod message_table;
 pub mod message_type;
 pub mod move_file_reducer;
@@ -50,7 +49,6 @@ pub mod permission_request_table;
 pub mod permission_request_type;
 pub mod prepend_to_file_reducer;
 pub mod push_context_usage_reducer;
-pub mod push_image_reducer;
 pub mod push_message_reducer;
 pub mod push_status_reducer;
 pub mod push_tool_event_reducer;
@@ -69,6 +67,7 @@ pub mod set_a_2_a_enabled_reducer;
 pub mod set_a_2_a_limits_reducer;
 pub mod set_display_name_reducer;
 pub mod set_thumbnail_available_reducer;
+pub mod set_vault_classifier_enabled_reducer;
 pub mod space_file_table;
 pub mod space_file_type;
 pub mod sweep_schedule_type;
@@ -109,6 +108,7 @@ pub use delete_agent_reducer::delete_agent;
 pub use delete_file_reducer::delete_file;
 pub use delete_folder_reducer::delete_folder;
 pub use edit_message_reducer::edit_message;
+pub use empty_folder_reducer::empty_folder;
 pub use end_agent_reducer::end_agent;
 pub use end_call_reducer::end_call;
 pub use file_content_table::*;
@@ -118,8 +118,6 @@ pub use folder_table::*;
 pub use folder_type::Folder;
 pub use get_recent_files_reducer::get_recent_files;
 pub use heartbeat_reducer::heartbeat;
-pub use message_image_table::*;
-pub use message_image_type::MessageImage;
 pub use message_table::*;
 pub use message_type::Message;
 pub use move_file_reducer::move_file;
@@ -128,7 +126,6 @@ pub use permission_request_table::*;
 pub use permission_request_type::PermissionRequest;
 pub use prepend_to_file_reducer::prepend_to_file;
 pub use push_context_usage_reducer::push_context_usage;
-pub use push_image_reducer::push_image;
 pub use push_message_reducer::push_message;
 pub use push_status_reducer::push_status;
 pub use push_tool_event_reducer::push_tool_event;
@@ -147,6 +144,7 @@ pub use set_a_2_a_enabled_reducer::set_a_2_a_enabled;
 pub use set_a_2_a_limits_reducer::set_a_2_a_limits;
 pub use set_display_name_reducer::set_display_name;
 pub use set_thumbnail_available_reducer::set_thumbnail_available;
+pub use set_vault_classifier_enabled_reducer::set_vault_classifier_enabled;
 pub use space_file_table::*;
 pub use space_file_type::SpaceFile;
 pub use sweep_schedule_type::SweepSchedule;
@@ -211,6 +209,9 @@ pub enum Reducer {
         id: String,
         text: String,
     },
+    EmptyFolder {
+        path: String,
+    },
     EndAgent {
         agent_id: String,
     },
@@ -245,12 +246,6 @@ pub enum Reducer {
         agent_id: String,
         used: u64,
         window: u64,
-    },
-    PushImage {
-        id: String,
-        agent_id: String,
-        caption: String,
-        bytes: Vec<u8>,
     },
     PushMessage {
         id: String,
@@ -330,6 +325,9 @@ pub enum Reducer {
     SetThumbnailAvailable {
         id: String,
     },
+    SetVaultClassifierEnabled {
+        enabled: bool,
+    },
     UpdateFileContent {
         id: String,
         content: String,
@@ -378,6 +376,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::DeleteFile { .. } => "delete_file",
             Reducer::DeleteFolder { .. } => "delete_folder",
             Reducer::EditMessage { .. } => "edit_message",
+            Reducer::EmptyFolder { .. } => "empty_folder",
             Reducer::EndAgent { .. } => "end_agent",
             Reducer::EndCall { .. } => "end_call",
             Reducer::FindReplaceInFile { .. } => "find_replace_in_file",
@@ -387,7 +386,6 @@ impl __sdk::Reducer for Reducer {
             Reducer::MoveFolder { .. } => "move_folder",
             Reducer::PrependToFile { .. } => "prepend_to_file",
             Reducer::PushContextUsage { .. } => "push_context_usage",
-            Reducer::PushImage { .. } => "push_image",
             Reducer::PushMessage { .. } => "push_message",
             Reducer::PushStatus { .. } => "push_status",
             Reducer::PushToolEvent { .. } => "push_tool_event",
@@ -404,6 +402,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::SetA2ALimits { .. } => "set_a2a_limits",
             Reducer::SetDisplayName { .. } => "set_display_name",
             Reducer::SetThumbnailAvailable { .. } => "set_thumbnail_available",
+            Reducer::SetVaultClassifierEnabled { .. } => "set_vault_classifier_enabled",
             Reducer::UpdateFileContent { .. } => "update_file_content",
             Reducer::UpdateFilePath { .. } => "update_file_path",
             Reducer::UpsertFile { .. } => "upsert_file",
@@ -484,6 +483,9 @@ impl __sdk::Reducer for Reducer {
                     text: text.clone(),
                 })
             }
+            Reducer::EmptyFolder { path } => {
+                __sats::bsatn::to_vec(&empty_folder_reducer::EmptyFolderArgs { path: path.clone() })
+            }
             Reducer::EndAgent { agent_id } => {
                 __sats::bsatn::to_vec(&end_agent_reducer::EndAgentArgs {
                     agent_id: agent_id.clone(),
@@ -539,17 +541,6 @@ impl __sdk::Reducer for Reducer {
                 agent_id: agent_id.clone(),
                 used: used.clone(),
                 window: window.clone(),
-            }),
-            Reducer::PushImage {
-                id,
-                agent_id,
-                caption,
-                bytes,
-            } => __sats::bsatn::to_vec(&push_image_reducer::PushImageArgs {
-                id: id.clone(),
-                agent_id: agent_id.clone(),
-                caption: caption.clone(),
-                bytes: bytes.clone(),
             }),
             Reducer::PushMessage {
                 id,
@@ -683,6 +674,11 @@ impl __sdk::Reducer for Reducer {
             Reducer::SetThumbnailAvailable { id } => __sats::bsatn::to_vec(
                 &set_thumbnail_available_reducer::SetThumbnailAvailableArgs { id: id.clone() },
             ),
+            Reducer::SetVaultClassifierEnabled { enabled } => __sats::bsatn::to_vec(
+                &set_vault_classifier_enabled_reducer::SetVaultClassifierEnabledArgs {
+                    enabled: enabled.clone(),
+                },
+            ),
             Reducer::UpdateFileContent {
                 id,
                 content,
@@ -748,7 +744,6 @@ pub struct DbUpdate {
     file_content: __sdk::TableUpdate<FileContent>,
     folder: __sdk::TableUpdate<Folder>,
     message: __sdk::TableUpdate<Message>,
-    message_image: __sdk::TableUpdate<MessageImage>,
     permission_request: __sdk::TableUpdate<PermissionRequest>,
     question_request: __sdk::TableUpdate<QuestionRequest>,
     space_file: __sdk::TableUpdate<SpaceFile>,
@@ -790,9 +785,6 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "message" => db_update
                     .message
                     .append(message_table::parse_table_update(table_update)?),
-                "message_image" => db_update
-                    .message_image
-                    .append(message_image_table::parse_table_update(table_update)?),
                 "permission_request" => db_update
                     .permission_request
                     .append(permission_request_table::parse_table_update(table_update)?),
@@ -862,9 +854,6 @@ impl __sdk::DbUpdate for DbUpdate {
         diff.message = cache
             .apply_diff_to_table::<Message>("message", &self.message)
             .with_updates_by_pk(|row| &row.id);
-        diff.message_image = cache
-            .apply_diff_to_table::<MessageImage>("message_image", &self.message_image)
-            .with_updates_by_pk(|row| &row.message_id);
         diff.permission_request = cache
             .apply_diff_to_table::<PermissionRequest>(
                 "permission_request",
@@ -917,9 +906,6 @@ impl __sdk::DbUpdate for DbUpdate {
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "message" => db_update
                     .message
-                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
-                "message_image" => db_update
-                    .message_image
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "permission_request" => db_update
                     .permission_request
@@ -979,9 +965,6 @@ impl __sdk::DbUpdate for DbUpdate {
                 "message" => db_update
                     .message
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
-                "message_image" => db_update
-                    .message_image
-                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "permission_request" => db_update
                     .permission_request
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -1024,7 +1007,6 @@ pub struct AppliedDiff<'r> {
     file_content: __sdk::TableAppliedDiff<'r, FileContent>,
     folder: __sdk::TableAppliedDiff<'r, Folder>,
     message: __sdk::TableAppliedDiff<'r, Message>,
-    message_image: __sdk::TableAppliedDiff<'r, MessageImage>,
     permission_request: __sdk::TableAppliedDiff<'r, PermissionRequest>,
     question_request: __sdk::TableAppliedDiff<'r, QuestionRequest>,
     space_file: __sdk::TableAppliedDiff<'r, SpaceFile>,
@@ -1073,11 +1055,6 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
         );
         callbacks.invoke_table_row_callbacks::<Folder>("folder", &self.folder, event);
         callbacks.invoke_table_row_callbacks::<Message>("message", &self.message, event);
-        callbacks.invoke_table_row_callbacks::<MessageImage>(
-            "message_image",
-            &self.message_image,
-            event,
-        );
         callbacks.invoke_table_row_callbacks::<PermissionRequest>(
             "permission_request",
             &self.permission_request,
@@ -1765,7 +1742,6 @@ impl __sdk::SpacetimeModule for RemoteModule {
         file_content_table::register_table(client_cache);
         folder_table::register_table(client_cache);
         message_table::register_table(client_cache);
-        message_image_table::register_table(client_cache);
         permission_request_table::register_table(client_cache);
         question_request_table::register_table(client_cache);
         space_file_table::register_table(client_cache);
@@ -1783,7 +1759,6 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "file_content",
         "folder",
         "message",
-        "message_image",
         "permission_request",
         "question_request",
         "space_file",

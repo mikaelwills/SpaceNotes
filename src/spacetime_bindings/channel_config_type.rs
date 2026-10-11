@@ -12,6 +12,7 @@ pub struct ChannelConfig {
     pub a_2_a_cooldown_secs: u32,
     pub a_2_a_hourly_limit: u32,
     pub a_2_a_max_hops: u32,
+    pub vault_classifier_enabled: bool,
 }
 
 impl __sdk::InModule for ChannelConfig {
@@ -27,6 +28,7 @@ pub struct ChannelConfigCols {
     pub a_2_a_cooldown_secs: __sdk::__query_builder::Col<ChannelConfig, u32>,
     pub a_2_a_hourly_limit: __sdk::__query_builder::Col<ChannelConfig, u32>,
     pub a_2_a_max_hops: __sdk::__query_builder::Col<ChannelConfig, u32>,
+    pub vault_classifier_enabled: __sdk::__query_builder::Col<ChannelConfig, bool>,
 }
 
 impl __sdk::__query_builder::HasCols for ChannelConfig {
@@ -41,6 +43,10 @@ impl __sdk::__query_builder::HasCols for ChannelConfig {
             ),
             a_2_a_hourly_limit: __sdk::__query_builder::Col::new(table_name, "a_2_a_hourly_limit"),
             a_2_a_max_hops: __sdk::__query_builder::Col::new(table_name, "a_2_a_max_hops"),
+            vault_classifier_enabled: __sdk::__query_builder::Col::new(
+                table_name,
+                "vault_classifier_enabled",
+            ),
         }
     }
 }
