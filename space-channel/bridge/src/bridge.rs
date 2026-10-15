@@ -165,6 +165,14 @@ struct EditMessageArgs {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct UpdateMessageArgs {
+    id: String,
+    text: String,
+    source: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct PushStatusArgs {
     state: String,
 }
@@ -652,6 +660,11 @@ impl Bridge {
             "edit_message" => {
                 let a: EditMessageArgs = parse(tool, args)?;
                 reduce!(self, live, "editMessage", edit_message_then(a.id.clone(), a.text)).map(|_| json!({ "id": a.id }))
+            }
+            "update_message" => {
+                let a: UpdateMessageArgs = parse(tool, args)?;
+                reduce!(self, live, "updateMessage", update_message_then(a.id.clone(), a.text, a.source))
+                    .map(|_| json!({ "id": a.id }))
             }
             "push_status" => {
                 let a: PushStatusArgs = parse(tool, args)?;

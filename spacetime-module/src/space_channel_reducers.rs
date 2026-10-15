@@ -239,6 +239,15 @@ pub fn edit_message(ctx: &ReducerContext, id: String, text: String) {
 }
 
 #[spacetimedb::reducer]
+pub fn update_message(ctx: &ReducerContext, id: String, text: String, source: String) {
+    let Some(existing) = ctx.db.message().id().find(&id) else {
+        log::warn!("update_message: not found: {}", id);
+        return;
+    };
+    ctx.db.message().id().update(Message { text, source, ..existing });
+}
+
+#[spacetimedb::reducer]
 pub fn request_permission(
     ctx: &ReducerContext,
     id: String,

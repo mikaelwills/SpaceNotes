@@ -76,6 +76,7 @@ pub mod tool_event_table;
 pub mod tool_event_type;
 pub mod update_file_content_reducer;
 pub mod update_file_path_reducer;
+pub mod update_message_reducer;
 pub mod upsert_file_reducer;
 pub mod upsert_folder_reducer;
 pub mod user_profile_table;
@@ -153,6 +154,7 @@ pub use tool_event_table::*;
 pub use tool_event_type::ToolEvent;
 pub use update_file_content_reducer::update_file_content;
 pub use update_file_path_reducer::update_file_path;
+pub use update_message_reducer::update_message;
 pub use upsert_file_reducer::upsert_file;
 pub use upsert_folder_reducer::upsert_folder;
 pub use user_profile_table::*;
@@ -338,6 +340,11 @@ pub enum Reducer {
         id: String,
         new_path: String,
     },
+    UpdateMessage {
+        id: String,
+        text: String,
+        source: String,
+    },
     UpsertFile {
         id: String,
         path: String,
@@ -405,6 +412,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::SetVaultClassifierEnabled { .. } => "set_vault_classifier_enabled",
             Reducer::UpdateFileContent { .. } => "update_file_content",
             Reducer::UpdateFilePath { .. } => "update_file_path",
+            Reducer::UpdateMessage { .. } => "update_message",
             Reducer::UpsertFile { .. } => "upsert_file",
             Reducer::UpsertFolder { .. } => "upsert_folder",
             _ => unreachable!(),
@@ -694,6 +702,13 @@ impl __sdk::Reducer for Reducer {
                 __sats::bsatn::to_vec(&update_file_path_reducer::UpdateFilePathArgs {
                     id: id.clone(),
                     new_path: new_path.clone(),
+                })
+            }
+            Reducer::UpdateMessage { id, text, source } => {
+                __sats::bsatn::to_vec(&update_message_reducer::UpdateMessageArgs {
+                    id: id.clone(),
+                    text: text.clone(),
+                    source: source.clone(),
                 })
             }
             Reducer::UpsertFile {

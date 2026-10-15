@@ -5,6 +5,7 @@ const PERMISSION_TIMEOUT_MS = 9.5 * 60_000
 const QUESTION_TIMEOUT_MS = 10 * 60_000
 const RESPAWN_MAX_MS = 30_000
 const RESPAWN_RESET_MS = 60_000
+const STREAM_INTERVAL_MS = 400
 
 const SEND_TOOL = 'send_to_agent'
 const SEND_TOOL_DESCRIPTION =
@@ -17,7 +18,9 @@ const INSTRUCTIONS = [
   'Put each vault link alone on its own line, with no caption or other text sharing that line, so the app renders it as a card with a thumbnail; a link inside a sentence renders as plain text.',
 ].join(' ')
 
-type Inbound = { id: string; text: string; source: string; sender: string; imagePaths?: string[] }
+type LiveRow = { id?: string; text: string; sent: string; chain: Promise<void>; timer: boolean }
+
+type Inbound ={ id: string; text: string; source: string; sender: string; imagePaths?: string[] }
 
 let socketPath = ''
 let bridgeReady = false
@@ -28,7 +31,7 @@ let lastPromptFromPhone = false
 let currentTurnId: string | undefined
 let draining = false
 let toolsRunning = 0
-let heldProgress = ''
+let answerRow: LiveRow | undefined
 let herdrPane: string | undefined
 let herdrBin: string | undefined
 const deliveries: Inbound[] = []
@@ -140,19 +143,45 @@ async function runSlashCommand($: any, text: string): Promise<boolean> {
   return true
 }
 
-function flushProgress($: any) {
-  const text = heldProgress
-  heldProgress = ''
-  if (!text) return
-  void tryBridge($, 'push_message', { role: 'assistant', text, source: 'progress' })
+function newLiveRow(): LiveRow {
+  return { text: '', sent: '', chain: Promise.resolve(), timer: false }
 }
 
-function responseText(content: any[]): string {
-  return content
-    .filter((b) => b?.type === 'text' && typeof b.text === 'string')
-    .map((b) => b.text.trim())
-    .filter(Boolean)
-    .join('\n\n')
+async function syncLiveRow($: any, row: LiveRow) {
+  const text = row.text.trim()
+  if (!text || text === row.sent) return
+  if (!row.id) {
+    const pushed = await tryBridge($, 'push_message', { role: 'assistant', text, source: 'progress' })
+    row.id = pushed?.id
+  } else {
+    await tryBridge($, 'edit_message', { id: row.id, text })
+  }
+  row.sent = text
+}
+
+function scheduleLiveRow($: any, row: LiveRow) {
+  if (row.timer) return
+  row.timer = true
+  $.clock.after(STREAM_INTERVAL_MS, () => {
+    row.timer = false
+    row.chain = row.chain.then(() => syncLiveRow($, row))
+  })
+}
+
+function finishLiveRow($: any, row: LiveRow, text: string, source: string): Promise<void> {
+  row.text = text
+  row.chain = row.chain.then(async () => {
+    const final = text.trim()
+    if (!final) return
+    if (!row.id) {
+      const pushed = await tryBridge($, 'push_message', { role: 'assistant', text: final, source })
+      row.id = pushed?.id
+    } else {
+      await tryBridge($, 'update_message', { id: row.id, text: final, source })
+    }
+    row.sent = final
+  })
+  return row.chain
 }
 
 async function drainDeliveries($: any) {
@@ -168,11 +197,12 @@ async function drainDeliveries($: any) {
   }
 }
 
-async function reportTurnEnd($: any, reason: string, answer: string) {
+async function reportTurnEnd($: any, reason: string, answer: string, row: LiveRow | undefined) {
   if (reason === 'aborted') {
     await tryBridge($, 'push_message', { role: 'assistant', text: 'Stopped', source: 'notice' })
   } else if (reason === 'answer' && answer) {
-    await tryBridge($, 'push_message', { role: 'assistant', text: answer, source: 'mcp' })
+    if (row) await finishLiveRow($, row, answer, 'mcp')
+    else await tryBridge($, 'push_message', { role: 'assistant', text: answer, source: 'mcp' })
   } else if (reason === 'error' || reason === 'refusal') {
     await tryBridge($, 'push_message', {
       role: 'assistant',
@@ -397,7 +427,7 @@ export const register: Register = on => {
 
   on('turn.start', async ($, e, next) => {
     turnRunning = true
-    heldProgress = ''
+    answerRow = undefined
     currentTurnId = e.turnId
     void tryBridge($, 'push_status', { state: 'thinking' })
     return next(e)
@@ -406,34 +436,48 @@ export const register: Register = on => {
   on('turn.complete', async ($, e, next) => {
     if (e.agentId) return next(e)
     turnRunning = false
-    heldProgress = ''
     currentTurnId = undefined
     releaseMidTurn($)
     const answer = e.answer.trim()
     const reason = e.reason
-    $.clock.after(0, () => reportTurnEnd($, reason, answer))
+    const row = answerRow
+    answerRow = undefined
+    $.clock.after(0, () => reportTurnEnd($, reason, answer, row))
     return next(e)
   })
 
-  on('session.append', { door: 'response' }, async ($, e, next) => {
-    const stored = await next(e)
-    if (e.agentId || e.origin?.kind !== 'model' || e.message?.role !== 'assistant') return stored
-    const content = Array.isArray(e.message.content) ? e.message.content : []
-    const text = responseText(content)
-    if (!text) return stored
-    flushProgress($)
-    if (content.some((b: any) => b?.type === 'tool_use')) {
-      void tryBridge($, 'push_message', { role: 'assistant', text, source: 'progress' })
-    } else {
-      heldProgress = text
+  on('turn.step', async function* ($, e, next) {
+    const steps = next(e)
+    if (e.agentId) return yield* steps
+    answerRow = undefined
+    const row = newLiveRow()
+    const blocks = new Map<number, string>()
+    let hadTool = false
+    while (true) {
+      const step = await steps.next()
+      if (step.done) {
+        const text = [...blocks.values()].map(b => b.trim()).filter(Boolean).join('\n\n')
+        if (hadTool) void finishLiveRow($, row, text, 'progress')
+        else {
+          row.text = text
+          answerRow = row
+        }
+        return step.value
+      }
+      const chunk: any = step.value
+      yield chunk
+      if (chunk.kind === 'tool') hadTool = true
+      if (chunk.kind === 'text') {
+        blocks.set(chunk.index, (blocks.get(chunk.index) ?? '') + chunk.text)
+        row.text = [...blocks.values()].map(b => b.trim()).filter(Boolean).join('\n\n')
+        scheduleLiveRow($, row)
+      }
     }
-    return stored
   })
 
   on('tool.call', async ($, e, next) => {
     const fromModel = next.origin.plugin === 'engine'
     if (!fromModel) return next(e)
-    if (!e.agentId) flushProgress($)
     const input = toolArguments(e as Record<string, unknown>)
     if (e.tool === 'AskUserQuestion') {
       const skip = !bridgeReady ? 'bridge not connected' : !lastPromptFromPhone ? 'last prompt was not from the phone' : ''
