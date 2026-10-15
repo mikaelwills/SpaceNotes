@@ -654,15 +654,18 @@ impl Bridge {
                 let a: PushMessageArgs = parse(tool, args)?;
                 let prefix = if a.role == "assistant" { "reply" } else { "prompt" };
                 let id = a.id.unwrap_or_else(|| format!("{prefix}-{}-{}", now_ms(), short_uuid(6)));
+                self.log(&format!("push_message id={id} source={} len={}", a.source, a.text.len()));
                 reduce!(self, live, "pushMessage", push_message_then(id.clone(), self.agent_id.clone(), a.role, a.text, a.source))
                     .map(|_| json!({ "id": id }))
             }
             "edit_message" => {
                 let a: EditMessageArgs = parse(tool, args)?;
+                self.log(&format!("edit_message id={} len={}", a.id, a.text.len()));
                 reduce!(self, live, "editMessage", edit_message_then(a.id.clone(), a.text)).map(|_| json!({ "id": a.id }))
             }
             "update_message" => {
                 let a: UpdateMessageArgs = parse(tool, args)?;
+                self.log(&format!("update_message id={} source={} len={}", a.id, a.source, a.text.len()));
                 reduce!(self, live, "updateMessage", update_message_then(a.id.clone(), a.text, a.source))
                     .map(|_| json!({ "id": a.id }))
             }

@@ -32,6 +32,7 @@ let currentTurnId: string | undefined
 let draining = false
 let toolsRunning = 0
 let answerRow: LiveRow | undefined
+let phoneModelSwitch = false
 let herdrPane: string | undefined
 let herdrBin: string | undefined
 const deliveries: Inbound[] = []
@@ -131,16 +132,31 @@ async function runSlashCommand($: any, text: string): Promise<boolean> {
   const match = /^\/([\w:.-]+)(?:\s+([\s\S]*))?$/.exec(text)
   if (!match) return false
   while (turnRunning) await $.clock.sleep(500)
+  const args = (match[2] ?? '').trim()
+  if (match[1] === 'model' && !args) {
+    await tryBridge($, 'push_message', { role: 'assistant', text: await modelChoices($), source: 'notice' })
+    return true
+  }
   let result: any
+  phoneModelSwitch = match[1] === 'model'
   try {
-    result = await $.command.run({ command: match[1], args: match[2] ?? '' })
+    result = await $.command.run({ command: match[1], args })
   } catch (err) {
     $.ui.log(`/${match[1]} not run as a command: ${err instanceof Error ? err.message : String(err)}`, { to: 'debug' })
     return false
+  } finally {
+    phoneModelSwitch = false
   }
   const output = typeof result?.text === 'string' ? result.text.trim() : ''
   if (output) await tryBridge($, 'push_message', { role: 'assistant', text: output, source: 'notice' })
   return true
+}
+
+async function modelChoices($: any): Promise<string> {
+  const current = await $.session.model()
+  const rows = await $.config.list()
+  const options: string[] = rows.find((r: any) => r.key === 'model')?.options ?? []
+  return `Model: ${current}\nOptions: ${options.join(', ')}\nSend /model <name> to switch.`
 }
 
 function newLiveRow(): LiveRow {
@@ -447,26 +463,17 @@ export const register: Register = on => {
   })
 
   on('turn.step', async function* ($, e, next) {
-    const steps = next(e)
-    if (e.agentId) return yield* steps
-    answerRow = undefined
+    if (e.agentId) return yield* next(e)
+    if (answerRow) void finishLiveRow($, answerRow, answerRow.text, 'progress')
     const row = newLiveRow()
+    answerRow = row
     const blocks = new Map<number, string>()
-    let hadTool = false
-    while (true) {
-      const step = await steps.next()
-      if (step.done) {
-        const text = [...blocks.values()].map(b => b.trim()).filter(Boolean).join('\n\n')
-        if (hadTool) void finishLiveRow($, row, text, 'progress')
-        else {
-          row.text = text
-          answerRow = row
-        }
-        return step.value
-      }
-      const chunk: any = step.value
+    for await (const chunk of next(e) as AsyncIterable<any>) {
       yield chunk
-      if (chunk.kind === 'tool') hadTool = true
+      if (chunk.kind === 'tool' && answerRow === row) {
+        answerRow = undefined
+        scheduleLiveRow($, row)
+      }
       if (chunk.kind === 'text') {
         blocks.set(chunk.index, (blocks.get(chunk.index) ?? '') + chunk.text)
         row.text = [...blocks.values()].map(b => b.trim()).filter(Boolean).join('\n\n')
@@ -502,6 +509,11 @@ export const register: Register = on => {
       toolsRunning--
       void tryBridge($, 'push_status', { state: 'thinking' })
     }
+  })
+
+  on('classic.PreModelSwitch', async ($, e, next) => {
+    if (phoneModelSwitch) return { permissionDecision: 'allow', permissionDecisionReason: 'switched from SpaceNotes' }
+    return next(e)
   })
 
   on('tool.check', async ($, e, next) => {
