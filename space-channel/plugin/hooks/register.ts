@@ -1,26 +1,28 @@
 import type { Register } from 'claude-code'
 
-const BRIDGE = 'space-channel'
 const POLL_TIMEOUT_MS = 20_000
 const PERMISSION_TIMEOUT_MS = 9.5 * 60_000
 const QUESTION_TIMEOUT_MS = 10 * 60_000
+const RESPAWN_MAX_MS = 30_000
+const RESPAWN_RESET_MS = 60_000
 
-const INTERNAL_TOOLS = new Set([
-  'push_message',
-  'edit_message',
-  'push_status',
-  'push_tool_event',
-  'push_context_usage',
-  'next_message',
-  'request_permission',
-  'poll_permission',
-  'request_question',
-  'poll_question',
-])
+const SEND_TOOL = 'send_to_agent'
+const SEND_TOOL_DESCRIPTION =
+  "Send a message to another agent's channel. It arrives in that agent's Claude session like a user message, attributed to this agent. `agent` takes a base name (e.g. 'workflow-agent') which resolves against the live agent registry, or a full id ('name@host') when the agent runs on several machines — an ambiguous name fails with the candidate ids, an unknown name fails with the registered list. The target must have a running session to receive it. Limits (per-target cooldown, hourly cap, reply-chain hop cap) come from live channel_config and may be off - when refused, summarise the exchange to the user instead of retrying."
+
+const INSTRUCTIONS = [
+  'Your user talks to you from the SpaceNotes app as well as this terminal; everything you write reaches both, so answer in plain text — there is no reply tool.',
+  "Use send_to_agent to message another agent's channel directly; it arrives in their session like a user message, attributed to you.",
+  'To point the user at a vault file, link it as markdown: [name](spacenotes://file/<id>) using the file id any spacenotes-mcp read returns; for a folder use [name](spacenotes://folder/<url-encoded path>). Tapping the link opens it in the app.',
+  'Put each vault link alone on its own line, with no caption or other text sharing that line, so the app renders it as a card with a thumbnail; a link inside a sentence renders as plain text.',
+].join(' ')
 
 type Inbound = { id: string; text: string; source: string; sender: string; imagePaths?: string[] }
 
-let server = ''
+let socketPath = ''
+let bridgeReady = false
+let sendToolName = ''
+let instructionsPending = true
 let turnRunning = false
 let lastPromptFromPhone = false
 let currentTurnId: string | undefined
@@ -31,31 +33,31 @@ let herdrPane: string | undefined
 let herdrBin: string | undefined
 const deliveries: Inbound[] = []
 
-function internalToolName(tool: string): string | undefined {
-  const m = /^mcp__.+__([a-z_]+)$/.exec(tool)
-  if (!m) return undefined
-  return INTERNAL_TOOLS.has(m[1]!) ? m[1] : undefined
-}
-
 function toolArguments(e: Record<string, unknown>): Record<string, unknown> {
   const { tool: _tool, tool_use_id: _id, consent: _consent, agentId: _agent, ...rest } = e
   return rest
 }
 
 async function bridge($: any, tool: string, args: Record<string, unknown>): Promise<any> {
-  if (!server) throw new Error('bridge not connected')
-  const r = await $.mcp.call(server, tool, args)
-  const text = r.content.find((b: any) => b.type === 'text')?.text ?? ''
-  if (r.isError) throw new Error(text || `${tool} failed`)
+  if (!socketPath) throw new Error('bridge not running')
+  const r = await $.http.fetch(`http://bridge/call/${tool}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(args),
+    socketPath,
+  })
+  let body: any
   try {
-    return JSON.parse(text)
+    body = JSON.parse(r.text)
   } catch {
-    return text
+    body = r.text
   }
+  if (!r.ok) throw new Error(body?.error || r.text || `${tool} failed`)
+  return body
 }
 
 const BRIDGE_TIMEOUT_MS = 3_000
-const LONG_POLLS = new Set(['next_message', 'poll_question', 'poll_permission'])
+const LONG_POLLS = new Set(['poll_question', 'poll_permission'])
 
 function withTimeout<T>(call: Promise<T>, ms: number, what: string): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -194,22 +196,76 @@ async function backgroundTool($: any) {
   }
 }
 
-async function inboundLoop($: any) {
+async function handleInbound($: any, m: Inbound) {
+  if (m.source === 'control') {
+    if (m.text === 'stop') await stopTurn($)
+    if (m.text === 'background') await backgroundTool($)
+    return
+  }
+  deliveries.push(m)
+  void drainDeliveries($)
+}
+
+function handleBridgeLine($: any, line: string) {
+  let event: any
+  try {
+    event = JSON.parse(line)
+  } catch {
+    $.ui.log(`bridge sent a line that is not JSON: ${line.slice(0, 200)}`, { to: 'debug' })
+    return
+  }
+  if (event.type === 'ready') {
+    bridgeReady = true
+    return
+  }
+  if (event.type === 'inbound' && event.message) void handleInbound($, event.message as Inbound)
+}
+
+async function runBridge($: any, agent: string) {
+  let attempt = 0
   while (true) {
-    const res = await tryBridge($, 'next_message', { timeoutMs: POLL_TIMEOUT_MS })
-    if (res === undefined) {
-      await $.clock.sleep(2000)
-      continue
+    const sock = `/tmp/space-channel-${agent}-${Date.now().toString(36)}.sock`
+    const started = Date.now()
+    socketPath = sock
+    try {
+      const child = $.process.spawn({
+        argv: [`${$.plugin.root}/bin/space-channel`, 'bridge', '--agent', agent, '--socket', sock],
+      })
+      let pending = ''
+      for await (const { stream, text } of child) {
+        if (stream !== 'stdout') continue
+        pending += text
+        let newline = pending.indexOf('\n')
+        while (newline >= 0) {
+          const line = pending.slice(0, newline).trim()
+          pending = pending.slice(newline + 1)
+          if (line) handleBridgeLine($, line)
+          newline = pending.indexOf('\n')
+        }
+      }
+    } catch (err) {
+      $.ui.log(`bridge failed: ${err instanceof Error ? err.message : String(err)}`, { to: 'debug' })
     }
-    const m: Inbound | undefined = res.message
-    if (!m) continue
-    if (m.source === 'control') {
-      if (m.text === 'stop') await stopTurn($)
-      if (m.text === 'background') await backgroundTool($)
-      continue
+    bridgeReady = false
+    if (socketPath === sock) socketPath = ''
+    if (Date.now() - started > RESPAWN_RESET_MS) attempt = 0
+    const delay = Math.min(1000 * 2 ** attempt, RESPAWN_MAX_MS)
+    attempt++
+    try {
+      $.ui.log(`bridge exited; restarting in ${delay}ms`, { to: 'debug' })
+      await $.clock.sleep(delay)
+    } catch {
+      return
     }
-    deliveries.push(m)
-    void drainDeliveries($)
+  }
+}
+
+async function sendToAgent($: any, input: Record<string, unknown>): Promise<any> {
+  try {
+    const sent = await withTimeout(bridge($, 'send_to_agent', { agent: input.agent, text: input.text }), BRIDGE_TIMEOUT_MS * 2, SEND_TOOL)
+    return { result: String(sent?.text ?? 'sent') }
+  } catch (err) {
+    return { deny: err instanceof Error ? err.message : String(err) }
   }
 }
 
@@ -265,17 +321,40 @@ async function relayQuestion($: any, questions: unknown): Promise<Record<string,
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const started = await next(e)
-    const connected = await $.mcp.connect(BRIDGE)
-    if (!connected.isConnected) {
-      $.ui.log(`bridge not connected: ${connected.reason ?? ''} ${connected.message ?? ''}`.trim())
+    const agent = await $.env.get('SPACE_CHANNEL_AGENT')
+    if (!agent) {
+      $.ui.log('SPACE_CHANNEL_AGENT is not set; the space-channel bridge is not started')
       return started
     }
-    server = connected.server
     herdrPane = (await $.env.get('HERDR_PANE_ID')) || undefined
     const home = await $.env.get('HOME')
     if (home) herdrBin = `${home}/.local/bin/herdr`
-    void inboundLoop($)
+    try {
+      const registered = await $.tool.register({
+        name: SEND_TOOL,
+        description: SEND_TOOL_DESCRIPTION,
+        inputSchema: {
+          type: 'object',
+          properties: {
+            agent: { type: 'string', description: "Target agent base name or full id ('name@host')" },
+            text: { type: 'string', description: 'The message to send' },
+          },
+          required: ['agent', 'text'],
+          additionalProperties: false,
+        },
+      })
+      sendToolName = registered.tool
+    } catch (err) {
+      $.ui.log(`${SEND_TOOL} not registered: ${err instanceof Error ? err.message : String(err)}`)
+    }
+    void runBridge($, agent)
     return started
+  })
+
+  on('session.compact', async ($, e, next) => {
+    const result = await next(e)
+    instructionsPending = true
+    return result
   })
 
   on('prompt.submit', async ($, e, next) => {
@@ -285,7 +364,9 @@ export const register: Register = on => {
       void tryBridge($, 'push_message', { role: 'user', text: e.text, source: 'terminal' })
     }
     void tryBridge($, 'push_status', { state: 'thinking' })
-    return next(e)
+    if (!instructionsPending) return next(e)
+    instructionsPending = false
+    return next({ ...e, context: [...(e.context ?? []), INSTRUCTIONS] })
   })
 
   on('turn.start', async ($, e, next) => {
@@ -326,13 +407,9 @@ export const register: Register = on => {
     const fromModel = next.origin.plugin === 'engine'
     if (!fromModel) return next(e)
     if (!e.agentId) flushProgress($)
-    const internal = internalToolName(e.tool)
-    if (internal) {
-      return { deny: `${internal} is internal to the space-channel bridge; the session calls it, not you.` }
-    }
     const input = toolArguments(e as Record<string, unknown>)
     if (e.tool === 'AskUserQuestion') {
-      const skip = !server ? 'bridge not connected' : !lastPromptFromPhone ? 'last prompt was not from the phone' : ''
+      const skip = !bridgeReady ? 'bridge not connected' : !lastPromptFromPhone ? 'last prompt was not from the phone' : ''
       const answers = skip ? undefined : await relayQuestion($, (input as any).questions)
       if (answers) return { result: { questions: (input as any).questions, answers } } as any
       void tryBridge($, 'push_message', {
@@ -345,6 +422,7 @@ export const register: Register = on => {
     void tryBridge($, 'push_status', { state: 'tool_use' })
     toolsRunning++
     try {
+      if (sendToolName && e.tool === sendToolName) return await sendToAgent($, input)
       return await next(e)
     } finally {
       toolsRunning--
@@ -353,10 +431,10 @@ export const register: Register = on => {
   })
 
   on('tool.check', async ($, e, next) => {
-    if (internalToolName(e.tool)) return { decision: 'allow', reason: 'space-channel bridge call' }
+    if (sendToolName && e.tool === sendToolName) return { decision: 'allow', reason: 'space-channel agent message' }
     if (e.tool === 'AskUserQuestion' && lastPromptFromPhone) return { decision: 'allow', reason: 'asked through SpaceNotes' }
     const verdict = await next(e)
-    if (verdict.decision !== 'ask' || !lastPromptFromPhone || !server || !e.tool_use_id) return verdict
+    if (verdict.decision !== 'ask' || !lastPromptFromPhone || !bridgeReady || !e.tool_use_id) return verdict
     const id = e.tool_use_id
     const requested = await tryBridge($, 'request_permission', {
       id,

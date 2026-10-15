@@ -1,11 +1,6 @@
 {
   "name": "space-channel",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "SpaceChannel bridge: mirrors the session to the SpaceNotes app and delivers phone messages as typed prompts",
-  "author": { "name": "Mikael Wills" },
-  "mcpServers": {
-    "space-channel": {
-      "command": "${CLAUDE_PLUGIN_ROOT}/bin/space-channel"
-    }
-  }
+  "author": { "name": "Mikael Wills" }
 }

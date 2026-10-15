@@ -1,0 +1,29 @@
+[package]
+name = "space-channel"
+version = "0.4.0"
+edition = "2021"
+
+[workspace]
+
+[[bin]]
+name = "space-channel"
+path = "src/main.rs"
+
+[dependencies]
+spacetimedb-sdk = "2.7"
+openssl = { version = "0.10", features = ["vendored"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "signal", "sync", "io-std", "io-util", "fs"] }
+axum = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+uuid = { version = "1", features = ["v4"] }
+regex = "1"
+ureq = { version = "2", default-features = false }
+libc = "0.2"
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
+opt-level = "z"
