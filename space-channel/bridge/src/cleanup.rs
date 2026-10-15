@@ -29,15 +29,16 @@ fn known_projects(home: &Path) -> Vec<PathBuf> {
     let known: Vec<PathBuf> = projects.keys().map(PathBuf::from).collect();
     let mut seen = std::collections::HashSet::new();
     let mut dirs = Vec::new();
-    let siblings = known
+    let nearby = known
         .iter()
-        .filter_map(|p| p.parent())
-        .filter_map(|parent| std::fs::read_dir(parent).ok())
+        .flat_map(|p| [Some(p.as_path()), p.parent()])
+        .flatten()
+        .filter_map(|dir| std::fs::read_dir(dir).ok())
         .flatten()
         .flatten()
         .map(|entry| entry.path())
         .filter(|p| p.is_dir());
-    for dir in known.iter().cloned().chain(siblings) {
+    for dir in known.iter().cloned().chain(nearby) {
         let key = dir.canonicalize().unwrap_or_else(|_| dir.clone());
         if seen.insert(key) {
             dirs.push(dir);
