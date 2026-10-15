@@ -1,6 +1,7 @@
 #[path = "../../../spacenotes-mcp/src/bindings/mod.rs"]
 mod bindings;
 mod bridge;
+mod cleanup;
 mod launch;
 mod log;
 mod server;
@@ -19,13 +20,14 @@ pub const DEFAULT_STDB_DB: &str = "spacenotes";
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let Some(subcommand) = args.first() else {
-        eprintln!("usage: space-channel <version|launch|bridge> [args...]");
+        eprintln!("usage: space-channel <version|launch|bridge|cleanup> [args...]");
         std::process::exit(2);
     };
     match subcommand.as_str() {
         "version" => println!("{BUILD_SHA}"),
         "launch" => launch::run(&args[1..]),
         "bridge" => run_bridge(&args[1..]),
+        "cleanup" => cleanup::run(),
         other => {
             eprintln!("unknown subcommand: {other}");
             std::process::exit(2);

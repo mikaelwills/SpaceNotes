@@ -44,4 +44,6 @@ ln -sfn "${BIN_DIR}/space-channel" "${ROOT}/space-channel"
 mkdir -p "${HOME}/.local/bin"
 ln -sf "${BIN_DIR}/space-channel" "${HOME}/.local/bin/space-channel"
 
+"${BIN_DIR}/space-channel" cleanup || true
+
 echo "installed ${PLUGIN_DIR} (binary $("${BIN_DIR}/space-channel" version), plugin $(cat "${PLUGIN_DIR}/VERSION" 2>/dev/null || echo unknown))"
