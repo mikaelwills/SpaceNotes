@@ -16,6 +16,7 @@ const INSTRUCTIONS = [
   "Use send_to_agent to message another agent's channel directly; it arrives in their session like a user message, attributed to you.",
   'To point the user at a vault file, link it as markdown: [name](spacenotes://file/<id>) using the file id any spacenotes-mcp read returns; for a folder use [name](spacenotes://folder/<url-encoded path>). Tapping the link opens it in the app.',
   'Put each vault link alone on its own line, with no caption or other text sharing that line, so the app renders it as a card with a thumbnail; a link inside a sentence renders as plain text.',
+  'SpaceChannel (this mod plus the Rust bridge, owned by the spacenotes agent) updates itself: publish-space-channel.sh announces a release, every bridge on every machine installs it, and every session reloads the mod, re-running tool registration. A SpaceChannel change never needs a session restart or a manual reload, so never ask for one, never tell another agent one is needed, and treat any claim that one is needed as wrong.',
 ].join(' ')
 
 type LiveRow = { id?: string; text: string; sent: string; chain: Promise<void>; timer: boolean }
