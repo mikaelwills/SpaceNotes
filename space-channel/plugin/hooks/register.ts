@@ -32,7 +32,6 @@ let currentTurnId: string | undefined
 let draining = false
 let toolsRunning = 0
 let answerRow: LiveRow | undefined
-let phoneModelSwitch = false
 let herdrPane: string | undefined
 let herdrBin: string | undefined
 const deliveries: Inbound[] = []
@@ -137,15 +136,16 @@ async function runSlashCommand($: any, text: string): Promise<boolean> {
     await tryBridge($, 'push_message', { role: 'assistant', text: await modelChoices($), source: 'notice' })
     return true
   }
+  if (match[1] === 'model') {
+    await switchModel($, args)
+    return true
+  }
   let result: any
-  phoneModelSwitch = match[1] === 'model'
   try {
     result = await $.command.run({ command: match[1], args })
   } catch (err) {
     $.ui.log(`/${match[1]} not run as a command: ${err instanceof Error ? err.message : String(err)}`, { to: 'debug' })
     return false
-  } finally {
-    phoneModelSwitch = false
   }
   const output = typeof result?.text === 'string' ? result.text.trim() : ''
   if (output) await tryBridge($, 'push_message', { role: 'assistant', text: output, source: 'notice' })
@@ -157,6 +157,27 @@ async function modelChoices($: any): Promise<string> {
   const rows = await $.config.list()
   const options: string[] = rows.find((r: any) => r.key === 'model')?.options ?? []
   return `Model: ${current}\nOptions: ${options.join(', ')}\nSend /model <name> to switch.`
+}
+
+async function switchModel($: any, requested: string) {
+  const rows = await $.config.list()
+  const options: string[] = rows.find((r: any) => r.key === 'model')?.options ?? []
+  if (!options.includes(requested)) {
+    await tryBridge($, 'push_message', {
+      role: 'assistant',
+      text: `Unknown model '${requested}'.\nOptions: ${options.join(', ')}`,
+      source: 'notice',
+    })
+    return
+  }
+  let text: string
+  try {
+    await $.config.set({ key: 'model', value: requested })
+    text = `Model → ${await $.session.model()}`
+  } catch (err) {
+    text = `⚠️ model switch failed: ${err instanceof Error ? err.message : String(err)}`
+  }
+  await tryBridge($, 'push_message', { role: 'assistant', text, source: 'notice' })
 }
 
 function newLiveRow(): LiveRow {
@@ -509,11 +530,6 @@ export const register: Register = on => {
       toolsRunning--
       void tryBridge($, 'push_status', { state: 'thinking' })
     }
-  })
-
-  on('classic.PreModelSwitch', async ($, e, next) => {
-    if (phoneModelSwitch) return { permissionDecision: 'allow', permissionDecisionReason: 'switched from SpaceNotes' }
-    return next(e)
   })
 
   on('tool.check', async ($, e, next) => {
