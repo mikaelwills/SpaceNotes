@@ -435,6 +435,7 @@ export const register: Register = on => {
           required: ['agent', 'text'],
           additionalProperties: false,
         },
+        isDeferred: false,
       })
       sendToolName = registered.tool
     } catch (err) {
