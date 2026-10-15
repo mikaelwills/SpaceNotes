@@ -21,6 +21,8 @@ pub mod call_session_type;
 pub mod call_state_type;
 pub mod channel_config_table;
 pub mod channel_config_type;
+pub mod channel_release_table;
+pub mod channel_release_type;
 pub mod clear_all_agents_reducer;
 pub mod clear_all_reducer;
 pub mod connected_user_table;
@@ -48,6 +50,7 @@ pub mod move_folder_reducer;
 pub mod permission_request_table;
 pub mod permission_request_type;
 pub mod prepend_to_file_reducer;
+pub mod publish_channel_release_reducer;
 pub mod push_context_usage_reducer;
 pub mod push_message_reducer;
 pub mod push_status_reducer;
@@ -99,6 +102,8 @@ pub use call_session_type::CallSession;
 pub use call_state_type::CallState;
 pub use channel_config_table::*;
 pub use channel_config_type::ChannelConfig;
+pub use channel_release_table::*;
+pub use channel_release_type::ChannelRelease;
 pub use clear_all_agents_reducer::clear_all_agents;
 pub use clear_all_reducer::clear_all;
 pub use connected_user_table::*;
@@ -126,6 +131,7 @@ pub use move_folder_reducer::move_folder;
 pub use permission_request_table::*;
 pub use permission_request_type::PermissionRequest;
 pub use prepend_to_file_reducer::prepend_to_file;
+pub use publish_channel_release_reducer::publish_channel_release;
 pub use push_context_usage_reducer::push_context_usage;
 pub use push_message_reducer::push_message;
 pub use push_status_reducer::push_status;
@@ -243,6 +249,10 @@ pub enum Reducer {
     PrependToFile {
         path: String,
         content: String,
+    },
+    PublishChannelRelease {
+        sha: String,
+        install_url: String,
     },
     PushContextUsage {
         agent_id: String,
@@ -392,6 +402,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::MoveFile { .. } => "move_file",
             Reducer::MoveFolder { .. } => "move_folder",
             Reducer::PrependToFile { .. } => "prepend_to_file",
+            Reducer::PublishChannelRelease { .. } => "publish_channel_release",
             Reducer::PushContextUsage { .. } => "push_context_usage",
             Reducer::PushMessage { .. } => "push_message",
             Reducer::PushStatus { .. } => "push_status",
@@ -541,6 +552,12 @@ impl __sdk::Reducer for Reducer {
                     content: content.clone(),
                 })
             }
+            Reducer::PublishChannelRelease { sha, install_url } => __sats::bsatn::to_vec(
+                &publish_channel_release_reducer::PublishChannelReleaseArgs {
+                    sha: sha.clone(),
+                    install_url: install_url.clone(),
+                },
+            ),
             Reducer::PushContextUsage {
                 agent_id,
                 used,
@@ -755,6 +772,7 @@ pub struct DbUpdate {
     audio_frame: __sdk::TableUpdate<AudioFrame>,
     call_session: __sdk::TableUpdate<CallSession>,
     channel_config: __sdk::TableUpdate<ChannelConfig>,
+    channel_release: __sdk::TableUpdate<ChannelRelease>,
     connected_user: __sdk::TableUpdate<ConnectedUser>,
     file_content: __sdk::TableUpdate<FileContent>,
     folder: __sdk::TableUpdate<Folder>,
@@ -788,6 +806,9 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "channel_config" => db_update
                     .channel_config
                     .append(channel_config_table::parse_table_update(table_update)?),
+                "channel_release" => db_update
+                    .channel_release
+                    .append(channel_release_table::parse_table_update(table_update)?),
                 "connected_user" => db_update
                     .connected_user
                     .append(connected_user_table::parse_table_update(table_update)?),
@@ -857,6 +878,9 @@ impl __sdk::DbUpdate for DbUpdate {
         diff.channel_config = cache
             .apply_diff_to_table::<ChannelConfig>("channel_config", &self.channel_config)
             .with_updates_by_pk(|row| &row.id);
+        diff.channel_release = cache
+            .apply_diff_to_table::<ChannelRelease>("channel_release", &self.channel_release)
+            .with_updates_by_pk(|row| &row.id);
         diff.connected_user = cache
             .apply_diff_to_table::<ConnectedUser>("connected_user", &self.connected_user)
             .with_updates_by_pk(|row| &row.connection_id);
@@ -909,6 +933,9 @@ impl __sdk::DbUpdate for DbUpdate {
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "channel_config" => db_update
                     .channel_config
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "channel_release" => db_update
+                    .channel_release
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "connected_user" => db_update
                     .connected_user
@@ -968,6 +995,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "channel_config" => db_update
                     .channel_config
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "channel_release" => db_update
+                    .channel_release
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "connected_user" => db_update
                     .connected_user
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -1018,6 +1048,7 @@ pub struct AppliedDiff<'r> {
     audio_frame: __sdk::TableAppliedDiff<'r, AudioFrame>,
     call_session: __sdk::TableAppliedDiff<'r, CallSession>,
     channel_config: __sdk::TableAppliedDiff<'r, ChannelConfig>,
+    channel_release: __sdk::TableAppliedDiff<'r, ChannelRelease>,
     connected_user: __sdk::TableAppliedDiff<'r, ConnectedUser>,
     file_content: __sdk::TableAppliedDiff<'r, FileContent>,
     folder: __sdk::TableAppliedDiff<'r, Folder>,
@@ -1056,6 +1087,11 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
         callbacks.invoke_table_row_callbacks::<ChannelConfig>(
             "channel_config",
             &self.channel_config,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<ChannelRelease>(
+            "channel_release",
+            &self.channel_release,
             event,
         );
         callbacks.invoke_table_row_callbacks::<ConnectedUser>(
@@ -1753,6 +1789,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         audio_frame_table::register_table(client_cache);
         call_session_table::register_table(client_cache);
         channel_config_table::register_table(client_cache);
+        channel_release_table::register_table(client_cache);
         connected_user_table::register_table(client_cache);
         file_content_table::register_table(client_cache);
         folder_table::register_table(client_cache);
@@ -1770,6 +1807,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "audio_frame",
         "call_session",
         "channel_config",
+        "channel_release",
         "connected_user",
         "file_content",
         "folder",

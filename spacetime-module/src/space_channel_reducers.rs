@@ -2,8 +2,8 @@ use spacetimedb::{ReducerContext, Table};
 
 use crate::space_channel_tables::{
     message, permission_request, question_request, agent, agent_activity, channel_config,
-    tool_event, Message, PermissionRequest, QuestionRequest, Agent,
-    AgentActivity, ToolEvent, SweepSchedule, ChannelConfig,
+    tool_event, channel_release, Message, PermissionRequest, QuestionRequest, Agent,
+    AgentActivity, ToolEvent, SweepSchedule, ChannelConfig, ChannelRelease,
 };
 
 const MESSAGE_TTL_MICROS: i64 = 48 * 60 * 60 * 1_000_000;
@@ -236,6 +236,24 @@ pub fn edit_message(ctx: &ReducerContext, id: String, text: String) {
         return;
     };
     ctx.db.message().id().update(Message { text, ..existing });
+}
+
+#[spacetimedb::reducer]
+pub fn publish_channel_release(ctx: &ReducerContext, sha: String, install_url: String) {
+    let row = ChannelRelease {
+        id: 0,
+        sha,
+        install_url,
+        published_at: ctx.timestamp,
+    };
+    match ctx.db.channel_release().id().find(0) {
+        Some(_) => {
+            ctx.db.channel_release().id().update(row);
+        }
+        None => {
+            ctx.db.channel_release().insert(row);
+        }
+    }
 }
 
 #[spacetimedb::reducer]

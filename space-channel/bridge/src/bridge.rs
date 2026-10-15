@@ -89,6 +89,7 @@ pub struct Bridge {
     log_file: String,
     inbox_dir: std::path::PathBuf,
     build_sha: String,
+    update_attempted: Mutex<String>,
     live: Mutex<Option<Live>>,
     shutting_down: AtomicBool,
     heartbeats: AtomicU64,
@@ -259,6 +260,7 @@ impl Bridge {
             log_file: format!("/tmp/space-channel-{agent}.log"),
             inbox_dir,
             build_sha: build_sha.to_string(),
+            update_attempted: Mutex::new(String::new()),
             live: Mutex::new(None),
             shutting_down: AtomicBool::new(false),
             heartbeats: AtomicU64::new(0),
@@ -426,6 +428,7 @@ impl Bridge {
             .subscribe(vec![
                 "SELECT * FROM agent".to_string(),
                 "SELECT * FROM channel_config".to_string(),
+                "SELECT * FROM channel_release".to_string(),
                 format!("SELECT * FROM permission_request WHERE agent_id = '{agent}'"),
                 format!("SELECT * FROM question_request WHERE agent_id = '{agent}'"),
                 format!("SELECT * FROM message WHERE agent_id = '{agent}' AND role = 'user'"),
@@ -496,6 +499,11 @@ impl Bridge {
             let _ = inbound.inbound_tx.send(row.clone());
         });
 
+        let released = self.clone();
+        conn.db().channel_release().on_insert(move |_ctx, row| released.on_release(row));
+        let released = self.clone();
+        conn.db().channel_release().on_update(move |_ctx, _old, row| released.on_release(row));
+
         let inserted = self.clone();
         conn.db().permission_request().on_insert(move |ctx, row| {
             if matches!(ctx.event, Event::SubscribeApplied) {
@@ -515,6 +523,25 @@ impl Bridge {
         });
         let updated = self.clone();
         conn.db().question_request().on_update(move |_ctx, _old, row| updated.settle_question(row));
+    }
+
+    fn on_release(self: &Arc<Self>, row: &ChannelRelease) {
+        if row.sha == self.build_sha || self.build_sha == "dev" {
+            return;
+        }
+        {
+            let mut attempted = self.update_attempted.lock().unwrap();
+            if *attempted == row.sha {
+                return;
+            }
+            *attempted = row.sha.clone();
+        }
+        let bridge = self.clone();
+        let sha = row.sha.clone();
+        let url = row.install_url.clone();
+        std::thread::spawn(move || {
+            crate::update::install_release(&sha, &url, &|msg| bridge.log(msg));
+        });
     }
 
     fn settle_permission(&self, row: &PermissionRequest) {

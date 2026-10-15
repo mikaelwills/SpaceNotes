@@ -88,6 +88,15 @@ pub struct QuestionRequest {
     pub resolved_at: Option<Timestamp>,
 }
 
+#[spacetimedb::table(accessor = channel_release, public)]
+pub struct ChannelRelease {
+    #[primary_key]
+    pub id: u32,
+    pub sha: String,
+    pub install_url: String,
+    pub published_at: Timestamp,
+}
+
 #[spacetimedb::table(accessor = channel_config, public)]
 pub struct ChannelConfig {
     #[primary_key]

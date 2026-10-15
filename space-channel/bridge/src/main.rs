@@ -4,6 +4,7 @@ mod bridge;
 mod launch;
 mod log;
 mod server;
+mod update;
 
 use std::sync::Arc;
 
