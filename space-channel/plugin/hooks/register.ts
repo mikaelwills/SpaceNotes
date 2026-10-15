@@ -9,7 +9,7 @@ const STREAM_INTERVAL_MS = 400
 
 const SEND_TOOL = 'send_to_agent'
 const SEND_TOOL_DESCRIPTION =
-  "Send a message to another agent's channel. It arrives in that agent's Claude session like a user message, attributed to this agent. `agent` takes a base name (e.g. 'workflow-agent') which resolves against the live agent registry, or a full id ('name@host') when the agent runs on several machines — an ambiguous name fails with the candidate ids, an unknown name fails with the registered list. The target must have a running session to receive it. Limits (per-target cooldown, hourly cap, reply-chain hop cap) come from live channel_config and may be off - when refused, summarise the exchange to the user instead of retrying."
+  "Send a message to another agent's channel. It arrives in that agent's Claude session like a user message, headed with this agent's id automatically, so never sign or name yourself in the text. `agent` takes a base name (e.g. 'workflow-agent') which resolves against the live agent registry, or a full id ('name@host') when the agent runs on several machines — an ambiguous name fails with the candidate ids, an unknown name fails with the registered list. The target must have a running session to receive it. Limits (per-target cooldown, hourly cap, reply-chain hop cap) come from live channel_config and may be off - when refused, summarise the exchange to the user instead of retrying."
 
 const INSTRUCTIONS = [
   'Your user talks to you from the SpaceNotes app as well as this terminal; everything you write reaches both, so answer in plain text — there is no reply tool.',
@@ -103,7 +103,7 @@ function composeText(m: Inbound): string {
     text += `\n\n(${images.length} images attached — read each with the Read tool:\n${images.map(p => `- ${p}`).join('\n')})`
   }
   if (m.source.startsWith('agent:')) {
-    text += `\n\n(a2a message from agent '${m.sender}' — to answer THEM use send_to_agent('${m.sender}'); plain text goes to your own human's chat, not to them)`
+    text = `From agent \`${m.sender}\`:\n\n${text}\n\n(to answer THEM use send_to_agent('${m.sender}'); plain text goes to your own human's chat, not to them)`
   }
   return text
 }
