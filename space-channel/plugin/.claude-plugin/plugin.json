@@ -1,5 +1,5 @@
 {
-  "name": "spacechannel",
+  "name": "space-channel",
   "version": "0.4.0",
   "description": "SpaceChannel bridge: mirrors the session to the SpaceNotes app and delivers phone messages as typed prompts",
   "author": { "name": "Mikael Wills" }
