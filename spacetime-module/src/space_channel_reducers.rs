@@ -566,7 +566,7 @@ pub fn set_a2a_enabled(ctx: &ReducerContext, enabled: bool) {
                 a2a_enabled: enabled,
                 a2a_cooldown_secs: 0,
                 a2a_hourly_limit: 0,
-                a2a_max_hops: 4,
+                a2a_max_hops: 0,
                 vault_classifier_enabled: false,
             });
         }
@@ -589,7 +589,7 @@ pub fn set_vault_classifier_enabled(ctx: &ReducerContext, enabled: bool) {
                 a2a_enabled: true,
                 a2a_cooldown_secs: 0,
                 a2a_hourly_limit: 0,
-                a2a_max_hops: 4,
+                a2a_max_hops: 0,
                 vault_classifier_enabled: enabled,
             });
         }

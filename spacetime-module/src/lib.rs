@@ -108,7 +108,7 @@ pub fn init(ctx: &ReducerContext) {
                 a2a_enabled: true,
                 a2a_cooldown_secs: 0,
                 a2a_hourly_limit: 0,
-                a2a_max_hops: 4,
+                a2a_max_hops: 0,
                 // Off until switched on: it spends money on every prompt, so a
                 // deploy must never turn it on by itself.
                 vault_classifier_enabled: false,

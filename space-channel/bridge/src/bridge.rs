@@ -27,7 +27,7 @@ const VAULT_RESOLVE_TIMEOUT: Duration = Duration::from_secs(10);
 const INBOX_TTL: Duration = Duration::from_secs(48 * 60 * 60);
 const INBOX_SWEEP: Duration = Duration::from_secs(60 * 60);
 const INBOX_IMAGE_EXTENSIONS: [&str; 5] = ["jpg", "jpeg", "png", "gif", "webp"];
-const A2A_DEFAULT_MAX_HOPS: u32 = 4;
+const A2A_DEFAULT_MAX_HOPS: u32 = 0;
 const A2A_HOP_DECAY: Duration = Duration::from_secs(5 * 60);
 
 const HOST_ALIASES: [(&str, &str); 1] = [("mikael-NUC10i3FNK", "robert")];
