@@ -32,6 +32,7 @@ let heldProgress = ''
 let herdrPane: string | undefined
 let herdrBin: string | undefined
 const deliveries: Inbound[] = []
+const midTurn: Inbound[] = []
 
 function toolArguments(e: Record<string, unknown>): Record<string, unknown> {
   const { tool: _tool, tool_use_id: _id, consent: _consent, agentId: _agent, ...rest } = e
@@ -89,9 +90,7 @@ function touchActivity(fromPhone: boolean) {
   lastPromptFromPhone = fromPhone
 }
 
-async function deliver($: any, m: Inbound) {
-  touchActivity(true)
-  const fromAgent = m.source.startsWith('agent:')
+function composeText(m: Inbound): string {
   let text = m.text.trim()
   const images = m.imagePaths ?? []
   if (!text && images.length > 0) text = images.length === 1 ? '(image)' : '(images)'
@@ -99,12 +98,29 @@ async function deliver($: any, m: Inbound) {
   if (images.length > 1) {
     text += `\n\n(${images.length} images attached — read each with the Read tool:\n${images.map(p => `- ${p}`).join('\n')})`
   }
-  if (fromAgent) {
+  if (m.source.startsWith('agent:')) {
     text += `\n\n(a2a message from agent '${m.sender}' — to answer THEM use send_to_agent('${m.sender}'); plain text goes to your own human's chat, not to them)`
+  }
+  return text
+}
+
+function midTurnContext(m: Inbound): string {
+  const from = m.source.startsWith('agent:') ? `agent '${m.sender}'` : 'the user, from the SpaceNotes app,'
+  return `A message from ${from} arrived while you were working. Read it now and take it into account in what you do next:\n\n${composeText(m)}`
+}
+
+function takesMidTurn(m: Inbound): boolean {
+  return !/^\/[\w:.-]+/.test(m.text.trim())
+}
+
+async function deliver($: any, m: Inbound) {
+  touchActivity(true)
+  const text = composeText(m)
+  if (m.source.startsWith('agent:')) {
     await $.prompt.submit({ text })
     return
   }
-  if (images.length === 0 && (await runSlashCommand($, text))) return
+  if ((m.imagePaths ?? []).length === 0 && (await runSlashCommand($, text))) return
   await $.prompt.submit({ text, asUser: true })
 }
 
@@ -202,7 +218,17 @@ async function handleInbound($: any, m: Inbound) {
     if (m.text === 'background') await backgroundTool($)
     return
   }
+  if (turnRunning && takesMidTurn(m)) {
+    midTurn.push(m)
+    return
+  }
   deliveries.push(m)
+  void drainDeliveries($)
+}
+
+function releaseMidTurn($: any) {
+  if (midTurn.length === 0) return
+  deliveries.push(...midTurn.splice(0))
   void drainDeliveries($)
 }
 
@@ -382,6 +408,7 @@ export const register: Register = on => {
     turnRunning = false
     heldProgress = ''
     currentTurnId = undefined
+    releaseMidTurn($)
     const answer = e.answer.trim()
     const reason = e.reason
     $.clock.after(0, () => reportTurnEnd($, reason, answer))
@@ -422,8 +449,11 @@ export const register: Register = on => {
     void tryBridge($, 'push_status', { state: 'tool_use' })
     toolsRunning++
     try {
-      if (sendToolName && e.tool === sendToolName) return await sendToAgent($, input)
-      return await next(e)
+      const result = sendToolName && e.tool === sendToolName ? await sendToAgent($, input) : await next(e)
+      if (e.agentId || midTurn.length === 0 || !result || (result as any).deny !== undefined) return result
+      const arrived = midTurn.splice(0)
+      touchActivity(true)
+      return { ...result, context: [...(result.context ?? []), ...arrived.map(midTurnContext)] }
     } finally {
       toolsRunning--
       void tryBridge($, 'push_status', { state: 'thinking' })
