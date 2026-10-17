@@ -25,6 +25,8 @@ type Inbound ={ id: string; text: string; source: string; sender: string; imageP
 
 let socketPath = ''
 let bridgeReady = false
+let bridgeLoop = false
+let noAgent = false
 let sendToolName = ''
 let instructionsPending = true
 let turnRunning = false
@@ -315,6 +317,45 @@ function handleBridgeLine($: any, line: string) {
   if (event.type === 'inbound' && event.message) void handleInbound($, event.message as Inbound)
 }
 
+async function ensureBridge($: any) {
+  if (bridgeLoop || noAgent) return
+  bridgeLoop = true
+  const agent = await $.env.get('SPACE_CHANNEL_AGENT')
+  if (!agent) {
+    noAgent = true
+    bridgeLoop = false
+    $.ui.log('SPACE_CHANNEL_AGENT is not set; the space-channel bridge is not started')
+    return
+  }
+  herdrPane = (await $.env.get('HERDR_PANE_ID')) || undefined
+  const home = await $.env.get('HOME')
+  if (home) herdrBin = `${home}/.local/bin/herdr`
+  if (!sendToolName) {
+    try {
+      const registered = await $.tool.register({
+        name: SEND_TOOL,
+        description: SEND_TOOL_DESCRIPTION,
+        inputSchema: {
+          type: 'object',
+          properties: {
+            agent: { type: 'string', description: "Target agent base name or full id ('name@host')" },
+            text: { type: 'string', description: 'The message to send' },
+          },
+          required: ['agent', 'text'],
+          additionalProperties: false,
+        },
+        isDeferred: false,
+      })
+      sendToolName = registered.tool
+    } catch (err) {
+      $.ui.log(`${SEND_TOOL} not registered: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+  void runBridge($, agent).finally(() => {
+    bridgeLoop = false
+  })
+}
+
 async function runBridge($: any, agent: string) {
   let attempt = 0
   while (true) {
@@ -415,34 +456,7 @@ async function relayQuestion($: any, questions: unknown): Promise<Record<string,
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const started = await next(e)
-    const agent = await $.env.get('SPACE_CHANNEL_AGENT')
-    if (!agent) {
-      $.ui.log('SPACE_CHANNEL_AGENT is not set; the space-channel bridge is not started')
-      return started
-    }
-    herdrPane = (await $.env.get('HERDR_PANE_ID')) || undefined
-    const home = await $.env.get('HOME')
-    if (home) herdrBin = `${home}/.local/bin/herdr`
-    try {
-      const registered = await $.tool.register({
-        name: SEND_TOOL,
-        description: SEND_TOOL_DESCRIPTION,
-        inputSchema: {
-          type: 'object',
-          properties: {
-            agent: { type: 'string', description: "Target agent base name or full id ('name@host')" },
-            text: { type: 'string', description: 'The message to send' },
-          },
-          required: ['agent', 'text'],
-          additionalProperties: false,
-        },
-        isDeferred: false,
-      })
-      sendToolName = registered.tool
-    } catch (err) {
-      $.ui.log(`${SEND_TOOL} not registered: ${err instanceof Error ? err.message : String(err)}`)
-    }
-    void runBridge($, agent)
+    await ensureBridge($)
     return started
   })
 
@@ -453,6 +467,7 @@ export const register: Register = on => {
   })
 
   on('prompt.submit', async ($, e, next) => {
+    void ensureBridge($)
     const kind = e.origin?.kind
     if (kind === 'composer' || kind === 'bridge') {
       touchActivity(false)
@@ -465,6 +480,7 @@ export const register: Register = on => {
   })
 
   on('turn.start', async ($, e, next) => {
+    void ensureBridge($)
     turnRunning = true
     answerRow = undefined
     currentTurnId = e.turnId
@@ -506,6 +522,7 @@ export const register: Register = on => {
   })
 
   on('tool.call', async ($, e, next) => {
+    void ensureBridge($)
     const fromModel = next.origin.plugin === 'engine'
     if (!fromModel) return next(e)
     const input = toolArguments(e as Record<string, unknown>)
