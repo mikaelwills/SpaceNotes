@@ -14,7 +14,7 @@ fn plugin_dir() -> Option<PathBuf> {
     Some(bin_dir.join("plugin"))
 }
 
-const MARKETPLACE_PLUGIN: &str = "space-channel@space-channel";
+const MARKETPLACE_PLUGIN: &str = "space-channel@mikaelsmods";
 
 fn installed_from_marketplace() -> bool {
     let Ok(home) = std::env::var("HOME") else {
