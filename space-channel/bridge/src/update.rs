@@ -29,6 +29,23 @@ fn take_lock(share: &PathBuf) -> Option<PathBuf> {
     Some(lock)
 }
 
+const INSTALL_WAIT: Duration = Duration::from_secs(240);
+const INSTALL_POLL: Duration = Duration::from_secs(2);
+
+pub fn wait_installed(sha: &str) -> bool {
+    let Some(share) = share_dir() else {
+        return false;
+    };
+    let deadline = std::time::Instant::now() + INSTALL_WAIT;
+    while std::time::Instant::now() < deadline {
+        if installed_version(&share).as_deref() == Some(sha) && !share.join(".updating").exists() {
+            return true;
+        }
+        std::thread::sleep(INSTALL_POLL);
+    }
+    false
+}
+
 pub fn install_release(sha: &str, install_url: &str, log: &dyn Fn(&str)) {
     let Some(share) = share_dir() else {
         log("update: cannot locate the plugin install directory");

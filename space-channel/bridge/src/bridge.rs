@@ -541,6 +541,12 @@ impl Bridge {
         let url = row.install_url.clone();
         std::thread::spawn(move || {
             crate::update::install_release(&sha, &url, &|msg| bridge.log(msg));
+            if crate::update::wait_installed(&sha) {
+                bridge.log(&format!("update: {sha} on disk, asking the session to reload plugins"));
+                bridge.emit(json!({ "type": "updated", "sha": sha }));
+            } else {
+                bridge.log(&format!("update: {sha} never appeared on disk"));
+            }
         });
     }
 

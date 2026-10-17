@@ -27,6 +27,7 @@ let socketPath = ''
 let bridgeReady = false
 let bridgeLoop = false
 let noAgent = false
+let reloadQueued = false
 let sendToolName = ''
 let instructionsPending = true
 let turnRunning = false
@@ -315,6 +316,19 @@ function handleBridgeLine($: any, line: string) {
     return
   }
   if (event.type === 'inbound' && event.message) void handleInbound($, event.message as Inbound)
+  if (event.type === 'updated') void reloadPlugins($, String(event.sha ?? ''))
+}
+
+async function reloadPlugins($: any, sha: string) {
+  if (reloadQueued) return
+  reloadQueued = true
+  while (turnRunning) await $.clock.sleep(500)
+  try {
+    await $.command.run({ command: 'reload-plugins', args: '' })
+  } catch (err) {
+    reloadQueued = false
+    $.ui.log(`space-channel ${sha} installed but /reload-plugins failed: ${err instanceof Error ? err.message : String(err)}`)
+  }
 }
 
 async function ensureBridge($: any) {

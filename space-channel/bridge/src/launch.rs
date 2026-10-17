@@ -14,6 +14,22 @@ fn plugin_dir() -> Option<PathBuf> {
     Some(bin_dir.join("plugin"))
 }
 
+const MARKETPLACE_PLUGIN: &str = "space-channel@space-channel";
+
+fn installed_from_marketplace() -> bool {
+    let Ok(home) = std::env::var("HOME") else {
+        return false;
+    };
+    let path = Path::new(&home).join(".claude/plugins/installed_plugins.json");
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return false;
+    };
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return false;
+    };
+    json.get("plugins").and_then(|p| p.get(MARKETPLACE_PLUGIN)).is_some()
+}
+
 pub fn run(args: &[String]) {
     let Some(agent) = args.first() else {
         eprintln!("usage: space-channel launch <workflow> [args...]");
@@ -34,9 +50,11 @@ pub fn run(args: &[String]) {
         plugin.display(),
         crate::BUILD_SHA
     );
-    let err = Command::new("claude")
-        .arg("--plugin-dir")
-        .arg(&plugin)
+    let mut claude = Command::new("claude");
+    if !installed_from_marketplace() {
+        claude.arg("--plugin-dir").arg(&plugin);
+    }
+    let err = claude
         .arg("--dangerously-skip-permissions")
         .arg(format!("/{agent}"))
         .args(&args[1..])
