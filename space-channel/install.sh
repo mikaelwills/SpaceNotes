@@ -40,6 +40,17 @@ for rel in $(cd "${STAGE}/plugin" && find . -type f | sed 's|^\./||'); do
   mv -f "${PLUGIN_DIR}/${rel}.tmp" "${PLUGIN_DIR}/${rel}"
 done
 
+mkdir -p "${ROOT}/.claude-plugin"
+cat > "${ROOT}/.claude-plugin/marketplace.json.tmp" <<'JSON'
+{"name":"space-channel","owner":{"name":"Mikael Wills"},"plugins":[{"name":"space-channel","source":"./plugin","description":"SpaceChannel bridge: mirrors the session to the SpaceNotes app"}]}
+JSON
+mv -f "${ROOT}/.claude-plugin/marketplace.json.tmp" "${ROOT}/.claude-plugin/marketplace.json"
+
+if command -v claude >/dev/null 2>&1 && ! grep -q '"space-channel@space-channel"' "${HOME}/.claude/plugins/installed_plugins.json" 2>/dev/null; then
+  claude plugin marketplace add "${ROOT}" >/dev/null 2>&1 || true
+  claude plugin install space-channel@space-channel --scope user >/dev/null 2>&1 || true
+fi
+
 ln -sfn "${BIN_DIR}/space-channel" "${ROOT}/space-channel"
 mkdir -p "${HOME}/.local/bin"
 ln -sf "${BIN_DIR}/space-channel" "${HOME}/.local/bin/space-channel"
