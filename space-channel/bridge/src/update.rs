@@ -6,9 +6,11 @@ use std::time::{Duration, SystemTime};
 const LOCK_STALE: Duration = Duration::from_secs(180);
 
 fn share_dir() -> Option<PathBuf> {
-    let exe = std::env::current_exe().ok()?.canonicalize().ok()?;
-    let plugin = exe.parent()?.parent()?;
-    Some(plugin.parent()?.to_path_buf())
+    if let Ok(root) = std::env::var("SPACE_CHANNEL_INSTALL_ROOT") {
+        return Some(PathBuf::from(root));
+    }
+    let home = std::env::var("HOME").ok()?;
+    Some(PathBuf::from(home).join(".local/share/space-channel"))
 }
 
 fn installed_version(share: &PathBuf) -> Option<String> {
